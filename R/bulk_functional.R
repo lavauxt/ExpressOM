@@ -334,10 +334,10 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
       if (nrow(x@result) > 5) {
         safe_pdf(file.path(dir_reac_ora, paste0("Reactome_ORA_Dotplot_", comp_name, ".pdf")),
                  width = 10, height = 10,
-                 expr  = print(enrichplot::dotplot(x, showCategory = top_genes)))
+                 expr  = print(enrichplot::dotplot(x, showCategory = top_genes, label_format = 40, color = "pvalue")))
         safe_pdf(file.path(dir_reac_ora, paste0("Reactome_ORA_Cnetplot_", comp_name, ".pdf")),
                  width = 12, height = 12,
-                 expr  = print(enrichplot::cnetplot(x, foldChange = foldchanges, showCategory = 10)))
+                 expr  = print(enrichplot::cnetplot(x, foldChange = foldchanges, showCategory = 10, colorEdge = TRUE)))
       }
     } else {
       message("      No significant results for Reactome ORA")
@@ -377,10 +377,10 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     if (nrow(gseaReac@result) > 5) {
       safe_pdf(file.path(dir_reac_gsea, paste0("Reactome_GSEA_Dotplot_", comp_name, ".pdf")),
                width = 10, height = 10,
-               expr  = print(enrichplot::dotplot(gseaReac, showCategory = top_genes)))
+               expr  = print(enrichplot::dotplot(gseaReac, showCategory = top_genes, label_format = 40, color = "pvalue")))
       safe_pdf(file.path(dir_reac_gsea, paste0("Reactome_GSEA_Ridgeplot_", comp_name, ".pdf")),
                width = 10, height = 10,
-               expr  = print(enrichplot::ridgeplot(gseaReac, showCategory = 10)))
+               expr  = print(enrichplot::ridgeplot(gseaReac, showCategory = 10, label_format = 40, color = "pvalue")))
       safe_pdf(file.path(dir_reac_gsea, paste0("Reactome_GSEA_EnrichmentMap_", comp_name, ".pdf")),
                width = 12, height = 8,
                expr  = print(enrichplot::gseaplot2(gseaReac, geneSetID = 1:min(3, nrow(gseaReac)))))

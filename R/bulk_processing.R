@@ -32,7 +32,7 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
   # Fetch organism info to map Entrez IDs using org.db
   org_info <- get_organism_info(edb)
   org_db <- org_info$org_db
-  if (requireNamespace(org_db, quietly = TRUE)) {
+if (requireNamespace(org_db, quietly = TRUE)) {
     org_obj <- getExportedValue(org_db, org_db)
     mapped_entrez <- suppressMessages(AnnotationDbi::mapIds(
       org_obj, 
@@ -46,12 +46,33 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     gene_map$entrezid <- NA
   }
 
-  if (count_type == "salmon") {
-    # 5. Import via tximport
-    tximport_file_list <- file.path(data_dir, sample_df[[sample_col]], 
-                                   paste0(sample_df[[sample_col]], ".", count_type, ".quant"), "quant.sf")
+  if (count_type != "matrix") {
+    # 5. Import via tximport for any allowable count_type (salmon, kallisto, rsem, etc.)
+    count_file_name <- switch(count_type,
+      "salmon"    = "quant.sf",
+      "kallisto"  = "abundance.tsv",
+      "rsem"      = "quant.genes.results",
+      "stringtie" = "t_data.ctab",
+      "quant.sf"  # default fallback
+    )
+    
+    tximport_file_list <- sapply(sample_df[[sample_col]], function(sid) {
+      # Try nested directory structure first, then generic base directory
+      p_nested <- file.path(data_dir, sid, paste0(sid, ".", count_type, ".quant"), count_file_name)
+      p_direct <- file.path(data_dir, sid, count_file_name)
+      if (file.exists(p_nested)) return(p_nested)
+      return(p_direct)
+    })
+    
     names(tximport_file_list) <- sample_df[[sample_col]]
 
+    missing_files <- tximport_file_list[!file.exists(tximport_file_list)]
+    if (length(missing_files) > 0) {
+      stop("Missing quantification files for samples: ", paste(names(missing_files), collapse = ", "),
+           "\nExpected file like: ", count_file_name)
+    }
+
+    message("Importing ", count_type, " files via tximport...")
     txi <- tximport::tximport(
       tximport_file_list, 
       type = count_type, 
@@ -62,7 +83,7 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
 
     # 6. Align Metadata
     meta <- sample_df[colnames(txi$counts), , drop = FALSE]
-    return(list(txi = txi, meta = meta, edb = edb, gene_map = gene_map, type = "salmon"))
+    return(list(txi = txi, meta = meta, edb = edb, gene_map = gene_map, type = "tximport"))
     
   } else if (count_type == "matrix") {
     # 5. Process Raw Matrix
@@ -104,10 +125,12 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
   main_condition <- tail(all.vars(as.formula(model)), 1)
   meta[[main_condition]] <- as.factor(meta[[main_condition]])
   
-  if (tx_data$type == "salmon") {
+  if (tx_data$type == "tximport") {
     dds <- DESeq2::DESeqDataSetFromTximport(tx_data$txi, colData = meta, design = as.formula(model))
   } else if (tx_data$type == "matrix") {
     dds <- DESeq2::DESeqDataSetFromMatrix(countData = round(tx_data$counts), colData = meta, design = as.formula(model))
+  } else {
+    stop("Invalid tx_data type: ", tx_data$type)
   }
   
   dds[[main_condition]] <- relevel(dds[[main_condition]], base)

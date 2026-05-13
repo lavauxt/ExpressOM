@@ -39,7 +39,7 @@ install_internal_db("Mmusculus")
 
 ## Data Preparation
 
-The pipeline expects a specific directory structure for your quantification tools (`salmon`) or raw count matrices (`matrix` mode).
+The pipeline expects a specific directory structure for your quantification tools (`salmon`, `kallisto`, `rsem`, `stringtie`, etc.) or raw count matrices (`matrix` mode).
 
 **Sample Table (`sample_table.csv` / `.tsv`) Format:**
 It must contain a `sample_id` (or `Sample`) column identifying data files, alongside factors utilized in your model:
@@ -73,13 +73,13 @@ run_bulk_pipeline(
 )
 ```
 
-### Example 2: Salmon Input (Transcriptomic workflow)
-Provide the base `data_dir` containing subfolders matching your `sample_id` column.
+### Example 2: Transcriptomic Input (`salmon`, `kallisto`, `rsem`)
+Provide the base `data_dir` containing subfolders matching your `sample_id` column. `tximport` will automatically look for the expected file name (e.g. `quant.sf` for `salmon`, `abundance.tsv` for `kallisto`).
 
 ```R
 run_bulk_pipeline(
   ensembl_package_name = "EnsDb.Hsapiens.v107",
-  count_type = "salmon",
+  count_type = "salmon",            # Options: "salmon", "kallisto", "rsem", "stringtie", etc.
   data_dir = "./data/counts",  
   out_dir = "./results_classic",
   sample_table = "./data/sample_table.csv",
