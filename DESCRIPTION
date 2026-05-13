@@ -1,0 +1,54 @@
+Package: ExpressOM
+Type: Package
+Title: Expression Overview and Mapping
+Version: 0.1.0
+Author: TL
+Maintainer: TL <lavauxt@gmail.com>
+Description: A fully modularized R package for bulk RNA-seq analysis, wrapping
+    tximport, DESeq2, clusterProfiler, SPIA, fgsea, ReactomePA, DOSE and Enrichr
+    into a streamlined, automated workflow.
+License: GPL-3
+Encoding: UTF-8
+LazyData: true
+Imports:
+    yulab.utils,
+    DBI,
+    RSQLite,
+    DOSE,
+    remotes,
+    ashr,
+    data.table,
+    DESeq2,
+    SummarizedExperiment,
+    tximport,
+    ensembldb,
+    enrichR,
+    clusterProfiler,
+    ggplot2,
+    pheatmap,
+    EnhancedVolcano,
+    ggnewscale,
+    tibble,
+    dplyr,
+    tidyr,
+    rlang,
+    purrr,
+    magrittr,
+    pathview,
+    enrichplot,
+    AnnotationDbi,
+    fgsea,
+    stringr,
+    ReactomePA
+Suggests:
+    org.Hs.eg.db,
+    org.Mm.eg.db,
+    SPIA,
+    pcaExplorer,
+    regionReport,
+    rmarkdown,
+    knitr,
+    htmlwidgets,
+    DT,
+    msigdbr
+RoxygenNote: 8.0.0
