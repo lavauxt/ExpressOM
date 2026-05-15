@@ -11,11 +11,11 @@ It effortlessly handles counts import, exploratory data analysis (EDA), differen
 You can install the package directly from your local source directory using `devtools` or `remotes`:
 
 ```R
-# Install devtools if not already available
+# Install devtools if not installed
 if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")
 
-# Install the ExpressOM package
-devtools::install_local("path/to/ExpressOM")
+# Install directly from GitHub
+devtools::install_github("lavauxt/ExpressOM")
 ```
 
 ### 1. Generate and Install the Custom Ensembl Database
@@ -42,13 +42,19 @@ install_internal_db("Mmusculus")
 The pipeline expects a specific directory structure for your quantification tools (`salmon`, `kallisto`, `rsem`, `stringtie`, etc.) or raw count matrices (`matrix` mode).
 
 **Sample Table (`sample_table.csv` / `.tsv`) Format:**
-It must contain a `sample_id` (or `Sample`) column identifying data files, alongside factors utilized in your model:
+Your sample table must contain a column identifying each sample (sample_id or Sample), along with factors used in your model (e.g., genotype, cell type, batch). This format is directly compatible with DESeq2, which uses it to perform differential expression analysis (DEG) in the pipeline.
 
-| sample_id | genotype | cell_type | batch |
-|-----------|----------|-----------|-------|
-| HSC_WT_1  | WT       | HSC       | 1     |
-| HSC_KO_1  | KO       | HSC       | 1     |
-| MEP_WT_1  | WT       | MEP       | 2     |
+| sample_id | genotype | cell_type  | batch |
+|-----------|----------|------------|-------|
+| Sample1   | WT       | T_cell     | 1     |
+| Sample2   | KO       | T_cell     | 1     |
+| Sample3   | WT       | B_cell     | 2     |
+
+- **`sample_id`**: Unique identifier for each sample. This should match the filenames of your count or expression data.  
+- **Factors (`genotype`, `cell_type`, `batch`)**: Variables to include in your DESeq2 model for differential expression analysis. These are used to build the design formula (e.g., `~ batch + cell_type + genotype`).  
+- **File type**: Accepts **CSV** or **TSV**.  
+
+> 💡 **Tip:** DESeq2 expects this table to be complete, with no missing sample IDs, and all factor columns properly formatted (as `factor` in R).
 
 ---
 
