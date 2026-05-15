@@ -10,6 +10,14 @@ Description: A fully modularized R package for bulk RNA-seq analysis, wrapping
 License: GPL-3
 Encoding: UTF-8
 LazyData: true
+Collate:
+    'utils.R'
+    'spia_utils.R'
+    'fgsea.R'
+    'bulk_processing.R'
+    'bulk_functional.R'
+    'bulk_visualizations.R'
+    'bulk_pipeline_core.R'
 Imports:
     yulab.utils,
     DBI,
