@@ -1,0 +1,72 @@
+Package: ExpressOM
+Type: Package
+Title: Expression Overview and Mapping
+Version: 0.1.0
+Author: TL
+Maintainer: TL <lavauxt@gmail.com>
+Description: A fully modularized R package for bulk RNA-seq analysis, wrapping
+    tximport, DESeq2, clusterProfiler, SPIA, fgsea, ReactomePA, DOSE and Enrichr
+    into a streamlined, automated workflow. Also supports isoform-level analysis
+    with DTE/DTU and IsoformSwitchAnalyzeR.
+License: GPL-3
+Encoding: UTF-8
+LazyData: true
+Collate:
+    'utils_core.R'
+    'utils_isoform.R'
+    'mod_dge.R'
+    'mod_functional.R'
+    'mod_isoform.R'
+    'mod_plots.R'
+    'main.R'
+Imports:
+    AnnotationDbi,
+    BiocManager,
+    BiocParallel,
+    DBI,
+    DOSE,
+    DESeq2,
+    EnhancedVolcano,
+    RSQLite,
+    ReactomePA,
+    SPIA,
+    SummarizedExperiment,
+    ashr,
+    clusterProfiler,
+    data.table,
+    dplyr,
+    enrichR,
+    enrichplot,
+    ensembldb,
+    fgsea,
+    ggrepel,
+    ggplot2,
+    jsonlite,
+    msigdbr,
+    pathview,
+    pheatmap,
+    purrr,
+    rappdirs,
+    remotes,
+    rlang,
+    scales,
+    stringr,
+    tibble,
+    tidyr,
+    tidyverse,
+    tximport,
+    withr
+Suggests:
+    DRIMSeq,
+    DT,
+    DEXSeq,
+    IsoformSwitchAnalyzeR (>= 2.6.0),
+    htmlwidgets,
+    knitr,
+    org.Hs.eg.db,
+    org.Mm.eg.db,
+    pcaExplorer,
+    regionReport,
+    rmarkdown,
+    BSgenome.Hsapiens.UCSC.hg38
+RoxygenNote: 8.0.0
