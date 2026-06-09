@@ -6,8 +6,9 @@
 #' @param level Level comparison (e.g. "Treated")
 #' @param base Base Level (e.g. "Control")
 #' @param main_condition The primary modeled condition
+#' @param batch_col Optional batch column name for limma correction and before/after PCA
 #' @export
-run_eda <- function(dds, edb, out_dir, level, base, main_condition) {
+run_eda <- function(dds, edb, out_dir, level, base, main_condition, batch_col = NULL) {
   rld <- DESeq2::rlog(dds, blind = TRUE)
 
   org_info <- get_organism_info(edb)
@@ -28,13 +29,38 @@ run_eda <- function(dds, edb, out_dir, level, base, main_condition) {
   plot_dir <- file.path(out_dir, "Plots")
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 
-  if (requireNamespace("pcaExplorer", quietly = TRUE)) {
-    pca_plot <- pcaExplorer::pcaplot(rld, intgroup = main_condition, ntop = 500)
-    pdf(file = file.path(plot_dir, paste0("PCA_", level, "_vs_", base, ".pdf")), width = 9, height = 7)
-    try({ print(pca_plot) })
-    dev.off()
-  } else {
-    message("Skipping PCA plot: 'pcaExplorer' is not installed.")
+  # --- PCA before batch correction ---
+  p_orig <- plot_custom_pca(rld, condition = main_condition, batch = batch_col,
+                            title = paste0("PCA Before Correction (", level, " vs ", base, ")"),
+                            return_plot = TRUE)
+  pdf(file.path(plot_dir, paste0("PCA_", level, "_vs_", base, ".pdf")), width = 9, height = 7)
+  print(p_orig)
+  dev.off()
+
+  # --- Batch correction + PCA after ---
+  if (!is.null(batch_col) && batch_col %in% colnames(SummarizedExperiment::colData(dds)) &&
+      requireNamespace("limma", quietly = TRUE)) {
+    batch_vec <- SummarizedExperiment::colData(dds)[[batch_col]]
+    if (length(unique(batch_vec)) > 1) {
+      message("Applying limma batch correction for PCA visualisation...")
+      design_mat <- model.matrix(as.formula(paste0("~ ", main_condition)),
+                                 data = as.data.frame(SummarizedExperiment::colData(rld)))
+      corrected_mat <- tryCatch(
+        limma::removeBatchEffect(SummarizedExperiment::assay(rld), batch = batch_vec, design = design_mat),
+        error = function(e) { warning("Batch correction failed: ", e$message); NULL }
+      )
+      if (!is.null(corrected_mat)) {
+        rld_corrected <- rld
+        SummarizedExperiment::assay(rld_corrected) <- corrected_mat
+        p_corr <- plot_custom_pca(rld_corrected, condition = main_condition, batch = batch_col,
+                                  title = "PCA After Batch Correction (limma)",
+                                  return_plot = TRUE)
+        pdf(file.path(plot_dir, paste0("PCA_BatchCorrected_", level, "_vs_", base, ".pdf")), width = 9, height = 7)
+        print(p_corr)
+        dev.off()
+        message("   -> Batch-corrected PCA saved to: ", plot_dir)
+      }
+    }
   }
 
   rld_cor <- cor(SummarizedExperiment::assay(rld))
@@ -62,7 +88,7 @@ run_eda <- function(dds, edb, out_dir, level, base, main_condition) {
 #' @param padj_cutoff Adjusted p-value significance cutoff
 #' @param highlight_genes Optional character vector of gene names to highlight in the Volcano plot
 #' @return NULL
-generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken, results_data, out_dir, level, base, main_condition, top_genes, padj_cutoff, highlight_genes = NULL) {
+generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken, results_data, out_dir, level, base, main_condition, top_genes, padj_cutoff, highlight_genes = NULL, batch_col = NULL) {
   plot_dir <- file.path(out_dir, "Plots")
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
   org_info <- get_organism_info(edb)
@@ -134,6 +160,7 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
   pca        <- prcomp(t(mat), center = TRUE, scale. = FALSE)
   percentVar <- round(100 * pca$sdev^2 / sum(pca$sdev^2), 1)
   pca_df     <- data.frame(PC1 = pca$x[, 1], PC2 = pca$x[, 2], coldata)
+  pca_df$sample_label <- rownames(pca_df)
 
   p <- ggplot2::ggplot(pca_df, ggplot2::aes(x = .data[["PC1"]], y = .data[["PC2"]],
                                              color = .data[[condition]]))
@@ -145,6 +172,9 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
     p <- p + ggplot2::aes(shape = .data[[batch]])
   }
   p <- p +
+    ggrepel::geom_text_repel(ggplot2::aes(label = .data[["sample_label"]]),
+                             size = 3, show.legend = FALSE,
+                             box.padding = 0.4, max.overlaps = Inf) +
     ggplot2::xlab(paste0("PC1: ", percentVar[1], "% variance")) +
     ggplot2::ylab(paste0("PC2: ", percentVar[2], "% variance")) +
     ggplot2::theme_bw() +

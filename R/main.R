@@ -86,7 +86,7 @@ expressom <- function(count_type        = "salmon",
   on.exit({
     options(nwarnings = old_warn)
     log_dir <- file.path(out_dir, "DE_raw_results", "Log")
-    if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
+    dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
     if (dir.exists(log_dir)) {
       capture.output(sessionInfo(), file = file.path(log_dir, "SessionInfo.txt"))
       if (!is.null(warnings())) {
@@ -150,7 +150,8 @@ expressom <- function(count_type        = "salmon",
               out_dir        = out_dir,
               level          = level,
               base           = base,
-              main_condition = main_condition)
+              main_condition = main_condition,
+              batch_col      = batch_col)
 
       res_list <- run_deseq2_analysis(dds, model, level, base, shrink_method, out_dir,
                                       padj_cutoff, test, reduced)
@@ -190,7 +191,8 @@ expressom <- function(count_type        = "salmon",
         main_condition = main_condition,
         top_genes      = top_genes,
         padj_cutoff    = padj_cutoff,
-        highlight_genes = highlight_genes
+        highlight_genes = highlight_genes,
+        batch_col       = batch_col
       )
       while (grDevices::dev.cur() > 1) grDevices::dev.off()
 
