@@ -159,6 +159,7 @@ run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05) {
 #' @param chunk_size Number of genes to process at once (default: 5000)
 #' @param max_transcripts Maximum number of transcripts per gene to keep (default: 300)
 #' @param min_transcript_total Minimum total counts across all samples for a transcript (default: 10)
+#' @param bpparam Optional BiocParallel parameter object for DRIMSeq operations
 #' @return List with dtu_results
 #' @export
 run_dtu <- function(
@@ -172,15 +173,16 @@ run_dtu <- function(
   min_samps_feature_expr = 3,
   chunk_size = 5000,
   max_transcripts = 300,
-  min_transcript_total = 10
+  min_transcript_total = 10,
+  bpparam = NULL
 ) {
 
   if (!requireNamespace("DRIMSeq", quietly = TRUE)) {
     stop("DRIMSeq is required for DTU analysis.")
   }
 
-  BiocParallel::register(BiocParallel::SerialParam())
-  bp_param <- BiocParallel::SerialParam()
+  bp_param <- if (is.null(bpparam)) BiocParallel::SerialParam() else bpparam
+  BiocParallel::register(bp_param)
 
   counts <- if (isoform_obj$type == "tximport") {
     isoform_obj$txi$counts
