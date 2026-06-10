@@ -336,6 +336,7 @@ run_dtu <- function(
 #' @param fasta_file Path to transcript FASTA file
 #' @param gff_file Path to GFF/GTF annotation
 #' @param out_dir Output directory
+#' @param run_predictors Logical: run external predictors such as CPAT, SignalP, and Pfam
 #' @param use_wsl Logical: use WSL for external tools (Windows only)
 #' @param wsl_distro WSL distribution name (default "Ubuntu-22.04")
 #' @param save_dir Optional directory to save RDS files
@@ -346,6 +347,7 @@ run_dtu <- function(
 run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
                                isoform_obj, condition, level, base,
                                fasta_file, gff_file, out_dir,
+                               run_predictors = FALSE,
                                use_wsl = FALSE, wsl_distro = "Ubuntu-22.04",
                                save_dir = NULL, resume_from = NULL,
                                bsgenome_name = NULL) {
@@ -489,6 +491,19 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       n                    = 50
     )
     message("Combined analysis completed.")
+  }
+
+  if (isTRUE(run_predictors)) {
+    message("Running external isoform predictors...")
+    switch_list <- .run_external_predictors(
+      switch_list = switch_list,
+      fasta_file  = fasta_file,
+      out_dir     = out_dir,
+      use_wsl     = use_wsl,
+      wsl_distro  = wsl_distro,
+      isoform_obj = isoform_obj,
+      save_dir    = save_dir
+    )
   }
 
   # --------------------------------------------------------------------------
