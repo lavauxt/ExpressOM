@@ -303,54 +303,64 @@ expressom <- function(count_type        = "salmon",
     if (step == "isoform" && run_isoform) {
       message("\n=== Running Isoform-Level Analysis ===")
 
+      # ---- Per-step RDS checkpoint directory --------------------------------
+      iso_dir      <- file.path(out_dir, "IsoformSwitch")
+      iso_save_dir <- file.path(iso_dir, "saved")
+      dir.create(iso_save_dir, recursive = TRUE, showWarnings = FALSE)
+
+      # Helpers: save immediately after each step completes
+      .iso_ckpt_exists <- function(nm) file.exists(file.path(iso_save_dir, nm))
+      .iso_ckpt_save   <- function(obj, nm) {
+        saveRDS(obj, file.path(iso_save_dir, nm))
+        message("Step checkpoint saved: ", nm)
+        invisible(obj)
+      }
+      .iso_ckpt_load   <- function(nm) {
+        message("Resuming from step checkpoint: ", nm)
+        readRDS(file.path(iso_save_dir, nm))
+      }
+
       dte_res        <- NULL
       dtu_res        <- NULL
       isoform_import <- NULL
 
+      # ---- Load from explicit resume directory first -----------------------
       if (!is.null(resume_isoform_from) && dir.exists(resume_isoform_from)) {
         message("Resuming isoform analysis from: ", resume_isoform_from)
-        loaded <- load_isoform_results(resume_isoform_from)
-        if (!is.null(loaded$dte_results) && !is.null(loaded$dtu_results)) {
-          dte_res <- loaded$dte_results
-          dtu_res <- loaded$dtu_results
-          message("Successfully loaded DTE and DTU results from saved RDS files.")
-        } else {
-          warning("Resume directory missing DTE or DTU RDS files. Proceeding with full isoform analysis.")
-          resume_isoform_from <- NULL
-        }
+        loaded         <- load_isoform_results(resume_isoform_from)
+        isoform_import <- loaded$isoform_import
+        dte_res        <- loaded$dte_results
+        dtu_res        <- loaded$dtu_results
+        if (!is.null(dte_res) && !is.null(dtu_res))
+          message("Loaded DTE and DTU results from resume directory.")
+        else
+          message("Resume directory incomplete. Will run missing steps.")
       }
 
-      if (is.null(dte_res) || is.null(dtu_res)) {
-        message("Running full isoform analysis (DTE, DTU, and Switch).")
+      # ---- Also check iso_save_dir per-step checkpoints --------------------
+      if (is.null(isoform_import) && .iso_ckpt_exists("isoform_import.rds"))
+        isoform_import <- .iso_ckpt_load("isoform_import.rds")
+      if (is.null(dte_res) && .iso_ckpt_exists("dte_results.rds"))
+        dte_res <- .iso_ckpt_load("dte_results.rds")
+      if (is.null(dtu_res) && .iso_ckpt_exists("dtu_results.rds"))
+        dtu_res <- .iso_ckpt_load("dtu_results.rds")
 
-        if (is.null(isoform_fasta) || is.null(isoform_gff)) {
-          message("   -> Auto-fetching Ensembl FASTA and GTF references...")
-          ref_dir       <- safe_dir(file.path(data_dir, "reference"))
-          refs          <- download_ensembl_refs(ensembl_package_name = ensembl_package_name, out_dir = ref_dir)
-          isoform_gff   <- refs$gtf
-          isoform_fasta <- c(refs$cdna_fasta, refs$ncrna_fasta)
-        }
-
-        if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE)) {
-          stop("Please install IsoformSwitchAnalyzeR: BiocManager::install('IsoformSwitchAnalyzeR')")
-        }
-
-        isoform_import <- import_transcript_counts(
-          data_dir             = data_dir,
-          sample_table         = sample_table,
-          ensembl_package_name = ensembl_package_name,
-          count_type           = count_type,
-          matrix_file          = matrix_file,
-          subset_sample        = subset_sample,
-          remove_sample        = remove_sample
-        )
-
-        dte_res <- run_dte(isoform_import, main_condition, level, base, padj_cutoff)
-        dtu_res <- run_dtu(isoform_import, main_condition, level, base, bpparam = bpparam)
+      # ---- Ensure reference files are available (needed for switch step) ---
+      if (is.null(isoform_fasta) || is.null(isoform_gff)) {
+        message("   -> Auto-fetching Ensembl FASTA and GTF references...")
+        ref_dir       <- safe_dir(file.path(data_dir, "reference"))
+        refs          <- download_ensembl_refs(ensembl_package_name = ensembl_package_name,
+                                               out_dir = ref_dir)
+        isoform_gff   <- refs$gtf
+        isoform_fasta <- c(refs$cdna_fasta, refs$ncrna_fasta)
       }
 
+      if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE))
+        stop("Please install IsoformSwitchAnalyzeR: BiocManager::install('IsoformSwitchAnalyzeR')")
+
+      # ---- Step A: Import transcript counts --------------------------------
       if (is.null(isoform_import)) {
-        message("Re-importing isoform counts for switch analysis (resume mode).")
+        message("Step A: Importing transcript-level counts...")
         isoform_import <- import_transcript_counts(
           data_dir             = data_dir,
           sample_table         = sample_table,
@@ -360,29 +370,46 @@ expressom <- function(count_type        = "salmon",
           subset_sample        = subset_sample,
           remove_sample        = remove_sample
         )
-        if (is.null(isoform_fasta) || is.null(isoform_gff)) {
-          message("   -> Auto-fetching Ensembl FASTA and GTF references...")
-          ref_dir       <- safe_dir(file.path(data_dir, "reference"))
-          refs          <- download_ensembl_refs(ensembl_package_name = ensembl_package_name, out_dir = ref_dir)
-          isoform_gff   <- refs$gtf
-          isoform_fasta <- c(refs$cdna_fasta, refs$ncrna_fasta)
-        }
+        .iso_ckpt_save(isoform_import, "isoform_import.rds")
+      } else {
+        message("Step A: Isoform import loaded from checkpoint. Skipping.")
       }
 
+      # ---- Step B: DTE ----------------------------------------------------
+      if (is.null(dte_res)) {
+        message("Step B: Running DTE (Differential Transcript Expression)...")
+        dte_res <- run_dte(isoform_import, main_condition, level, base, padj_cutoff)
+        .iso_ckpt_save(dte_res, "dte_results.rds")
+      } else {
+        message("Step B: DTE results loaded from checkpoint. Skipping.")
+      }
+
+      # ---- Step C: DTU ----------------------------------------------------
+      if (is.null(dtu_res)) {
+        message("Step C: Running DTU (Differential Transcript Usage)...")
+        dtu_res <- run_dtu(isoform_import, main_condition, level, base, bpparam = bpparam)
+        .iso_ckpt_save(dtu_res, "dtu_results.rds")
+      } else {
+        message("Step C: DTU results loaded from checkpoint. Skipping.")
+      }
+
+      # ---- DTE/DTU report --------------------------------------------------
       if (!is.null(dte_res) && !is.null(dtu_res) && !is.null(isoform_import)) {
         generate_dte_dtu_report(
-          dte_results      = dte_res,
-          dtu_results      = dtu_res,
-          isoform_obj      = isoform_import,
-          out_dir          = out_dir,
-          condition        = main_condition,
-          level            = level,
-          base             = base,
+          dte_results       = dte_res,
+          dtu_results       = dtu_res,
+          isoform_obj       = isoform_import,
+          out_dir           = out_dir,
+          condition         = main_condition,
+          level             = level,
+          base              = base,
           genes_of_interest = isoform_report_genes,
-          top_n            = 15
+          top_n             = 15
         )
       }
 
+      # ---- Step D: IsoformSwitchAnalyzeR (checkpoints handled internally) --
+      # save_dir = iso_save_dir so step1/step2/step3 checkpoints land there
       switch_res <- run_isoform_switch(
         dte_results    = dte_res,
         dtu_results    = dtu_res,
@@ -392,15 +419,15 @@ expressom <- function(count_type        = "salmon",
         base           = base,
         fasta_file     = isoform_fasta,
         gff_file       = isoform_gff,
-        out_dir        = file.path(out_dir, "IsoformSwitch"),
+        out_dir        = iso_dir,
         run_predictors = run_predictors,
         use_wsl        = use_wsl,
         wsl_distro     = wsl_distro,
-        save_dir       = file.path(out_dir, "IsoformSwitch", "saved"),
+        save_dir       = iso_save_dir,
         resume_from    = resume_isoform_from
       )
 
-      iso_dir <- file.path(out_dir, "IsoformSwitch")
+      # Final copies to iso_dir top level for backward compatibility
       if (!dir.exists(iso_dir)) dir.create(iso_dir, recursive = TRUE)
       saveRDS(dte_res,    file.path(iso_dir, "dte_results.rds"))
       saveRDS(dtu_res,    file.path(iso_dir, "dtu_results.rds"))

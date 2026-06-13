@@ -336,12 +336,12 @@ run_dtu <- function(
 #' @param fasta_file Path to transcript FASTA file
 #' @param gff_file Path to GFF/GTF annotation
 #' @param out_dir Output directory
-#' @param run_predictors Logical: run external predictors such as CPAT, SignalP, and Pfam
+#' @param run_predictors Logical: run external predictors (CPAT, SignalP, Pfam)
 #' @param use_wsl Logical: use WSL for external tools (Windows only)
 #' @param wsl_distro WSL distribution name (default "Ubuntu-22.04")
-#' @param save_dir Optional directory to save RDS files
-#' @param resume_from Optional path to saved switch_list.rds
-#' @param bsgenome_name Optional BSgenome package name (e.g. "BSgenome.Hsapiens.UCSC.hg38")
+#' @param save_dir Optional directory to save per-step RDS checkpoints
+#' @param resume_from Optional path to a save_dir with a prior switch_list.rds
+#' @param bsgenome_name Optional BSgenome package name
 #' @return IsoformSwitchAnalyzeR results object
 #' @export
 run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
@@ -355,101 +355,116 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE))
     stop("Please install IsoformSwitchAnalyzeR: BiocManager::install('IsoformSwitchAnalyzeR')")
   if (!requireNamespace("Biostrings", quietly = TRUE))
-    install.packages("Biostrings")
-  if (!requireNamespace("BSgenome", quietly = TRUE))
-    BiocManager::install("BSgenome")
+    stop("Please install Biostrings: BiocManager::install('Biostrings')")
 
-  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+  if (!dir.exists(out_dir))  dir.create(out_dir,  recursive = TRUE)
   if (!is.null(save_dir) && !dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE)
 
   # --------------------------------------------------------------------------
-  # 1. Load or build the SwitchList
+  # Checkpoint helpers (scoped to this call)
   # --------------------------------------------------------------------------
+  .ckpt_path   <- function(nm) if (!is.null(save_dir)) file.path(save_dir, nm) else ""
+  .ckpt_exists <- function(nm) { p <- .ckpt_path(nm); nzchar(p) && file.exists(p) }
+  .ckpt_save   <- function(obj, nm) {
+    p <- .ckpt_path(nm)
+    if (nzchar(p)) {
+      saveRDS(obj, p)
+      message("Checkpoint saved -> ", nm)
+    }
+    invisible(obj)
+  }
+  .ckpt_load   <- function(nm) {
+    p <- .ckpt_path(nm)
+    message("Resuming from checkpoint: ", nm)
+    readRDS(p)
+  }
+
+  # --------------------------------------------------------------------------
+  # Step 1 – Load or build the SwitchList
+  # --------------------------------------------------------------------------
+  switch_list      <- NULL
+  already_analyzed <- FALSE
+
+  # Priority: explicit resume_from > step2 checkpoint > step1 checkpoint > build fresh
+
   if (!is.null(resume_from) && file.exists(file.path(resume_from, "switch_list.rds"))) {
     message("Resuming from saved SwitchList: ", resume_from)
     switch_list <- readRDS(file.path(resume_from, "switch_list.rds"))
     if (!is.null(switch_list$isoformSwitchAnalysis)) {
-      message("Full analysis already present – skipping.")
-      return(switch_list)
+      message("Full analysis already present - skipping combined analysis.")
+      already_analyzed <- TRUE
     }
-    run_analysis <- TRUE
+
+  } else if (.ckpt_exists("step2_analyzed.rds")) {
+    switch_list      <- .ckpt_load("step2_analyzed.rds")
+    already_analyzed <- TRUE
+
+  } else if (.ckpt_exists("step1_imported.rds")) {
+    switch_list <- .ckpt_load("step1_imported.rds")
+
   } else {
+    # ---- Build SwitchList from raw data ----
     message("Building SwitchList from raw data...")
 
-    # Extract counts and metadata
     if (isoform_obj$type == "tximport") {
       count_matrix <- isoform_obj$txi$counts
     } else {
       count_matrix <- isoform_obj$counts
     }
 
-    sample_col <- if ("Sample" %in% colnames(isoform_obj$meta)) "Sample" else "sample_id"
+    sample_col    <- if ("Sample" %in% colnames(isoform_obj$meta)) "Sample" else "sample_id"
     sample_vector <- isoform_obj$meta[[sample_col]]
-    if (is.null(sample_vector) || length(sample_vector) == 0) {
+    if (is.null(sample_vector) || length(sample_vector) == 0)
       sample_vector <- rownames(isoform_obj$meta)
-    }
-    if (!all(sample_vector %in% colnames(count_matrix))) {
+    if (!all(sample_vector %in% colnames(count_matrix)))
       stop("Sample IDs in metadata do not match count matrix column names.")
-    }
 
-    # ----------------------------------------------------------------------
-    # PRE-FILTERING: keep only transcripts that exist in the FASTA file
-    # ----------------------------------------------------------------------
-    message("Pre‑filtering transcripts to match FASTA file...")
-    fasta_seqs <- Biostrings::fasta.seqlengths(fasta_file)
-    fasta_ids <- names(fasta_seqs)
-
-    # Clean transcript IDs (remove version suffixes, pipe, spaces)
-    clean_id <- function(x) {
-      x <- sub("\\..*$", "", x)  # remove version number
-      x <- sub("\\|.*$", "", x)  # remove pipe
-      x <- sub(" .*$", "", x)    # remove space
+    # Pre-filter: keep only transcripts present in the FASTA file
+    message("Pre-filtering transcripts to match FASTA file...")
+    fasta_seqs    <- Biostrings::fasta.seqlengths(fasta_file)
+    clean_id      <- function(x) {
+      x <- sub("\\..*$", "", x)
+      x <- sub("\\|.*$", "", x)
+      x <- sub(" .*$",   "", x)
       x
     }
-    clean_fasta_ids <- clean_id(fasta_ids)
-    clean_rownames <- clean_id(rownames(count_matrix))
-
-    # Keep only transcripts present in FASTA
-    keep_in_fasta <- clean_rownames %in% clean_fasta_ids
-    count_matrix <- count_matrix[keep_in_fasta, , drop = FALSE]
-    message("  Kept ", nrow(count_matrix), " transcripts out of ", length(clean_rownames),
-            " that have a match in the FASTA file.")
-
-    if (nrow(count_matrix) == 0) {
+    clean_fasta_ids  <- clean_id(names(fasta_seqs))
+    clean_rownames   <- clean_id(rownames(count_matrix))
+    keep_in_fasta    <- clean_rownames %in% clean_fasta_ids
+    count_matrix     <- count_matrix[keep_in_fasta, , drop = FALSE]
+    message("  Kept ", nrow(count_matrix), " / ", length(clean_rownames),
+            " transcripts matching the FASTA file.")
+    if (nrow(count_matrix) == 0)
       stop("No transcript IDs match between count matrix and FASTA file. ",
-           "Check ID formats and consider using ignoreAfterPeriod = TRUE in importRdata().")
-    }
+           "Check ID formats or set ignoreAfterPeriod = TRUE in importRdata().")
 
-    # Remove genes that end up with only one transcript (DRIMSeq requirement)
-    tx2gene <- isoform_obj$tx2gene
+    # Remove genes with only one transcript (DRIMSeq requirement)
+    tx2gene      <- isoform_obj$tx2gene
     tx2gene$tx_clean <- clean_id(tx2gene$tx_id)
-    keep_tx <- rownames(count_matrix) %in% tx2gene$tx_clean
+    keep_tx      <- rownames(count_matrix) %in% tx2gene$tx_clean
     count_matrix <- count_matrix[keep_tx, , drop = FALSE]
-    tx2gene <- tx2gene[match(rownames(count_matrix), tx2gene$tx_clean), ]
-    gene_counts <- table(tx2gene$gene_id)
-    genes_with_multiple <- names(gene_counts[gene_counts > 1])
-    keep_genes <- tx2gene$gene_id %in% genes_with_multiple
+    tx2gene      <- tx2gene[match(rownames(count_matrix), tx2gene$tx_clean), ]
+    gene_counts  <- table(tx2gene$gene_id)
+    genes_multi  <- names(gene_counts[gene_counts > 1])
+    keep_genes   <- tx2gene$gene_id %in% genes_multi
     count_matrix <- count_matrix[keep_genes, , drop = FALSE]
-    tx2gene <- tx2gene[keep_genes, ]
-    message("  Kept ", nrow(count_matrix), " transcripts from ", length(unique(tx2gene$gene_id)),
-            " genes after removing single‑transcript genes.")
+    tx2gene      <- tx2gene[keep_genes, ]
+    message("  Kept ", nrow(count_matrix), " transcripts from ",
+            length(unique(tx2gene$gene_id)), " genes after removing single-transcript genes.")
 
-    # Re‑build isoform_count_matrix with cleaned row names
-    rownames(count_matrix) <- clean_id(rownames(count_matrix))
-    isoform_count_matrix <- round(count_matrix)
+    rownames(count_matrix)  <- clean_id(rownames(count_matrix))
+    isoform_count_matrix    <- round(count_matrix)
 
-    # Design matrix with correct factor levels
     design_matrix <- data.frame(
-      sampleID = sample_vector,
+      sampleID  = sample_vector,
       condition = factor(isoform_obj$meta[[condition]], levels = c(base, level)),
       stringsAsFactors = FALSE
     )
     rownames(design_matrix) <- design_matrix$sampleID
 
-    # Ensure dplyr is loaded
     if (!"package:dplyr" %in% search()) attachNamespace("dplyr")
 
-    # Import data
+    # ---- importRdata: ALL PARAMETERS UNCHANGED ----
     switch_list <- IsoformSwitchAnalyzeR::importRdata(
       isoformCountMatrix   = isoform_count_matrix,
       isoformRepExpression = isoform_count_matrix,
@@ -460,54 +475,67 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       showProgress         = TRUE
     )
     message("Isoform data import completed.")
-    run_analysis <- TRUE
+
+    # Save step-1 checkpoint immediately
+    .ckpt_save(switch_list, "step1_imported.rds")
   }
 
   # --------------------------------------------------------------------------
-  # 2. Run combined analysis (Part1 + Part2)
+  # Step 2 – Run combined analysis (Part1 + Part2)
   # --------------------------------------------------------------------------
-  if (run_analysis) {
+  if (!already_analyzed) {
     message("Running isoformSwitchAnalysisCombined...")
 
-    # Determine if we need a BSgenome fallback
     if (!is.null(switch_list$ntSequence) && length(switch_list$ntSequence) > 0) {
       genome_object <- NULL
     } else if (!is.null(bsgenome_name) && requireNamespace(bsgenome_name, quietly = TRUE)) {
       genome_object <- getExportedValue(bsgenome_name, bsgenome_name)
       message("Using BSgenome: ", bsgenome_name)
     } else if (requireNamespace("BSgenome.Hsapiens.UCSC.hg38", quietly = TRUE)) {
-      # Use the default human BSgenome – note the quoted package name
       genome_object <- getExportedValue("BSgenome.Hsapiens.UCSC.hg38", "BSgenome.Hsapiens.UCSC.hg38")
       message("Using default BSgenome.Hsapiens.UCSC.hg38")
     } else {
-      message("No BSgenome available – running analysis WITHOUT ORF prediction.")
+      message("No BSgenome available - running WITHOUT ORF prediction.")
       genome_object <- NULL
     }
-    # Run the full workflow
+
+    # ---- isoformSwitchAnalysisCombined: ALL PARAMETERS UNCHANGED ----
     switch_list <- IsoformSwitchAnalyzeR::isoformSwitchAnalysisCombined(
-      switchAnalyzeRlist   = switch_list,
-      genomeObject         = genome_object,
-      pathToOutput         = out_dir,
-      n                    = 50
+      switchAnalyzeRlist = switch_list,
+      genomeObject       = genome_object,
+      pathToOutput       = out_dir,
+      n                  = 50
     )
     message("Combined analysis completed.")
-  }
 
-  if (isTRUE(run_predictors)) {
-    message("Running external isoform predictors...")
-    switch_list <- .run_external_predictors(
-      switch_list = switch_list,
-      fasta_file  = fasta_file,
-      out_dir     = out_dir,
-      use_wsl     = use_wsl,
-      wsl_distro  = wsl_distro,
-      isoform_obj = isoform_obj,
-      save_dir    = save_dir
-    )
+    # Save step-2 checkpoint immediately
+    .ckpt_save(switch_list, "step2_analyzed.rds")
   }
 
   # --------------------------------------------------------------------------
-  # 3. Save results
+  # Step 3 – External predictors (CPAT, SignalP, Pfam)
+  # --------------------------------------------------------------------------
+  if (isTRUE(run_predictors)) {
+    if (.ckpt_exists("step3_predictors.rds")) {
+      message("Loading external predictor results from step-3 checkpoint.")
+      switch_list <- .ckpt_load("step3_predictors.rds")
+    } else {
+      message("Running external isoform predictors...")
+      switch_list <- .run_external_predictors(
+        switch_list = switch_list,
+        fasta_file  = fasta_file,
+        out_dir     = out_dir,
+        use_wsl     = use_wsl,
+        wsl_distro  = wsl_distro,
+        isoform_obj = isoform_obj,
+        save_dir    = save_dir
+      )
+      .ckpt_save(switch_list, "step3_predictors.rds")
+    }
+  }
+
+  # --------------------------------------------------------------------------
+  # Final save
   # --------------------------------------------------------------------------
   if (!is.null(save_dir)) {
     saveRDS(switch_list, file.path(save_dir, "switch_list.rds"))
@@ -518,228 +546,358 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   return(switch_list)
 }
 
-# Internal: run external predictors (Pfam, CPAT, SignalP) via system or WSL
-.run_external_predictors <- function(switch_list, fasta_file, out_dir, use_wsl, wsl_distro, isoform_obj, save_dir) {
+# ==============================================================================
+# Internal: run external predictors (CPAT, SignalP, Pfam) via WSL or natively
+# ==============================================================================
+#
+# Key design principles:
+#   * All system calls use .wsl_exec_script() which writes a temp bash script
+#     and executes it - completely avoids shell-quoting hell on Windows.
+#   * Every Windows path is converted to a WSL Unix path via .to_wsl_path()
+#     before being embedded in bash commands.
+#   * CPAT: correct flag order -g (fasta) -x (hexamer) -d (logit model) -o (prefix)
+#           supports CPAT3 (`cpat`) and CPAT2 (`run_cpat.py`)
+#   * SignalP: supports v5 (`signalp`) and v6 (`signalp6`)
+#   * Pfam: InterProScan XML first; falls back to hmmscan --domtblout
+#   * ISA functions: analyzeCPAT / analyzeSignalIP / analyzePFAM / analyzeInterProScan
+#
+.run_external_predictors <- function(switch_list, fasta_file, out_dir,
+                                      use_wsl, wsl_distro, isoform_obj, save_dir) {
   is_windows <- .Platform$OS.type == "windows"
-  
-  if (is_windows && use_wsl) {
-    base_prefix <- sprintf('wsl -d %s --', wsl_distro)
-  } else {
-    base_prefix <- ""
-  }
-  
+  via_wsl    <- is_windows && use_wsl
+
+  # --------------------------------------------------------------------------
+  # 1. Discover conda.sh and verify 'isoform_tools' environment
+  # --------------------------------------------------------------------------
+  message("Detecting conda environment in execution context...")
+  conda_sh      <- NULL
   has_conda_env <- FALSE
-  conda_sh <- NULL
-  
-  if (is_windows && use_wsl) {
-    # 1. Find conda executable
-    find_conda <- sprintf('wsl -d %s bash -c "command -v conda"', wsl_distro)
-    conda_path <- system(find_conda, intern = TRUE, ignore.stderr = TRUE)
-    if (length(conda_path) > 0 && nchar(conda_path[1]) > 0) {
-      test_file <- sprintf('wsl -d %s test -f %s', wsl_distro, conda_path[1])
-      if (system(test_file, ignore.stdout = TRUE, ignore.stderr = TRUE) == 0) {
-        conda_base <- dirname(dirname(conda_path[1]))
-        conda_sh <- file.path(conda_base, "etc/profile.d/conda.sh")
-        test_sh <- sprintf('wsl -d %s test -f %s', wsl_distro, conda_sh)
-        if (system(test_sh, ignore.stdout = TRUE, ignore.stderr = TRUE) != 0) conda_sh <- NULL
+
+  find_out <- .wsl_exec_script(
+    bash_body = paste(
+      "find /home /opt /root -maxdepth 8",
+      "-name 'conda.sh' -path '*/profile.d/*'",
+      "2>/dev/null | head -5"
+    ),
+    wsl_distro = wsl_distro, use_wsl = via_wsl,
+    conda_sh = NULL, intern = TRUE, ignore_stderr = TRUE
+  )
+  find_out <- trimws(find_out[nzchar(trimws(find_out))])
+
+  for (csh in find_out) {
+    ok <- .wsl_exec_script(
+      bash_body = c(
+        sprintf('. "%s"', csh),
+        'conda env list 2>/dev/null | grep -q "isoform_tools"'
+      ),
+      wsl_distro = wsl_distro, use_wsl = via_wsl,
+      conda_sh = NULL, intern = FALSE, ignore_stderr = TRUE
+    )
+    if (isTRUE(ok == 0L)) { conda_sh <- csh; has_conda_env <- TRUE; break }
+  }
+
+  active_conda <- if (has_conda_env) conda_sh else NULL
+
+  if (has_conda_env)
+    message("  Using conda env 'isoform_tools' (", conda_sh, ")")
+  else
+    message("  No 'isoform_tools' env found. Using system PATH.")
+
+  # --------------------------------------------------------------------------
+  # 2. Convenience wrappers
+  # --------------------------------------------------------------------------
+
+  # Run a single bash command string (conda activation is handled automatically)
+  run_tool <- function(cmd_str, show_stderr = TRUE) {
+    .wsl_exec_script(
+      bash_body     = cmd_str,
+      wsl_distro    = wsl_distro,
+      use_wsl       = via_wsl,
+      conda_sh      = active_conda,
+      conda_env     = "isoform_tools",
+      intern        = FALSE,
+      ignore_stderr = !show_stderr
+    )
+  }
+
+  # Check tool availability (conda-aware)
+  tool_ok <- function(t) {
+    .wsl_tool_exists(t, wsl_distro, via_wsl, active_conda, "isoform_tools")
+  }
+
+  # Convert a Windows path to a WSL path (identity on Linux/Mac)
+  w2l <- function(p) {
+    if (is.null(p) || !nzchar(p)) return(p)
+    if (is_windows && use_wsl) .to_wsl_path(p, wsl_distro) else p
+  }
+
+  # --------------------------------------------------------------------------
+  # 3. Determine organism (for CPAT hexamer / logit model selection)
+  # --------------------------------------------------------------------------
+  syms     <- isoform_obj$gene_map$symbol[!is.na(isoform_obj$gene_map$symbol)]
+  first_sym <- if (length(syms) > 0) syms[1] else ""
+  organism <- if (grepl("^[A-Z]+$", first_sym) && nchar(first_sym) > 2) "Human" else "Mouse"
+  message("Organism detected for CPAT: ", organism)
+
+  # --------------------------------------------------------------------------
+  # 4. Extract NT and AA sequences from the switch_list
+  #    CPAT needs NT; SignalP and Pfam need AA (protein) sequences.
+  # --------------------------------------------------------------------------
+  seq_dir <- file.path(out_dir, "sequences")
+  dir.create(seq_dir, recursive = TRUE, showWarnings = FALSE)
+
+  nt_fa_local <- file.path(seq_dir, "isoform_NT.fa")
+  aa_fa_local <- file.path(seq_dir, "isoform_AA.fa")
+
+  if (!file.exists(nt_fa_local) || !file.exists(aa_fa_local)) {
+    message("Extracting NT / AA sequences from SwitchList for external tools...")
+    tryCatch({
+      IsoformSwitchAnalyzeR::extractSequence(
+        switch_list,
+        onlySwitchingGenes       = FALSE,
+        extractNTseq             = TRUE,
+        extractAAseq             = TRUE,
+        writeToFile              = TRUE,
+        pathToOutput             = seq_dir,
+        addToSwitchAnalyzeRlist  = FALSE,
+        quiet                    = TRUE
+      )
+      # ISA writes NT.fasta / AA.fasta; rename to stable names
+      for (pair in list(c("NT.fasta", nt_fa_local), c("AA.fasta", aa_fa_local))) {
+        src <- file.path(seq_dir, pair[1])
+        if (file.exists(src) && normalizePath(src) != normalizePath(pair[2]))
+          file.rename(src, pair[2])
+      }
+    }, error = function(e) {
+      message("  Could not extract sequences from SwitchList: ", e$message)
+      message("  CPAT will use the provided fasta_file; SignalP / Pfam may be skipped.")
+    })
+  }
+
+  # Input selection per tool
+  cpat_fa_local <- if (file.exists(nt_fa_local)) nt_fa_local else fasta_file
+  sp_fa_local   <- if (file.exists(aa_fa_local)) aa_fa_local else NULL
+  pfam_fa_local <- if (file.exists(aa_fa_local)) aa_fa_local else NULL
+
+  # Convert to WSL paths
+  cpat_fa_w  <- w2l(cpat_fa_local)
+  sp_fa_w    <- w2l(sp_fa_local)
+  pfam_fa_w  <- w2l(pfam_fa_local)
+  out_dir_w  <- w2l(out_dir)
+
+  # --------------------------------------------------------------------------
+  # 5. CPAT – coding potential prediction
+  # --------------------------------------------------------------------------
+  message("\n--- CPAT (coding potential) ---")
+
+  hexamer_local <- system.file("extdata", paste0(organism, "_Hexamer.tsv"),
+                                package = "IsoformSwitchAnalyzeR")
+  logit_local   <- .find_cpat_logit_model(organism, wsl_distro, via_wsl, active_conda)
+
+  if (!nzchar(hexamer_local) || !file.exists(hexamer_local)) {
+    message("  Hexamer table not found in ISA package. Skipping CPAT.")
+  } else if (is.null(logit_local)) {
+    message("  Logit model not found. Run install_isoform_databases() first. Skipping CPAT.")
+  } else {
+    hexamer_w      <- w2l(hexamer_local)
+    logit_w        <- logit_local  # already a valid path in execution env
+    cpat_prefix_w  <- paste0(out_dir_w, "/cpat_out")
+    cpat_prefix_l  <- file.path(out_dir, "cpat_out")
+
+    has_cpat3 <- tool_ok("cpat")
+    has_cpat2 <- tool_ok("run_cpat.py")
+
+    if (!has_cpat3 && !has_cpat2) {
+      message("  Neither 'cpat' nor 'run_cpat.py' found. Skipping.")
+    } else {
+      cpat_exe    <- if (has_cpat3) "cpat" else "run_cpat.py"
+      # Correct CPAT flag order: -g <NT fasta>  -x <hexamer>  -d <logit model>  -o <prefix>
+      cpat_cmd <- sprintf(
+        "%s -g %s -x %s -d %s -o %s",
+        cpat_exe,
+        shQuote(cpat_fa_w,     type = "sh"),
+        shQuote(hexamer_w,     type = "sh"),
+        shQuote(logit_w,       type = "sh"),
+        shQuote(cpat_prefix_w, type = "sh")
+      )
+      message("  Running: ", cpat_exe)
+      cpat_status <- run_tool(cpat_cmd)
+
+      # CPAT3 main result: <prefix>.ORF_prob.best.tsv; CPAT2: <prefix>.r
+      cpat_result <- if (has_cpat3) paste0(cpat_prefix_l, ".ORF_prob.best.tsv")
+                     else           paste0(cpat_prefix_l, ".r")
+
+      if (cpat_status == 0L && file.exists(cpat_result)) {
+        switch_list <- tryCatch(
+          IsoformSwitchAnalyzeR::analyzeCPAT(
+            switchAnalyzeRlist       = switch_list,
+            pathToAllCPATresultFiles = cpat_result,
+            codingCutoff             = NULL,
+            removeNoncodinORFs       = TRUE,
+            quiet                    = FALSE
+          ),
+          error = function(e) { message("  analyzeCPAT(): ", e$message); switch_list }
+        )
+        message("  CPAT results imported successfully.")
+      } else {
+        message("  CPAT failed or result file not found (", basename(cpat_result), "). Skipping.")
       }
     }
-    # 2. Fallback: search for conda.sh in /home and /opt
-    if (is.null(conda_sh)) {
-      find_sh <- sprintf(
-        'wsl -d %s bash -c "find /home /opt -maxdepth 5 -type f -path \\"*/etc/profile.d/conda.sh\\" 2>/dev/null | head -1"',
-        wsl_distro
+  }
+
+  # --------------------------------------------------------------------------
+  # 6. SignalP – signal peptide prediction (requires AA sequences)
+  # --------------------------------------------------------------------------
+  message("\n--- SignalP (signal peptide prediction) ---")
+
+  if (is.null(sp_fa_w)) {
+    message("  No AA FASTA available (ORF analysis may not have run). Skipping SignalP.")
+  } else {
+    sp_out_dir_l <- file.path(out_dir, "signalp_out")
+    dir.create(sp_out_dir_l, recursive = TRUE, showWarnings = FALSE)
+    sp_out_dir_w <- w2l(sp_out_dir_l)
+
+    has_sp6 <- tool_ok("signalp6")
+    has_sp5 <- tool_ok("signalp")
+
+    sp_result_file <- NULL
+    sp_status      <- 1L
+
+    if (has_sp6) {
+      # SignalP 6 syntax
+      sp_cmd <- sprintf(
+        "signalp6 --fastafile %s --organism eukarya --output_dir %s --format txt --mode fast",
+        shQuote(sp_fa_w, type = "sh"), shQuote(sp_out_dir_w, type = "sh")
       )
-      conda_sh <- system(find_sh, intern = TRUE, ignore.stderr = TRUE)
-      if (length(conda_sh) == 0 || nchar(conda_sh[1]) == 0) conda_sh <- NULL
-    }
-    # 3. Verify isoform_tools environment
-    if (!is.null(conda_sh)) {
-      check_env <- sprintf(
-        'wsl -d %s bash -c "source %s && conda env list | grep -q isoform_tools"',
-        wsl_distro, conda_sh
+      message("  Running SignalP 6...")
+      sp_status <- run_tool(sp_cmd)
+      if (sp_status == 0L) {
+        candidates <- c(
+          file.path(sp_out_dir_l, "prediction_results.txt"),
+          file.path(sp_out_dir_l, "output.gff3")
+        )
+        found <- Filter(file.exists, candidates)
+        if (length(found) > 0) sp_result_file <- found[1]
+      }
+
+    } else if (has_sp5) {
+      # SignalP 5 syntax
+      sp_cmd <- sprintf(
+        "signalp -fasta %s -org euk -format short -output %s",
+        shQuote(sp_fa_w, type = "sh"), shQuote(sp_out_dir_w, type = "sh")
       )
-      has_conda_env <- (system(check_env, ignore.stdout = TRUE, ignore.stderr = TRUE) == 0)
+      message("  Running SignalP 5...")
+      sp_status <- run_tool(sp_cmd)
+      if (sp_status == 0L) {
+        sp_files <- list.files(sp_out_dir_l,
+                               pattern    = "_summary\\.signalp5$",
+                               full.names = TRUE)
+        if (length(sp_files) > 0) sp_result_file <- sp_files[1]
+      }
+
+    } else {
+      message("  Neither signalp6 nor signalp found in PATH / conda env. Skipping.")
     }
-    
-    if (has_conda_env) {
-      message("Detected conda environment 'isoform_tools'")
-      cmd_prefix <- sprintf(
-        'wsl -d %s bash -c "source %s && conda run -n isoform_tools ',
-        wsl_distro, conda_sh
+
+    if (!is.null(sp_result_file)) {
+      switch_list <- tryCatch(
+        IsoformSwitchAnalyzeR::analyzeSignalIP(
+          switchAnalyzeRlist      = switch_list,
+          pathToSignalPresultFile = sp_result_file,
+          quiet                   = FALSE
+        ),
+        error = function(e) { message("  analyzeSignalIP(): ", e$message); switch_list }
       )
-    } else {
-      message("Conda environment 'isoform_tools' not found. Falling back to system PATH.")
-      cmd_prefix <- base_prefix
+      message("  SignalP results imported successfully.")
+    } else if (sp_status != 0L) {
+      message("  SignalP execution failed (exit ", sp_status, "). Skipping.")
     }
+  }
+
+  # --------------------------------------------------------------------------
+  # 7. Pfam domain annotation (InterProScan -> hmmscan fallback)
+  #    Both require AA / protein sequences.
+  # --------------------------------------------------------------------------
+  message("\n--- Pfam domain annotation ---")
+
+  if (is.null(pfam_fa_w)) {
+    message("  No AA FASTA available. Skipping Pfam.")
   } else {
-    # Native Linux
-    if (system("command -v conda", ignore.stdout = TRUE, ignore.stderr = TRUE) == 0 &&
-        system("conda env list | grep -q isoform_tools", ignore.stdout = TRUE, ignore.stderr = TRUE) == 0) {
-      has_conda_env <- TRUE
-      cmd_prefix <- "conda run -n isoform_tools "
-      message("Detected conda environment 'isoform_tools' on native Linux.")
-    } else {
-      cmd_prefix <- ""
-      message("No conda environment 'isoform_tools' found. Relying on system PATH.")
+    pfam_done <- FALSE
+
+    # 7a. InterProScan (preferred – produces richer XML output)
+    if (tool_ok("interproscan.sh")) {
+      iprscan_xml_l <- file.path(out_dir, "interproscan.xml")
+      iprscan_xml_w <- w2l(iprscan_xml_l)
+
+      ips_cmd <- sprintf(
+        "interproscan.sh -i %s -f XML -o %s -dp -appl Pfam -goterms -iprlookup",
+        shQuote(pfam_fa_w,     type = "sh"),
+        shQuote(iprscan_xml_w, type = "sh")
+      )
+      message("  Running InterProScan...")
+      ips_status <- run_tool(ips_cmd)
+
+      if (ips_status == 0L && file.exists(iprscan_xml_l)) {
+        switch_list <- tryCatch(
+          IsoformSwitchAnalyzeR::analyzeInterProScan(
+            switchAnalyzeRlist           = switch_list,
+            pathToInterProScanResultFile = iprscan_xml_l,
+            quiet                        = FALSE
+          ),
+          error = function(e) { message("  analyzeInterProScan(): ", e$message); switch_list }
+        )
+        pfam_done <- TRUE
+        message("  InterProScan Pfam results imported successfully.")
+      } else {
+        message("  InterProScan failed (exit ", ips_status, "). Trying hmmscan fallback...")
+      }
     }
-  }
-  
-  # Hexamer file for CPAT
-  first_symbol <- isoform_obj$gene_map$symbol[1]
-  organism <- if (grepl("^[A-Z]+$", first_symbol) && nchar(first_symbol) > 2) "Human" else "Mouse"
-  hexamer_file <- system.file("extdata", paste0(organism, "_Hexamer.tsv"), package = "IsoformSwitchAnalyzeR")
-  if (!file.exists(hexamer_file)) {
-    message("Hexamer file for ", organism, " not found. Falling back to Human_Hexamer.tsv")
-    hexamer_file <- system.file("extdata", "Human_Hexamer.tsv", package = "IsoformSwitchAnalyzeR")
-  }
-  
-  # ---- CPAT ----
-  message("Running CPAT to assess coding potential...")
-  cpat_out <- file.path(out_dir, "cpat_results.txt")
-  check_cpat_cmd <- if (has_conda_env) {
-    paste0(cmd_prefix, "run_cpat.py --help\"")
-  } else {
-    paste(cmd_prefix, "run_cpat.py --help")
-  }
-  check_cpat <- system(check_cpat_cmd, ignore.stdout = TRUE, ignore.stderr = TRUE)
-  if (check_cpat == 0) {
-    cpat_cmd <- if (has_conda_env) {
-      sprintf('%s run_cpat.py -x %s -d %s -o %s"', cmd_prefix, fasta_file, hexamer_file, cpat_out)
-    } else {
-      sprintf('%s run_cpat.py -x %s -d %s -o %s', cmd_prefix, fasta_file, hexamer_file, cpat_out)
-    }
-    status <- system(cpat_cmd, wait = TRUE)
-    if (status == 0) {
-      switch_list <- IsoformSwitchAnalyzeR::addCPATanalysis(switch_list, cpat_out)
-    } else {
-      message("CPAT execution failed with status ", status)
-    }
-  } else {
-    message("CPAT not found or not executable. Skipping coding potential prediction.")
-  }
-  
-  # ---- SignalP ----
-  message("Running SignalP (signal peptide prediction)...")
-  signalp_out <- file.path(out_dir, "signalp_results")
-  check_signalp_cmd <- if (has_conda_env) {
-    paste0(cmd_prefix, "signalp -h\"")
-  } else {
-    paste(cmd_prefix, "signalp -h")
-  }
-  check_signalp <- system(check_signalp_cmd, ignore.stdout = TRUE, ignore.stderr = TRUE)
-  if (check_signalp == 0) {
-    signalp_cmd <- if (has_conda_env) {
-      sprintf('%s signalp -fasta %s -output %s -format short"', cmd_prefix, fasta_file, signalp_out)
-    } else {
-      sprintf('%s signalp -fasta %s -output %s -format short', cmd_prefix, fasta_file, signalp_out)
-    }
-    status <- system(signalp_cmd, wait = TRUE)
-    if (status == 0) {
-      switch_list <- IsoformSwitchAnalyzeR::addSignalPanalysis(switch_list, signalp_out)
-    } else {
-      message("SignalP execution failed with status ", status)
-    }
-  } else {
-    message("SignalP not found. Skipping signal peptide analysis.")
-  }
-  
-  # ---- Pfam domain search ----
-  message("Running Pfam domain search (via InterProScan or hmmscan)...")
-  pfam_out <- file.path(out_dir, "pfam_results.xml")
-  check_interpro_cmd <- if (has_conda_env) {
-    paste0(cmd_prefix, "interproscan.sh -h\"")
-  } else {
-    paste(cmd_prefix, "interproscan.sh -h")
-  }
-  check_interpro <- system(check_interpro_cmd, ignore.stdout = TRUE, ignore.stderr = TRUE)
-  if (check_interpro == 0) {
-    interpro_cmd <- if (has_conda_env) {
-      sprintf('%s interproscan.sh -i %s -f XML -o %s -dp -goterms -iprlookup"', cmd_prefix, fasta_file, pfam_out)
-    } else {
-      sprintf('%s interproscan.sh -i %s -f XML -o %s -dp -goterms -iprlookup', cmd_prefix, fasta_file, pfam_out)
-    }
-    status <- system(interpro_cmd, wait = TRUE)
-    if (status == 0) {
-      switch_list <- IsoformSwitchAnalyzeR::addPfamAnalysis(switch_list, pfam_out, "InterProScan")
-    } else {
-      message("InterProScan failed. Trying hmmscan...")
-      pfam_db <- system.file("extdata", "Pfam-A.hmm", package = "IsoformSwitchAnalyzeR")
-      if (file.exists(pfam_db)) {
-        check_hmmscan_cmd <- if (has_conda_env) {
-          paste0(cmd_prefix, "hmmscan -h\"")
+
+    # 7b. hmmscan fallback (requires Pfam-A.hmm indexed with hmmpress)
+    if (!pfam_done) {
+      if (!tool_ok("hmmscan")) {
+        message("  hmmscan not found. Skipping Pfam analysis.")
+      } else {
+        pfam_db_w <- .find_pfam_db(wsl_distro, via_wsl, active_conda)
+
+        if (is.null(pfam_db_w)) {
+          message("  Pfam-A.hmm not found. Run install_isoform_databases() first. Skipping.")
         } else {
-          paste(cmd_prefix, "hmmscan -h")
-        }
-        if (system(check_hmmscan_cmd, ignore.stdout = TRUE, ignore.stderr = TRUE) == 0) {
-          hmmscan_cmd <- if (has_conda_env) {
-            sprintf('%s hmmscan --tblout %s %s %s"', cmd_prefix, pfam_out, pfam_db, fasta_file)
+          pfam_tbl_l <- file.path(out_dir, "pfam_domtblout.txt")
+          pfam_tbl_w <- w2l(pfam_tbl_l)
+
+          # Use --domtblout (domain table) – the format ISA's analyzePFAM expects
+          hm_cmd <- sprintf(
+            "hmmscan --cpu 4 --domtblout %s %s %s",
+            shQuote(pfam_tbl_w, type = "sh"),
+            shQuote(pfam_db_w,  type = "sh"),
+            shQuote(pfam_fa_w,  type = "sh")
+          )
+          message("  Running hmmscan...")
+          hm_status <- run_tool(hm_cmd)
+
+          if (hm_status == 0L && file.exists(pfam_tbl_l)) {
+            switch_list <- tryCatch(
+              IsoformSwitchAnalyzeR::analyzePFAM(
+                switchAnalyzeRlist   = switch_list,
+                pathToPFAMresultFile = pfam_tbl_l,
+                quiet                = FALSE
+              ),
+              error = function(e) { message("  analyzePFAM(): ", e$message); switch_list }
+            )
+            message("  hmmscan Pfam results imported successfully.")
           } else {
-            sprintf('%s hmmscan --tblout %s %s %s', cmd_prefix, pfam_out, pfam_db, fasta_file)
+            message("  hmmscan failed (exit ", hm_status, "). Skipping Pfam.")
           }
-          status2 <- system(hmmscan_cmd, wait = TRUE)
-          if (status2 == 0) {
-            switch_list <- IsoformSwitchAnalyzeR::addPfamAnalysis(switch_list, pfam_out, "hmmscan")
-          } else {
-            message("hmmscan failed.")
-          }
-        } else {
-          message("hmmscan not found.")
         }
-      } else {
-        message("Pfam database not found.")
       }
     }
-  } else {
-    message("InterProScan not found. Trying hmmscan...")
-    pfam_db <- system.file("extdata", "Pfam-A.hmm", package = "IsoformSwitchAnalyzeR")
-    if (file.exists(pfam_db)) {
-      check_hmmscan_cmd <- if (has_conda_env) {
-        paste0(cmd_prefix, "hmmscan -h\"")
-      } else {
-        paste(cmd_prefix, "hmmscan -h")
-      }
-      if (system(check_hmmscan_cmd, ignore.stdout = TRUE, ignore.stderr = TRUE) == 0) {
-        hmmscan_cmd <- if (has_conda_env) {
-          sprintf('%s hmmscan --tblout %s %s %s"', cmd_prefix, pfam_out, pfam_db, fasta_file)
-        } else {
-          sprintf('%s hmmscan --tblout %s %s %s', cmd_prefix, pfam_out, pfam_db, fasta_file)
-        }
-        status <- system(hmmscan_cmd, wait = TRUE)
-        if (status == 0) {
-          switch_list <- IsoformSwitchAnalyzeR::addPfamAnalysis(switch_list, pfam_out, "hmmscan")
-        } else {
-          message("hmmscan failed.")
-        }
-      } else {
-        message("hmmscan not found.")
-      }
-    } else {
-      message("Pfam database not found.")
-    }
   }
-  
-  if (!is.null(save_dir)) {
-    saveRDS(switch_list, file.path(save_dir, "switch_list.rds"))
-    message("Saved final SwitchList to ", save_dir)
-  }
-  
+
   return(switch_list)
 }
 
-#' Generate DTE/DTU report with plots and interactive HTML table
-#'
-#' @param dte_results Data frame from run_dte()
-#' @param dtu_results List from run_dtu() (contains dtu_results data frame)
-#' @param isoform_obj Isoform import object (for gene mapping and counts)
-#' @param out_dir Output directory (results root)
-#' @param condition Condition column name
-#' @param level Treatment level
-#' @param base Control level
-#' @param genes_of_interest Character vector of gene symbols to highlight/plot
-#' @param top_n Number of top features to show in barplots
-#' @return Invisible NULL, creates report and plots in IsoformSwitch/DTU_DTE_report/
-#' @export
 generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
                                     out_dir, condition, level, base,
                                     genes_of_interest = NULL, top_n = 15) {
