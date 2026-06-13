@@ -63,8 +63,20 @@ run_eda <- function(dds, edb, out_dir, level, base, main_condition, batch_col = 
     }
   }
 
+  # Check correlation matrix for NA/NaN
   rld_cor <- cor(SummarizedExperiment::assay(rld))
+  if (anyNA(rld_cor)) {
+    warning("Correlation matrix contains NA/NaN values. ",
+            "Number of NA: ", sum(is.na(rld_cor)))
+    # Optionally replace NA with 0 or remove affected samples
+    rld_cor[is.na(rld_cor)] <- 0
+  }
+
+  # Verify annotation rownames match
   anno <- as.data.frame(SummarizedExperiment::colData(dds)[, main_condition, drop = FALSE])
+  if (!all(rownames(anno) == colnames(rld_cor))) {
+    warning("Annotation rownames do not match correlation matrix columns.")
+  }
 
   safe_pdf(file.path(plot_dir, paste0("HeatMap_", level, "_vs_", base, ".pdf")), expr = {
     pheatmap::pheatmap(rld_cor, annotation_col = anno, main = "Sample Correlation (Gene Symbols)")
@@ -106,7 +118,14 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
   topx_sigOE_genes <- head(results_data$sig_res[order(results_data$sig_res$padj), "gene"], top_genes)
   topx_sigOE_norm <- results_data$normalized_counts[results_data$normalized_counts$gene %in% topx_sigOE_genes, ]
 
-  gathered_top <- tidyr::gather(topx_sigOE_norm, key = "sample", value = "normalized_counts", -c(gene, ensembl, symbol, entrezid))
+  # pivot_longer replaces the deprecated tidyr::gather()
+  id_cols <- intersect(c("gene", "ensembl", "symbol", "entrezid"), colnames(topx_sigOE_norm))
+  gathered_top <- tidyr::pivot_longer(
+    topx_sigOE_norm,
+    cols      = -dplyr::all_of(id_cols),
+    names_to  = "sample",
+    values_to = "normalized_counts"
+  )
   gathered_top$normalized_counts <- as.numeric(gathered_top$normalized_counts)
 
   meta_df <- as.data.frame(SummarizedExperiment::colData(dds))
@@ -164,8 +183,12 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
 
   p <- ggplot2::ggplot(pca_df, ggplot2::aes(x = .data[["PC1"]], y = .data[["PC2"]],
                                              color = .data[[condition]]))
-  if (ellipse && length(unique(pca_df[[condition]])) > 1) {
+  # stat_ellipse needs >= 3 points per group; also requires > 1 group
+  min_pts_per_group <- min(table(pca_df[[condition]]))
+  if (ellipse && length(unique(pca_df[[condition]])) > 1 && min_pts_per_group >= 3) {
     p <- p + ggplot2::stat_ellipse(level = 0.95, linetype = 2)
+  } else if (ellipse) {
+    message("plot_custom_pca: ellipse skipped (need >= 3 samples per group and >= 2 groups)")
   }
   p <- p + ggplot2::geom_point(size = 3.5, alpha = 0.8)
   if (!is.null(batch) && batch %in% colnames(pca_df)) {
@@ -282,6 +305,18 @@ plot_top_genes_heatmap <- function(dds, results_data, condition_col, level, base
     }
   }
 
+  # Drop genes with zero variance before z-scoring (scale() produces NaN otherwise)
+  row_sds <- apply(mat, 1, stats::sd, na.rm = TRUE)
+  zero_var <- row_sds == 0 | is.na(row_sds)
+  if (any(zero_var)) {
+    message("   -> plot_top_genes_heatmap: removing ", sum(zero_var),
+            " zero-variance gene(s) before z-score scaling")
+    mat <- mat[!zero_var, , drop = FALSE]
+  }
+  if (nrow(mat) == 0) {
+    message("   -> No genes with non-zero variance – skipping heatmap")
+    return(invisible(NULL))
+  }
   mat_z            <- t(scale(t(mat)))
   mat_z[is.na(mat_z)] <- 0
 

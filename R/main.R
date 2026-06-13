@@ -81,6 +81,15 @@ expressom <- function(count_type        = "salmon",
                       isoform_report_genes = NULL) {
 
   execution_order <- match.arg(execution_order)
+
+  # Guard: warn if external predictors requested without WSL on Windows
+  if (isTRUE(run_predictors) && .Platform$OS.type == "windows" && !use_wsl) {
+    warning(
+      "run_predictors = TRUE but use_wsl = FALSE on Windows. ",
+      "External tools (CPAT, SignalP, Pfam) run inside WSL; set use_wsl = TRUE. ",
+      "Predictors will be skipped unless you are running R inside WSL itself."
+    )
+  }
   old_warn        <- getOption("nwarnings")
   options(nwarnings = 10000)
   on.exit({
@@ -263,29 +272,35 @@ expressom <- function(count_type        = "salmon",
         plot_l2fc_heatmap(dds_rep, zscore_genes, main_condition, level, base, plot_dir)
       }
 
-      func_results <- run_functional_analysis(
-        res_tbl          = results_data$res_tbl,
-        sig_res          = results_data$sig_res,
-        edb              = edb_obj,
-        out_dir          = out_dir,
-        level            = level,
-        base             = base,
-        top_genes        = top_genes,
-        padj_cutoff      = padj_cutoff,
-        go_pvalue_cutoff = go_pvalue_cutoff,
-        go_qvalue_cutoff = go_qvalue_cutoff,
-        gsea_metric      = gsea_metric,
-        test_type        = test
+      func_results <- safe_run(
+        run_functional_analysis(
+          res_tbl          = results_data$res_tbl,
+          sig_res          = results_data$sig_res,
+          edb              = edb_obj,
+          out_dir          = out_dir,
+          level            = level,
+          base             = base,
+          top_genes        = top_genes,
+          padj_cutoff      = padj_cutoff,
+          go_pvalue_cutoff = go_pvalue_cutoff,
+          go_qvalue_cutoff = go_qvalue_cutoff,
+          gsea_metric      = gsea_metric,
+          test_type        = test
+        ),
+        label = "Functional analysis"
       )
 
       message("Running FGSEA Analysis...")
-      run_fgsea_analysis(
-        res_tbl     = results_data$res_tbl,
-        gmt_file    = gmt_file,
-        edb         = edb_obj,
-        out_dir     = out_dir,
-        comp_name   = comp_name,
-        padj_cutoff = padj_cutoff
+      safe_run(
+        run_fgsea_analysis(
+          res_tbl     = results_data$res_tbl,
+          gmt_file    = gmt_file,
+          edb         = edb_obj,
+          out_dir     = out_dir,
+          comp_name   = comp_name,
+          padj_cutoff = padj_cutoff
+        ),
+        label = "FGSEA analysis"
       )
 
       dge_results <- list(
@@ -434,6 +449,7 @@ expressom <- function(count_type        = "salmon",
       saveRDS(switch_res, file.path(iso_dir, "switch_list.rds"))
 
       message("Isoform analysis complete. Results saved in: ", iso_dir)
+      while (grDevices::dev.cur() > 1) grDevices::dev.off()
 
       isoform_results <- list(
         isoform_import = isoform_import,

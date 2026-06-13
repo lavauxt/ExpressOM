@@ -10,21 +10,21 @@
     log_dir <- file.path(out_dir, "Log")
     if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
     log_file <- file.path(log_dir, paste0("DGE_params_", comp_name, ".txt"))
-    sink(log_file)
-    cat(paste("Timestamp:", Sys.time(), "\n"))
-    cat(paste("Comparison:", comp_name, "\n"))
-    cat(paste("Design formula:", model, "\n"))
-    cat(paste("Test type:", test, "\n"))
-    if (test == "LRT") cat(paste("Reduced formula:", reduced, "\n"))
-    cat(paste("Contrast:", level, "vs", base, "\n"))
-    cat(paste("Shrinkage method:", shrink_method, "\n"))
-    cat(paste("padj cutoff:", padj_cutoff, "\n"))
-    cat(paste("Filter criterion:", filter_criterion, "\n"))
-    cat(paste("Genes before filter:", n_genes_input, "\n"))
-    cat(paste("Genes after filter:", n_genes_after_filter, "\n"))
-    cat(paste("DE genes up (log2FC>1):", n_de_genes_up, "\n"))
-    cat(paste("DE genes down (log2FC<-1):", n_de_genes_down, "\n"))
-    sink()
+    con <- file(log_file, open = "wt")
+    on.exit(close(con), add = TRUE)
+    cat(paste("Timestamp:", Sys.time(), "\n"), file = con)
+    cat(paste("Comparison:", comp_name, "\n"), file = con)
+    cat(paste("Design formula:", model, "\n"), file = con)
+    cat(paste("Test type:", test, "\n"), file = con)
+    if (test == "LRT") cat(paste("Reduced formula:", reduced, "\n"), file = con)
+    cat(paste("Contrast:", level, "vs", base, "\n"), file = con)
+    cat(paste("Shrinkage method:", shrink_method, "\n"), file = con)
+    cat(paste("padj cutoff:", padj_cutoff, "\n"), file = con)
+    cat(paste("Filter criterion:", filter_criterion, "\n"), file = con)
+    cat(paste("Genes before filter:", n_genes_input, "\n"), file = con)
+    cat(paste("Genes after filter:", n_genes_after_filter, "\n"), file = con)
+    cat(paste("DE genes up (log2FC>1):", n_de_genes_up, "\n"), file = con)
+    cat(paste("DE genes down (log2FC<-1):", n_de_genes_down, "\n"), file = con)
     return()
   }
 
@@ -121,7 +121,7 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     count_file_name <- switch(count_type,
       "salmon"    = "quant.sf",
       "kallisto"  = "abundance.tsv",
-      "rsem"      = "quant.genes.results",
+      "rsem"      = "quant.genes.results",  # gene-level; use isoforms.results for transcripts
       "stringtie" = "t_data.ctab",
       stop("Unsupported count_type for tximport: ", count_type)
     )
@@ -134,6 +134,8 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     })
     names(tximport_file_list) <- sample_df[[sample_col]]
 
+    if (count_type == "rsem")
+      message("NOTE: rsem mode imports gene-level counts (quant.genes.results). For isoform analysis use isoforms.results.")
     missing_files <- tximport_file_list[!file.exists(tximport_file_list)]
     if (length(missing_files) > 0) {
       stop("Missing quantification files for samples: ", paste(names(missing_files), collapse = ", "),
@@ -206,6 +208,8 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
 
   dds[[main_condition]] <- relevel(dds[[main_condition]], base)
 
+  # Minimal filter (>= 1 total read): keeps virtually everything.
+  # Stricter filtering (e.g. >= 10) can be applied post-hoc on the returned dds.
   keep <- rowSums(DESeq2::counts(dds)) >= 1
   dds  <- dds[keep, ]
 
@@ -249,6 +253,8 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
   main_condition <- tail(all.vars(as.formula(model)), 1)
 
   if (test == "LRT") {
+    # LRT results() with no contrast returns the last coefficient by default.
+    # lfcShrink with type="ashr" accepts the pre-computed res object directly.
     res_unshrunken <- DESeq2::results(dds, alpha = padj_cutoff)
     res_shrunken   <- suppressMessages(DESeq2::lfcShrink(dds, res = res_unshrunken, type = "ashr"))
     res_shrunken$stat <- res_unshrunken$stat
@@ -304,15 +310,21 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
   counts_df$ensembl <- rownames(counts_df)
   counts_df         <- merge(counts_df, gene_map, by = "ensembl", all.x = TRUE)
   counts_df$gene    <- ifelse(is.na(counts_df$symbol) | counts_df$symbol == "", counts_df$ensembl, counts_df$symbol)
-  utils::write.table(counts_df, file.path(fc_dir, paste0("DESeq_Normalized_Counts_", level, "_vs_", base, ".txt")),
-                     sep = "\t", quote = FALSE, row.names = FALSE)
+  tryCatch(
+    utils::write.table(counts_df, file.path(fc_dir, paste0("DESeq_Normalized_Counts_", level, "_vs_", base, ".txt")),
+                       sep = "\t", quote = FALSE, row.names = FALSE),
+    error = function(e) warning("Could not write normalized counts: ", e$message)
+  )
 
   raw_counts         <- as.data.frame(DESeq2::counts(dds, normalized = FALSE))
   raw_counts$ensembl <- rownames(raw_counts)
   raw_counts         <- merge(raw_counts, gene_map, by = "ensembl", all.x = TRUE)
   raw_counts$gene    <- ifelse(is.na(raw_counts$symbol) | raw_counts$symbol == "", raw_counts$ensembl, raw_counts$symbol)
-  utils::write.table(raw_counts, file.path(fc_dir, paste0("DESeq_Raw_Counts_", level, "_vs_", base, ".txt")),
-                     sep = "\t", quote = FALSE, row.names = FALSE)
+  tryCatch(
+    utils::write.table(raw_counts, file.path(fc_dir, paste0("DESeq_Raw_Counts_", level, "_vs_", base, ".txt")),
+                       sep = "\t", quote = FALSE, row.names = FALSE),
+    error = function(e) warning("Could not write raw counts: ", e$message)
+  )
 
   # BUG FIX: use intersect so missing columns (e.g. 'stat') don't cause an error
   desired_cols <- c("gene", "ensembl", "entrezid", "baseMean", "log2FoldChange", "lfcSE", "pvalue", "padj", "stat")

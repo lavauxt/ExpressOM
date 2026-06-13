@@ -48,7 +48,9 @@ safe_run <- function(expr, label = "") {
 #' @param species String: "human" or "mouse"
 #' @param release Ensembl release version (e.g., "107")
 #' @export
-create_homemade_db <- function(species = "human", release = "107") {
+create_homemade_db <- function(species = "human", release = "107",
+                               maintainer = "User <user@example.com>",
+                               author = "ExpressOM Builder") {
 
   spec_prefix <- if(tolower(species) == "human") "Hsapiens" else "Mmusculus"
   pkg_name <- paste0("EnsDb.", spec_prefix, ".v", release)
@@ -94,8 +96,8 @@ create_homemade_db <- function(species = "human", release = "107") {
   ensembldb::makeEnsembldbPackage(
     ensdb = db_file,
     version = "0.0.1",
-    maintainer = "User <user@work.com>",
-    author = "ExpressOM Builder",
+    maintainer = maintainer,
+    author = author,
     destDir = tmp_dir,
     license = "Artistic-2.0"
   )
@@ -175,6 +177,16 @@ get_organism_info <- function(edb) {
       msig_cat = "MH",
       msig_db = "MM"
     ))
+  } else if (grepl("Rattus norvegicus", detected_org, ignore.case = TRUE)) {
+    return(list(
+      name      = detected_org,
+      org_db    = "org.Rn.eg.db",
+      kegg_code = "rno",
+      tf_db     = tf_dbs,
+      msig_org  = "Rattus norvegicus",
+      msig_cat  = "C2",
+      msig_db   = "RN"
+    ))
   } else {
     stop(paste("Organism not supported:", detected_org))
   }
@@ -184,6 +196,8 @@ get_organism_info <- function(edb) {
 #' @keywords internal
 .combfunc <- function(p1, p2, method = "fisher") {
   if (method == "fisher") {
+    p1 <- pmax(p1, .Machine$double.xmin)
+    p2 <- pmax(p2, .Machine$double.xmin)
     pchisq(-2 * (log(p1) + log(p2)), df = 4, lower.tail = FALSE)
   } else {
     pnorm((qnorm(p1) + qnorm(p2)) / sqrt(2))
@@ -235,8 +249,8 @@ download_ensembl_refs <- function(ensembl_package_name, out_dir = "./reference")
   cdna_dest  <- file.path(out_dir, basename(cdna_url))
   ncrna_dest <- file.path(out_dir, basename(ncrna_url))
 
-  old_timeout <- getOption("timeout")
-  options(timeout = max(1800, old_timeout))
+  old_timeout <- getOption("timeout", 60L)
+  options(timeout = max(1800L, old_timeout))
   on.exit(options(timeout = old_timeout), add = TRUE)
 
   if (!file.exists(gtf_dest)) {
@@ -278,7 +292,8 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
     func_pkgs <- c("clusterProfiler", "SPIA", "fgsea", "ReactomePA", "DOSE")
     missing_func <- func_pkgs[!sapply(func_pkgs, requireNamespace, quietly = TRUE)]
     if (length(missing_func) > 0) {
-      stop(paste("Functional module requested, but packages are missing:", paste(missing_func, collapse = ", ")))
+      warning(paste("Functional module requested, but packages are missing:", paste(missing_func, collapse = ", "),
+                    "\nInstall with: BiocManager::install(c(", paste0('"', missing_func, '"', collapse=", "), "))"))
     }
   }
 
@@ -286,7 +301,8 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
     iso_pkgs <- c("DRIMSeq", "IsoformSwitchAnalyzeR", "Biostrings")
     missing_iso <- iso_pkgs[!sapply(iso_pkgs, requireNamespace, quietly = TRUE)]
     if (length(missing_iso) > 0) {
-      stop(paste("Isoform module requested, but packages are missing:", paste(missing_iso, collapse = ", ")))
+      warning(paste("Isoform module requested, but packages are missing:", paste(missing_iso, collapse = ", "),
+                    "\nInstall with: BiocManager::install(c(", paste0('"', missing_iso, '"', collapse=", "), "))"))
     }
   }
 

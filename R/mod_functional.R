@@ -275,13 +275,17 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     message("No significant genes found. Skipping functional analysis."); return(NULL)
   }
 
-  oe_fc <- stats::aggregate(
-    log2FoldChange ~ gene,
-    data = sigOE[, c("gene", "log2FoldChange"), drop = FALSE],
-    FUN = function(x) x[which.max(abs(x))][1]
-  )
-  OE_foldchanges <- purrr::set_names(oe_fc$log2FoldChange, oe_fc$gene)
-  OE_foldchanges <- pmin(pmax(OE_foldchanges, -2), 2)
+  oe_fc_data <- sigOE[!is.na(sigOE$log2FoldChange), c("gene", "log2FoldChange"), drop = FALSE]
+  if (nrow(oe_fc_data) > 0) {
+    oe_fc <- stats::aggregate(
+      log2FoldChange ~ gene, data = oe_fc_data,
+      FUN = function(x) x[which.max(abs(x))][1]
+    )
+    OE_foldchanges <- purrr::set_names(oe_fc$log2FoldChange, oe_fc$gene)
+    OE_foldchanges <- pmin(pmax(OE_foldchanges, -2), 2)
+  } else {
+    OE_foldchanges <- numeric(0)
+  }
 
   # ==============================================================================
   # PART 1: ORA (Fisher / Hypergeometric)
@@ -296,6 +300,8 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
         enrichR::listEnrichrDbs()
         TRUE
       }, error = function(e) FALSE)
+      # Cache the result so subsequent calls skip the network check
+      options(enrichR.live = websiteLive)
     }
 
     if (!isTRUE(websiteLive)) {
@@ -556,8 +562,10 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 
   message("Running SPIA analysis...")
   if (length(sig_entrez_ids) > 0) {
-    spia_de <- purrr::set_names(res_entrez$log2FoldChange, as.character(res_entrez$entrezid))
+    # SPIA requires a named numeric vector of L2FC for DE genes; deduplicate by entrezid
+    spia_de <- purrr::set_names(as.numeric(res_entrez$log2FoldChange), as.character(res_entrez$entrezid))
     spia_de <- spia_de[names(spia_de) %in% sig_entrez_ids]
+    spia_de <- spia_de[!is.na(spia_de) & !duplicated(names(spia_de))]
     
     message("   -> SPIA: ", length(spia_de), " DE genes, ", length(gsea_list), " background genes")
     spia_result <- safe_run(
@@ -675,11 +683,11 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
     if(!dir.exists(fgsea_out)) dir.create(fgsea_out, recursive = TRUE)
 
     message('-> Preparing ranked gene list for [', gmt_name, ']...')
-    res2 <- res_tbl %>%
-      dplyr::select(gene, log2FoldChange) %>%
-      na.omit() %>%
-      dplyr::distinct() %>%
-      dplyr::group_by(gene) %>%
+    res2 <- res_tbl |>
+      dplyr::select(gene, log2FoldChange) |>
+      stats::na.omit() |>
+      dplyr::distinct() |>
+      dplyr::group_by(gene) |>
       dplyr::summarize(log2FoldChange = mean(log2FoldChange, na.rm = TRUE), .groups = 'drop')
     
     ranks <- tibble::deframe(res2)
@@ -701,7 +709,7 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
     fgseaRes <- fgsea::fgseaMultilevel(pathways = pathways.fgsea, stats = ranks)
     
     message('-> Saving results table for [', gmt_name, ']...')
-    fgseaResTidy <- tibble::as_tibble(fgseaRes) %>% dplyr::arrange(dplyr::desc(NES))
+    fgseaResTidy <- tibble::as_tibble(fgseaRes) |> dplyr::arrange(dplyr::desc(NES))
     utils::write.csv(
       fgseaResTidy %>% dplyr::select(-leadingEdge),
       file.path(fgsea_out, paste0("FGSEA_Results_", gmt_name, ".csv")),
@@ -709,9 +717,9 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
     )
     
     if (requireNamespace("DT", quietly = TRUE) && requireNamespace("htmlwidgets", quietly = TRUE)) {
-      datatable_object <- fgseaResTidy %>%
-        dplyr::select(-leadingEdge, -ES) %>%
-        dplyr::arrange(padj) %>%
+      datatable_object <- fgseaResTidy |>
+        dplyr::select(-leadingEdge, -ES) |>
+        dplyr::arrange(padj) |>
         DT::datatable()
       html_name <- paste0("GSEA_Table_", gmt_name, ".html")
       withr::with_dir(fgsea_out, {
@@ -723,7 +731,7 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
     }
     
     message('-> Plotting NES Barplot for [', gmt_name, ']...')
-    fgseaResTidy_filtered <- fgseaResTidy %>% dplyr::filter(padj < padj_cutoff)
+    fgseaResTidy_filtered <- fgseaResTidy |> dplyr::filter(padj < padj_cutoff)
     
     if (nrow(fgseaResTidy_filtered) > 0) {
       fgseaResTidy_filtered$pathway <- gsub("_", " ", fgseaResTidy_filtered$pathway)
@@ -753,10 +761,16 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
     }
     
     message('-> Generating individual pathway gseaplots for [', gmt_name, ']...')
+    max_gsea_plots <- getOption("ExpressOM.max_gsea_plots", 20L)
     if (!is.null(gsea_results) && nrow(as.data.frame(gsea_results)) > 0) {
       gene_set_ids <- gsea_results@result$ID
       valid_idx <- which(!is.na(gene_set_ids))
-      
+      if (length(valid_idx) > max_gsea_plots) {
+        message("   -> Limiting individual gseaplots to top ", max_gsea_plots,
+                " of ", length(valid_idx),
+                " (set options(ExpressOM.max_gsea_plots = N) to change)")
+        valid_idx <- valid_idx[seq_len(max_gsea_plots)]
+      }
       for (i in valid_idx) {
         pid <- gene_set_ids[i]
         clean_pid <- gsub("[^A-Za-z0-9_-]", "_", pid)
@@ -790,9 +804,10 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
 #' @param category "H" (Hallmark), "C3" (TFT/ChIP-seq targets), or "C5" (GO)
 #' @return A clusterProfiler result object
 run_local_enrichment <- function(gene_list, universe, organism = "Homo sapiens", category = "C3") {
-  library(clusterProfiler)
-  library(msigdbr)
-  # Determine which org package
+  for (pkg in c("clusterProfiler", "msigdbr")) {
+    if (!requireNamespace(pkg, quietly = TRUE))
+      stop("Package '", pkg, "' is required. Install with: install.packages('", pkg, "')")
+  }
   org_pkg <- ifelse(grepl("Homo", organism), "org.Hs.eg.db", "org.Mm.eg.db")
   if (!requireNamespace(org_pkg, quietly = TRUE)) stop("Please install ", org_pkg)
   
