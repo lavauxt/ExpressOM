@@ -16,7 +16,8 @@ generate_bulk_visualizations(
   main_condition,
   top_genes,
   padj_cutoff,
-  highlight_genes = NULL
+  highlight_genes = NULL,
+  batch_col = NULL
 )
 }
 \arguments{

@@ -13,9 +13,9 @@ plot_l2fc_heatmap(dds, selected_genes, condition_col, level, base, plot_dir)
 
 \item{condition_col}{Character string representing the design metadata column}
 
-\item{level}{String representing the foreground group (e.g. KO)}
+\item{level}{String representing the foreground group}
 
-\item{base}{String representing the background reference group (e.g. WT)}
+\item{base}{String representing the background reference group}
 
 \item{plot_dir}{String directory path where the PDF will be saved}
 }

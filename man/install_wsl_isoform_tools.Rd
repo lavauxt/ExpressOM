@@ -14,11 +14,11 @@ install_wsl_isoform_tools(
 \arguments{
 \item{distro}{WSL distribution name (default "Ubuntu")}
 
-\item{use_mamba}{Logical: if TRUE (default), use mamba/conda for installation; otherwise fall back to apt/pip.}
+\item{use_mamba}{Logical: use mamba/conda (default TRUE)}
 
-\item{install_databases}{Logical: if TRUE (default), also install CPAT, Pfam, and SignalP databases.}
+\item{install_databases}{Logical: also install CPAT, Pfam databases}
 
-\item{windows_signalp_dir}{Optional Windows path to SignalP installation (if NULL, SignalP will be skipped or installed via mamba)}
+\item{windows_signalp_dir}{Optional Windows path to a SignalP installation}
 }
 \description{
 Install required external tools inside WSL using mamba (default) or apt/pip

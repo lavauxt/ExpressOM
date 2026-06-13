@@ -13,6 +13,7 @@ expressom(
   level = "treated",
   base = "control",
   model = "~ condition",
+  batch_col = NULL,
   replicate_col = NULL,
   shrink_method = "ashr",
   ensembl_package_name = "EnsDb.Hsapiens.v107",
@@ -31,6 +32,8 @@ expressom(
   zscore_genes = NULL,
   run_dge = TRUE,
   run_isoform = FALSE,
+  run_predictors = FALSE,
+  bpparam = BiocParallel::bpparam(),
   execution_order = c("dge_first", "isoform_first"),
   isoform_fasta = NULL,
   isoform_gff = NULL,
@@ -56,6 +59,8 @@ expressom(
 \item{base}{Background level for contrast}
 
 \item{model}{Design formula for DESeq2 as a string}
+
+\item{batch_col}{Optional column specifying batch effects for correction/visualization (uses limma)}
 
 \item{replicate_col}{Optional column specifying replicates}
 
@@ -85,11 +90,17 @@ expressom(
 
 \item{gsea_metric}{Metric to rank genes for GSEA ("stat", "signed_pval", or "log2FoldChange")}
 
+\item{nBest}{Number of top genes to include in RegionReport}
+
 \item{zscore_genes}{Optional character vector of gene names for targeted Z-score expression plotting}
 
 \item{run_dge}{Logical: perform standard gene-level differential expression (default: TRUE)}
 
 \item{run_isoform}{Logical: perform isoform-level analysis (DTE, DTU, IsoformSwitchAnalyzeR)}
+
+\item{run_predictors}{Logical: Run CPAT, Pfam, and SignalP via WSL/Conda during Isoform analysis}
+
+\item{bpparam}{BiocParallel backend for multi-threading (e.g. BiocParallel::MulticoreParam(4))}
 
 \item{execution_order}{String: "dge_first" or "isoform_first" to prioritise which analysis runs first}
 
@@ -99,11 +110,14 @@ expressom(
 
 \item{use_wsl}{Logical: use WSL Ubuntu for external tools (Windows only)}
 
-\item{wsl_distro}{Name of WSL distribution (default "Ubuntu")}
+\item{wsl_distro}{Name of WSL distribution (default "Ubuntu-22.04")}
 
-\item{resume_isoform_from}{Path to directory with saved DTE/DTU RDS files to resume isoform analysis (skip DTE/DTU)}
+\item{resume_isoform_from}{Path to directory with saved DTE/DTU RDS files to resume isoform analysis}
 
-\item{isoform_report_genes}{specify which gene symbols (e.g., c("TP53", "BCL2")) should be on the transcript‑proportion plots.}
+\item{isoform_report_genes}{Gene symbols (e.g., c("TP53", "BCL2")) for transcript-proportion plots}
+}
+\value{
+NULL (invisibly)
 }
 \description{
 Executes the complete bulk RNA-seq pipeline including data import, exploratory

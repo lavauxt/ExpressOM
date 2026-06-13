@@ -4,7 +4,12 @@
 \alias{create_homemade_db}
 \title{Create and Bundle Homemade Ensembl Database}
 \usage{
-create_homemade_db(species = "human", release = "107")
+create_homemade_db(
+  species = "human",
+  release = "107",
+  maintainer = "User <user@example.com>",
+  author = "ExpressOM Builder"
+)
 }
 \arguments{
 \item{species}{String: "human" or "mouse"}

@@ -2,16 +2,19 @@
 % Please edit documentation in R/utils_isoform.R
 \name{load_isoform_results}
 \alias{load_isoform_results}
-\title{Load previously saved isoform analysis results}
+\title{Load previously saved isoform analysis step checkpoints}
 \usage{
 load_isoform_results(save_dir)
 }
 \arguments{
-\item{save_dir}{Directory containing saved RDS files}
+\item{save_dir}{Directory containing saved RDS files.}
 }
 \value{
-A list with components: dte_results, dtu_results, switch_list (if available)
+Named list: isoform_import, dte_results, dtu_results, switch_list,
+  switch_step1, switch_step2, switch_step3. Missing slots are NULL.
 }
 \description{
-Load previously saved isoform analysis results
+Loads any available RDS files from a save directory. Recognises both the
+legacy three-file layout (dte_results.rds, dtu_results.rds, switch_list.rds)
+and the new per-step checkpoint files (step1_imported.rds, etc.).
 }

@@ -2,7 +2,7 @@
 % Please edit documentation in R/mod_plots.R
 \name{plotP_fork}
 \alias{plotP_fork}
-\title{Fork to SPIA Plot function (ggplot2 + ggrepel upgrade)}
+\title{SPIA two-way evidence plot (ggplot2 + ggrepel)}
 \usage{
 plotP_fork(x, threshold = 0.01)
 }
@@ -11,9 +11,6 @@ plotP_fork(x, threshold = 0.01)
 
 \item{threshold}{Threshold for significance}
 }
-\value{
-Generates a plot
-}
 \description{
-Fork to SPIA Plot function (ggplot2 + ggrepel upgrade)
+SPIA two-way evidence plot (ggplot2 + ggrepel)
 }

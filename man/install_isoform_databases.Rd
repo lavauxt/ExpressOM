@@ -2,7 +2,7 @@
 % Please edit documentation in R/utils_isoform.R
 \name{install_isoform_databases}
 \alias{install_isoform_databases}
-\title{Install required databases for CPAT, Pfam, and SignalP (where possible)}
+\title{Install required databases for CPAT, Pfam, and SignalP}
 \usage{
 install_isoform_databases(
   distro = "Ubuntu",
@@ -12,17 +12,15 @@ install_isoform_databases(
 )
 }
 \arguments{
-\item{distro}{WSL distribution name (if using WSL)}
+\item{distro}{WSL distribution name}
 
-\item{use_wsl}{Logical: whether to run inside WSL (default FALSE)}
+\item{use_wsl}{Run inside WSL (default FALSE)}
 
-\item{cpat_data_dir}{Directory to store CPAT data (default: auto-detected CPAT data folder)}
+\item{cpat_data_dir}{Where to store CPAT data (auto-detected if NULL)}
 
-\item{pfam_db_dir}{Directory to store Pfam database (default: ~/pfam_db)}
+\item{pfam_db_dir}{Where to store Pfam database (default: ~/pfam_db)}
 }
 \description{
-This function downloads:
-- CPAT hexamer tables and logit models (from CPAT GitHub repository)
-- Pfam HMM database (Pfam-A.hmm) for hmmscan
-- SignalP models are NOT automatically installed (requires license)
+Downloads CPAT hexamer tables & logit models (from GitHub) and Pfam-A.hmm
+(from EBI FTP). SignalP models require a separate license.
 }

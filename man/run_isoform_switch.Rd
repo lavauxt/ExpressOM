@@ -14,6 +14,7 @@ run_isoform_switch(
   fasta_file,
   gff_file,
   out_dir,
+  run_predictors = FALSE,
   use_wsl = FALSE,
   wsl_distro = "Ubuntu-22.04",
   save_dir = NULL,
@@ -40,15 +41,17 @@ run_isoform_switch(
 
 \item{out_dir}{Output directory}
 
+\item{run_predictors}{Logical: run external predictors (CPAT, SignalP, Pfam)}
+
 \item{use_wsl}{Logical: use WSL for external tools (Windows only)}
 
 \item{wsl_distro}{WSL distribution name (default "Ubuntu-22.04")}
 
-\item{save_dir}{Optional directory to save RDS files}
+\item{save_dir}{Optional directory to save per-step RDS checkpoints}
 
-\item{resume_from}{Optional path to saved switch_list.rds}
+\item{resume_from}{Optional path to a save_dir with a prior switch_list.rds}
 
-\item{bsgenome_name}{Optional BSgenome package name (e.g. "BSgenome.Hsapiens.UCSC.hg38")}
+\item{bsgenome_name}{Optional BSgenome package name}
 }
 \value{
 IsoformSwitchAnalyzeR results object

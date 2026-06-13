@@ -15,7 +15,8 @@ run_dtu(
   min_samps_feature_expr = 3,
   chunk_size = 5000,
   max_transcripts = 300,
-  min_transcript_total = 10
+  min_transcript_total = 10,
+  bpparam = NULL
 )
 }
 \arguments{
@@ -40,6 +41,8 @@ run_dtu(
 \item{max_transcripts}{Maximum number of transcripts per gene to keep (default: 300)}
 
 \item{min_transcript_total}{Minimum total counts across all samples for a transcript (default: 10)}
+
+\item{bpparam}{Optional BiocParallel parameter object for DRIMSeq operations}
 }
 \value{
 List with dtu_results
