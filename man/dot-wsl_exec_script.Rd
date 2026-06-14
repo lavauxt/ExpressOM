@@ -11,7 +11,8 @@
   conda_sh = NULL,
   conda_env = "isoform_tools",
   intern = FALSE,
-  ignore_stderr = TRUE
+  ignore_stderr = TRUE,
+  log_dir = NULL
 )
 }
 \arguments{
@@ -29,6 +30,8 @@ or NULL to skip conda activation.}
 \item{intern}{If TRUE return stdout as character vector.}
 
 \item{ignore_stderr}{Suppress stderr in R console when TRUE.}
+
+\item{log_dir}{Optional directory to write command log (if NULL, no log)}
 }
 \value{
 Integer exit code (0 = success) or character vector when intern=TRUE.

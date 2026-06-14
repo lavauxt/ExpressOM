@@ -1,4 +1,3 @@
-
 convert_pdf_to_png <- function(pdf_file, dpi = 200) {
 
   if (!file.exists(pdf_file)) {
@@ -359,6 +358,28 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
   if (!dir.exists(out_dir))  dir.create(out_dir,  recursive = TRUE)
   if (!is.null(save_dir) && !dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE)
+  log_dir <- file.path(out_dir, "Log")
+  if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+
+  # --------------------------------------------------------------------------
+  # WSL debug and logging (if predictors requested)
+  # --------------------------------------------------------------------------
+  if (run_predictors && .Platform$OS.type == "windows" && use_wsl) {
+    message("Running WSL environment check...")
+    debug_info <- debug_wsl(distro = wsl_distro, out_dir = out_dir,
+                            conda_env = "isoform_tools", verbose = TRUE)
+    if (!debug_info$wsl_available) {
+      stop("WSL is not available. Please install WSL or set use_wsl=FALSE.")
+    }
+    if (run_predictors && !debug_info$conda_env_exists) {
+      warning("Conda environment 'isoform_tools' not found. Predictors may fail.\n",
+              "Run install_wsl_isoform_tools() to set up the environment.")
+    }
+    # Write summary to log
+    .log_wsl_command("debug_wsl()", exit_code = 0,
+                     stdout = capture.output(print(debug_info)),
+                     log_dir = log_dir)
+  }
 
   # --------------------------------------------------------------------------
   # Checkpoint helpers (scoped to this call)
@@ -566,6 +587,9 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   is_windows <- .Platform$OS.type == "windows"
   via_wsl    <- is_windows && use_wsl
 
+  log_dir <- file.path(out_dir, "Log")
+  if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+
   # --------------------------------------------------------------------------
   # 1. Discover conda.sh and verify 'isoform_tools' environment
   # --------------------------------------------------------------------------
@@ -580,7 +604,8 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       "2>/dev/null | head -5"
     ),
     wsl_distro = wsl_distro, use_wsl = via_wsl,
-    conda_sh = NULL, intern = TRUE, ignore_stderr = TRUE
+    conda_sh = NULL, intern = TRUE, ignore_stderr = TRUE,
+    log_dir = log_dir
   )
   find_out <- trimws(find_out[nzchar(trimws(find_out))])
 
@@ -591,7 +616,8 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
         'conda env list 2>/dev/null | grep -q "isoform_tools"'
       ),
       wsl_distro = wsl_distro, use_wsl = via_wsl,
-      conda_sh = NULL, intern = FALSE, ignore_stderr = TRUE
+      conda_sh = NULL, intern = FALSE, ignore_stderr = TRUE,
+      log_dir = log_dir
     )
     if (isTRUE(ok == 0L)) { conda_sh <- csh; has_conda_env <- TRUE; break }
   }
@@ -616,7 +642,8 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       conda_sh      = active_conda,
       conda_env     = "isoform_tools",
       intern        = FALSE,
-      ignore_stderr = !show_stderr
+      ignore_stderr = !show_stderr,
+      log_dir       = log_dir
     )
   }
 

@@ -120,6 +120,12 @@ expressom <- function(count_type        = "salmon",
     }
   }
 
+  # Early WSL debug if requested
+  if (run_isoform && .Platform$OS.type == "windows" && use_wsl) {
+    debug_wsl(distro = wsl_distro, out_dir = out_dir,
+              conda_env = "isoform_tools", verbose = TRUE)
+  }
+
   comp_name      <- paste0(level, "_vs_", base)
   main_condition <- tail(all.vars(as.formula(model)), 1)
   edb_obj        <- getExportedValue(ensembl_package_name, ensembl_package_name)

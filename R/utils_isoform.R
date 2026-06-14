@@ -35,6 +35,30 @@
   p
 }
 
+#' Write a WSL command execution to log (for debugging)
+#'
+#' @param cmd The command string executed
+#' @param exit_code Integer exit code
+#' @param stdout Character vector of stdout (optional)
+#' @param stderr Character vector of stderr (optional)
+#' @param log_dir Directory where log files are stored
+#' @keywords internal
+.log_wsl_command <- function(cmd, exit_code, stdout = NULL, stderr = NULL, log_dir) {
+  if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+  log_file <- file.path(log_dir, "wsl_commands.log")
+  timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  entry <- c(
+    paste0("[", timestamp, "]"),
+    paste0("  CMD: ", cmd),
+    paste0("  EXIT: ", exit_code)
+  )
+  if (!is.null(stdout) && length(stdout) > 0)
+    entry <- c(entry, paste0("  STDOUT: ", paste(stdout, collapse = "\n    ")))
+  if (!is.null(stderr) && length(stderr) > 0)
+    entry <- c(entry, paste0("  STDERR: ", paste(stderr, collapse = "\n    ")))
+  write(entry, file = log_file, append = TRUE)
+}
+
 #' Write bash commands to a temp script and execute via WSL or natively
 #'
 #' Avoids shell-escaping issues by writing commands to a temp .sh file and
@@ -50,6 +74,7 @@
 #' @param conda_env    Conda environment to activate.
 #' @param intern       If TRUE return stdout as character vector.
 #' @param ignore_stderr Suppress stderr in R console when TRUE.
+#' @param log_dir      Optional directory to write command log (if NULL, no log)
 #' @return Integer exit code (0 = success) or character vector when intern=TRUE.
 #' @keywords internal
 .wsl_exec_script <- function(bash_body,
@@ -58,7 +83,8 @@
                               conda_sh      = NULL,
                               conda_env     = "isoform_tools",
                               intern        = FALSE,
-                              ignore_stderr = TRUE) {
+                              ignore_stderr = TRUE,
+                              log_dir       = NULL) {
 
   activate <- if (!is.null(conda_sh) && nzchar(conda_sh)) {
     c(sprintf('. "%s" 2>/dev/null || true', conda_sh),
@@ -75,20 +101,34 @@
   if (via_wsl) {
     wsl_sh <- .to_wsl_path(tmp, wsl_distro)
     args   <- c("-d", wsl_distro, "bash", wsl_sh)
-    if (intern)
-      system2("wsl", args, stdout = TRUE, stderr = FALSE)
-    else
-      as.integer(system2("wsl", args,
-                          stdout = if (ignore_stderr) FALSE else "",
-                          stderr = if (ignore_stderr) FALSE else ""))
+    if (intern) {
+      out <- system2("wsl", args, stdout = TRUE, stderr = FALSE)
+      status <- attr(out, "status") %||% 0L
+    } else {
+      status <- system2("wsl", args,
+                        stdout = if (ignore_stderr) FALSE else "",
+                        stderr = if (ignore_stderr) FALSE else "")
+    }
   } else {
-    if (intern)
-      system2("bash", tmp, stdout = TRUE, stderr = FALSE)
-    else
-      as.integer(system2("bash", tmp,
-                          stdout = if (ignore_stderr) FALSE else "",
-                          stderr = if (ignore_stderr) FALSE else ""))
+    if (intern) {
+      out <- system2("bash", tmp, stdout = TRUE, stderr = FALSE)
+      status <- attr(out, "status") %||% 0L
+    } else {
+      status <- system2("bash", tmp,
+                        stdout = if (ignore_stderr) FALSE else "",
+                        stderr = if (ignore_stderr) FALSE else "")
+    }
   }
+
+  if (!is.null(log_dir)) {
+    .log_wsl_command(paste(bash_body, collapse = "; "),
+                     exit_code = status,
+                     stdout = if(intern) out else NULL,
+                     stderr = NULL,
+                     log_dir = log_dir)
+  }
+
+  if (intern) return(out) else return(status)
 }
 
 #' Check whether a command-line tool is accessible in the execution environment
@@ -102,7 +142,8 @@
     bash_body     = sprintf("command -v %s >/dev/null 2>&1", shQuote(tool_name, type = "sh")),
     wsl_distro    = wsl_distro, use_wsl = use_wsl,
     conda_sh      = conda_sh,  conda_env = conda_env,
-    intern        = FALSE,     ignore_stderr = TRUE
+    intern        = FALSE,     ignore_stderr = TRUE,
+    log_dir       = NULL
   )
   isTRUE(status == 0L)
 }
@@ -125,7 +166,8 @@
     ),
     wsl_distro = wsl_distro, use_wsl = use_wsl,
     conda_sh   = conda_sh, conda_env = conda_env,
-    intern = TRUE, ignore_stderr = TRUE
+    intern = TRUE, ignore_stderr = TRUE,
+    log_dir = NULL
   )
   result <- trimws(result[nzchar(trimws(result))])
   if (length(result) > 0) result[1] else NULL
@@ -171,7 +213,8 @@
     ),
     wsl_distro = wsl_distro, use_wsl = use_wsl,
     conda_sh   = conda_sh, conda_env = conda_env,
-    intern = TRUE, ignore_stderr = TRUE
+    intern = TRUE, ignore_stderr = TRUE,
+    log_dir = NULL
   )
   result <- trimws(result[nzchar(trimws(result))])
   if (length(result) > 0) result[1] else NULL
@@ -187,6 +230,124 @@ check_wsl <- function(distro = "Ubuntu") {
   if (.Platform$OS.type != "windows") return(FALSE)
   res <- system(paste('wsl -d', distro, '-- echo "OK"'), intern = TRUE, ignore.stderr = TRUE)
   return(length(res) > 0 && trimws(res[[1]]) == "OK")
+}
+
+#' Debug WSL environment for isoform analysis
+#'
+#' Checks WSL availability, distribution, conda environment, and external tools.
+#' Writes a detailed log file to `out_dir/Log/wsl_debug.json`.
+#'
+#' @param distro WSL distribution name (default "Ubuntu")
+#' @param out_dir Output directory for logs (if NULL, returns only the list)
+#' @param conda_env Name of the conda environment to check (default "isoform_tools")
+#' @param verbose Print progress messages
+#' @return Invisibly, a list with check results
+#' @export
+debug_wsl <- function(distro = "Ubuntu", out_dir = NULL,
+                      conda_env = "isoform_tools", verbose = TRUE) {
+  
+  if (.Platform$OS.type != "windows") {
+    msg <- "Not on Windows – WSL checks are only relevant for Windows systems."
+    if (verbose) message(msg)
+    return(invisible(list(available = FALSE, reason = msg)))
+  }
+  
+  if (verbose) message("Checking WSL environment (distro: ", distro, ")...")
+  
+  # Helper to run a bash command inside WSL and capture output/exit code
+  run_wsl <- function(cmd, capture = TRUE) {
+    full_cmd <- c("-d", distro, "bash", "-c", shQuote(cmd))
+    if (capture) {
+      out <- system2("wsl", full_cmd, stdout = TRUE, stderr = TRUE)
+      attr(out, "status") <- attr(out, "status") %||% 0L
+      out
+    } else {
+      system2("wsl", full_cmd)
+    }
+  }
+  
+  results <- list(
+    timestamp = Sys.time(),
+    distro = distro,
+    wsl_available = FALSE,
+    conda_available = FALSE,
+    conda_env_exists = FALSE,
+    tools = list(),
+    errors = character()
+  )
+  
+  # 1. WSL basic availability
+  wsl_test <- tryCatch({
+    run_wsl("echo OK", capture = TRUE)
+  }, error = function(e) NULL)
+  if (!is.null(wsl_test) && length(wsl_test) == 1 && wsl_test[1] == "OK") {
+    results$wsl_available <- TRUE
+  } else {
+    results$errors <- c(results$errors, "WSL not responding or distro not found")
+    if (verbose) message("  ✗ WSL not available")
+    return(invisible(results))
+  }
+  if (verbose) message("  ✓ WSL is available")
+  
+  # 2. Conda installation and environment
+  conda_check <- run_wsl("command -v conda || echo 'not found'")
+  if (any(grepl("conda", conda_check))) {
+    results$conda_available <- TRUE
+    if (verbose) message("  ✓ conda found")
+    
+    env_check <- run_wsl(paste0("conda env list | grep -q '", conda_env, "' && echo 'exists'"))
+    if (length(env_check) > 0 && any(grepl("exists", env_check))) {
+      results$conda_env_exists <- TRUE
+      if (verbose) message("  ✓ conda environment '", conda_env, "' exists")
+    } else {
+      results$errors <- c(results$errors, paste0("conda environment '", conda_env, "' missing"))
+      if (verbose) message("  ✗ conda environment '", conda_env, "' not found")
+    }
+  } else {
+    results$errors <- c(results$errors, "conda not found in WSL")
+    if (verbose) message("  ✗ conda not found")
+  }
+  
+  # 3. Required tools (CPAT, SignalP, hmmscan, interproscan.sh)
+  tools_list <- c("cpat", "run_cpat.py", "signalp6", "signalp", "hmmscan", "interproscan.sh")
+  for (tool in tools_list) {
+    # Use `command -v` inside the conda environment if available
+    check_cmd <- if (results$conda_env_exists) {
+      paste0("source $(conda info --base)/etc/profile.d/conda.sh && conda activate ", conda_env,
+             " && command -v ", tool, " 2>/dev/null || echo 'NOTFOUND'")
+    } else {
+      paste0("command -v ", tool, " 2>/dev/null || echo 'NOTFOUND'")
+    }
+    out <- run_wsl(check_cmd)
+    found <- !any(grepl("NOTFOUND", out))
+    results$tools[[tool]] <- found
+    if (verbose) message("  ", if(found) "✓" else "✗", " ", tool)
+    if (!found && tool %in% c("cpat", "run_cpat.py", "signalp6", "signalp", "hmmscan")) {
+      results$errors <- c(results$errors, paste0("Missing tool: ", tool))
+    }
+  }
+  
+  # 4. Additional databases (Pfam, CPAT models)
+  pfam_path <- .find_pfam_db(wsl_distro = distro, use_wsl = TRUE,
+                             conda_sh = NULL, conda_env = conda_env)
+  results$pfam_db_found <- !is.null(pfam_path)
+  if (verbose) message("  ", if(results$pfam_db_found) "✓" else "✗", " Pfam-A.hmm")
+  
+  cpat_logit_human <- .find_cpat_logit_model("Human", distro, TRUE, NULL, conda_env)
+  cpat_logit_mouse <- .find_cpat_logit_model("Mouse", distro, TRUE, NULL, conda_env)
+  results$cpat_models_found <- !is.null(cpat_logit_human) && !is.null(cpat_logit_mouse)
+  if (verbose) message("  ", if(results$cpat_models_found) "✓" else "✗", " CPAT logit models")
+  
+  # 5. Write log file if out_dir provided
+  if (!is.null(out_dir)) {
+    log_dir <- file.path(out_dir, "Log")
+    if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
+    log_file <- file.path(log_dir, "wsl_debug.json")
+    jsonlite::write_json(results, log_file, pretty = TRUE, auto_unbox = TRUE)
+    if (verbose) message("  → Log written to ", log_file)
+  }
+  
+  invisible(results)
 }
 
 #' Install SignalP from a Windows directory into WSL

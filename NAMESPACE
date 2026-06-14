@@ -3,6 +3,7 @@
 export(check_wsl)
 export(create_dds_object)
 export(create_homemade_db)
+export(debug_wsl)
 export(download_ensembl_refs)
 export(export_significant_results)
 export(expressom)
