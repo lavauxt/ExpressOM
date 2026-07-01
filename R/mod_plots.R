@@ -450,6 +450,276 @@ plot_l2fc_heatmap <- function(dds, selected_genes, condition_col, level, base, p
   message("   -> L2FC Heatmap successfully exported to: ", pdf_path)
 }
 
+#' Plot Average Z-Score by Condition for Gene Set(s)
+#'
+#' Computes a per-gene z-score across samples (as in \code{plot_sample_zscore}),
+#' then averages the z-scores across all genes within each gene set for every
+#' sample, producing one "module score" per sample per set. These per-sample
+#' averages are then summarised (mean +/- SEM) and plotted by condition, with
+#' individual sample values overlaid as points. One panel is drawn per gene set.
+#' If \code{include_global = TRUE} and more than one set is supplied, an extra
+#' "Global (All Genes)" panel pooling every gene from every set is appended.
+#'
+#' @param dds A DESeqDataSet object (rownames should already be gene symbols)
+#' @param gene_sets Named list of character vectors, e.g.
+#'   \code{list(Tightness = c("Cdh5", "Pdgfa"), "Lipid Scavengers" = c("Cd36", "Stab1"))}.
+#'   List names are used as facet/panel titles.
+#' @param condition_col Character string representing the design metadata column
+#' @param level String representing the foreground group
+#' @param base String representing the background reference group
+#' @param plot_dir String directory path where the PDF will be saved
+#' @param include_global Logical: append a pooled "Global (All Genes)" panel combining
+#'   every gene across all supplied sets (default TRUE, ignored if only one set given)
+#' @return Invisibly returns the ggplot object
+#' @export
+plot_geneset_zscore_avg <- function(dds, gene_sets, condition_col, level, base, plot_dir, include_global = TRUE) {
+  if (is.null(names(gene_sets)) || any(names(gene_sets) == "")) {
+    stop("`gene_sets` must be a named list, e.g. list(SetA = c('Gene1','Gene2'), SetB = c('Gene3')).")
+  }
+
+  norm_counts    <- DESeq2::counts(dds, normalized = TRUE)
+  meta_data      <- as.data.frame(SummarizedExperiment::colData(dds))
+  meta_data$sample <- rownames(meta_data)
+  valid_samples  <- meta_data$sample[meta_data[[condition_col]] %in% c(base, level)]
+
+  # Helper: given a character vector of genes, return a per-sample average
+  # z-score (NULL if none of the genes are present) plus which genes were missing.
+  .avg_zscore_for_genes <- function(genes) {
+    present_genes <- intersect(genes, rownames(norm_counts))
+    missing_genes <- setdiff(genes, rownames(norm_counts))
+    if (length(present_genes) == 0) {
+      return(list(avg_z = NULL, present = present_genes, missing = missing_genes))
+    }
+    expr_mat              <- norm_counts[present_genes, valid_samples, drop = FALSE]
+    row_means             <- rowMeans(expr_mat)
+    row_sds                <- apply(expr_mat, 1, stats::sd)
+    row_sds[row_sds == 0]  <- 1
+    z_mat                  <- (expr_mat - row_means) / row_sds
+    list(avg_z = colMeans(z_mat, na.rm = TRUE), present = present_genes, missing = missing_genes)
+  }
+
+  set_results    <- list()
+  missing_report <- list()
+
+  for (set_name in names(gene_sets)) {
+    res <- .avg_zscore_for_genes(gene_sets[[set_name]])
+    if (length(res$missing) > 0) missing_report[[set_name]] <- res$missing
+    if (is.null(res$avg_z)) {
+      warning("None of the genes in gene set '", set_name, "' were found in the data. Skipping this set.")
+      next
+    }
+    set_results[[set_name]] <- data.frame(
+      sample     = names(res$avg_z),
+      avg_zscore = as.numeric(res$avg_z),
+      gene_set   = paste0(set_name, " (n=", length(res$present), ")"),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (isTRUE(include_global) && length(gene_sets) > 1) {
+    all_genes_pooled <- unique(unlist(gene_sets, use.names = FALSE))
+    res_global <- .avg_zscore_for_genes(all_genes_pooled)
+    if (!is.null(res_global$avg_z)) {
+      set_results[["__global__"]] <- data.frame(
+        sample     = names(res_global$avg_z),
+        avg_zscore = as.numeric(res_global$avg_z),
+        gene_set   = paste0("Global (All Genes) (n=", length(res_global$present), ")"),
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  if (length(missing_report) > 0) {
+    for (nm in names(missing_report)) {
+      message("   -> Note: genes not found in '", nm, "' set (check spelling/case): ",
+              paste(missing_report[[nm]], collapse = ", "))
+    }
+  }
+
+  if (length(set_results) == 0) stop("None of the specified gene sets contained any matching genes.")
+
+  plot_df           <- do.call(rbind, set_results)
+  plot_df           <- merge(plot_df, meta_data[, c("sample", condition_col)], by = "sample")
+  plot_df$Condition <- factor(plot_df[[condition_col]], levels = c(base, level))
+  set_levels        <- vapply(names(set_results), function(nm) unique(set_results[[nm]]$gene_set), character(1))
+  plot_df$gene_set  <- factor(plot_df$gene_set, levels = set_levels)
+
+  summary_df <- do.call(rbind, lapply(split(plot_df, list(plot_df$gene_set, plot_df$Condition)), function(d) {
+    if (nrow(d) == 0) return(NULL)
+    data.frame(
+      gene_set  = d$gene_set[1],
+      Condition = d$Condition[1],
+      mean_z    = mean(d$avg_zscore),
+      sem       = if (nrow(d) > 1) stats::sd(d$avg_zscore) / sqrt(nrow(d)) else 0
+    )
+  }))
+
+  comp_name <- paste0(level, "_vs_", base)
+  pdf_path  <- file.path(plot_dir, paste0("GeneSet_Zscore_Average_", comp_name, ".pdf"))
+
+  p <- ggplot2::ggplot() +
+    ggplot2::geom_bar(
+      data = summary_df,
+      ggplot2::aes(x = Condition, y = mean_z, fill = Condition),
+      stat = "identity", alpha = 0.6, width = 0.6
+    ) +
+    ggplot2::geom_errorbar(
+      data = summary_df,
+      ggplot2::aes(x = Condition, ymin = mean_z - sem, ymax = mean_z + sem),
+      width = 0.2
+    ) +
+    ggplot2::geom_jitter(
+      data = plot_df,
+      ggplot2::aes(x = Condition, y = avg_zscore, fill = Condition),
+      width = 0.15, size = 2, shape = 21, color = "black"
+    ) +
+    ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+    ggplot2::facet_wrap(~gene_set, scales = "free_y") +
+    ggplot2::scale_fill_manual(values = stats::setNames(c("dodgerblue4", "red3"), c(base, level))) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      strip.text      = ggplot2::element_text(face = "bold", size = 11),
+      plot.title      = ggplot2::element_text(hjust = 0.5, face = "bold"),
+      legend.position = "none"
+    ) +
+    ggplot2::labs(
+      title = "Average Z-score by Condition (Gene Set Module Score)",
+      x = NULL, y = "Mean Z-score (\u00b1 SEM)"
+    )
+
+  ggplot2::ggsave(filename = pdf_path, plot = p, width = 4.5 * length(set_results) + 1, height = 5, device = "pdf")
+  message("   -> Gene set average Z-score plot saved to: ", pdf_path)
+  return(invisible(p))
+}
+
+#' Plot Z-Score by Condition for Individual Genes
+#'
+#' Companion to \code{plot_geneset_zscore_avg}: instead of averaging genes into a
+#' single module score, this computes the same per-gene z-score across samples
+#' (as in \code{plot_sample_zscore}) and plots a classic grouped bar chart (mean
+#' +/- SEM) with every gene along the x-axis (as in a Seurat DotPlot's "Features"
+#' axis) and bars dodged/colored by condition. If more than one gene set is
+#' supplied, panels are faceted by set so each set's genes stay grouped together
+#' (one row of facets), while still using plain bars + error bars rather than dots.
+#'
+#' @param dds A DESeqDataSet object (rownames should already be gene symbols)
+#' @param gene_sets Named list of character vectors, e.g.
+#'   \code{list(Tightness = c("Cdh5", "Pdgfa"), "Lipid Scavengers" = c("Cd36", "Stab1"))}.
+#'   A single unnamed character vector is also accepted and treated as one set.
+#' @param condition_col Character string representing the design metadata column
+#' @param level String representing the foreground group
+#' @param base String representing the background reference group
+#' @param plot_dir String directory path where the PDF will be saved
+#' @param show_points Logical: overlay individual sample-level jittered points (default TRUE)
+#' @return Invisibly returns the ggplot object
+#' @export
+plot_gene_zscore_individual <- function(dds, gene_sets, condition_col, level, base, plot_dir, show_points = TRUE) {
+  if (is.character(gene_sets)) gene_sets <- list("Genes" = gene_sets)
+  if (is.null(names(gene_sets)) || any(names(gene_sets) == "")) {
+    stop("`gene_sets` must be a named list, e.g. list(SetA = c('Gene1','Gene2'), SetB = c('Gene3')).")
+  }
+
+  norm_counts      <- DESeq2::counts(dds, normalized = TRUE)
+  meta_data        <- as.data.frame(SummarizedExperiment::colData(dds))
+  meta_data$sample <- rownames(meta_data)
+  valid_samples    <- meta_data$sample[meta_data[[condition_col]] %in% c(base, level)]
+
+  # Map each gene to the (first) set it belongs to, preserving list order
+  gene_lookup <- unlist(lapply(names(gene_sets), function(nm) {
+    stats::setNames(rep(nm, length(gene_sets[[nm]])), gene_sets[[nm]])
+  }))
+  gene_lookup <- gene_lookup[!duplicated(names(gene_lookup))]
+
+  all_genes     <- names(gene_lookup)
+  present_genes <- intersect(all_genes, rownames(norm_counts))
+  missing_genes <- setdiff(all_genes, rownames(norm_counts))
+  if (length(present_genes) == 0) stop("None of the specified genes were found in the data.")
+  if (length(missing_genes) > 0) {
+    message("   -> Note: genes not found (check spelling/case): ", paste(missing_genes, collapse = ", "))
+  }
+
+  expr_mat              <- norm_counts[present_genes, valid_samples, drop = FALSE]
+  row_means             <- rowMeans(expr_mat)
+  row_sds                <- apply(expr_mat, 1, stats::sd)
+  row_sds[row_sds == 0]  <- 1
+  z_mat                  <- (expr_mat - row_means) / row_sds
+
+  df_long      <- as.data.frame(z_mat)
+  df_long$gene <- rownames(df_long)
+  plot_df      <- tidyr::pivot_longer(df_long, cols = -gene, names_to = "sample", values_to = "z_score")
+  plot_df      <- merge(plot_df, meta_data[, c("sample", condition_col)], by = "sample")
+  plot_df$Condition <- factor(plot_df[[condition_col]], levels = c(base, level))
+
+  # Preserve gene order within each set, and keep genes grouped along the x-axis
+  # the same way a Seurat DotPlot lists "Features" -- one tick per gene.
+  gene_order       <- present_genes[order(match(gene_lookup[present_genes], names(gene_sets)))]
+  plot_df$gene_set <- factor(gene_lookup[plot_df$gene], levels = names(gene_sets))
+  plot_df$gene     <- factor(plot_df$gene, levels = gene_order)
+
+  summary_df <- do.call(rbind, lapply(split(plot_df, list(plot_df$gene, plot_df$Condition)), function(d) {
+    if (nrow(d) == 0) return(NULL)
+    data.frame(
+      gene      = d$gene[1],
+      gene_set  = d$gene_set[1],
+      Condition = d$Condition[1],
+      mean_z    = mean(d$z_score),
+      sem       = if (nrow(d) > 1) stats::sd(d$z_score) / sqrt(nrow(d)) else 0
+    )
+  }))
+
+  comp_name  <- paste0(level, "_vs_", base)
+  pdf_path   <- file.path(plot_dir, paste0("Gene_Zscore_Individual_", comp_name, ".pdf"))
+  n_sets     <- length(unique(plot_df$gene_set))
+  dodge_pos  <- ggplot2::position_dodge(width = 0.75)
+
+  p <- ggplot2::ggplot() +
+    ggplot2::geom_bar(
+      data = summary_df,
+      ggplot2::aes(x = gene, y = mean_z, fill = Condition),
+      stat = "identity", position = dodge_pos, alpha = 0.75, width = 0.7, color = "black", linewidth = 0.3
+    ) +
+    ggplot2::geom_errorbar(
+      data = summary_df,
+      ggplot2::aes(x = gene, ymin = mean_z - sem, ymax = mean_z + sem, group = Condition),
+      position = dodge_pos, width = 0.25
+    )
+
+  if (isTRUE(show_points)) {
+    p <- p + ggplot2::geom_point(
+      data = plot_df,
+      ggplot2::aes(x = gene, y = z_score, group = Condition),
+      position = ggplot2::position_jitterdodge(jitter.width = 0.12, dodge.width = 0.75),
+      size = 1.3, alpha = 0.6, color = "black"
+    )
+  }
+
+  p <- p +
+    ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+    ggplot2::scale_fill_manual(values = stats::setNames(c("dodgerblue4", "red3"), c(base, level))) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      strip.text      = ggplot2::element_text(face = "bold", size = 11),
+      axis.text.x     = ggplot2::element_text(angle = 45, hjust = 1),
+      plot.title      = ggplot2::element_text(hjust = 0.5, face = "bold"),
+      legend.position = "right",
+      legend.title    = ggplot2::element_blank()
+    ) +
+    ggplot2::labs(
+      title = "Z-score by Condition, Individual Genes",
+      x = "Features", y = "Z-score (\u00b1 SEM)"
+    )
+
+  if (n_sets > 1) {
+    p <- p + ggplot2::facet_wrap(~gene_set, scales = "free_x", nrow = 1)
+  }
+
+  plot_width <- max(6, 0.9 * length(present_genes) + 2)
+  ggplot2::ggsave(filename = pdf_path, plot = p,
+                   width = plot_width, height = 5, device = "pdf", limitsize = FALSE)
+  message("   -> Individual gene Z-score plot saved to: ", pdf_path)
+  return(invisible(p))
+}
+
 #' SPIA two-way evidence plot (ggplot2 + ggrepel)
 #' @param x A SPIA results data.frame
 #' @param threshold Threshold for significance

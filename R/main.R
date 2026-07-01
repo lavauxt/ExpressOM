@@ -30,6 +30,11 @@
 #' @param subset_sample Optional string to filter the sample table (e.g., "cell_type == 'T_cells'")
 #' @param remove_sample Optional character vector of sample IDs to exclude entirely
 #' @param zscore_genes Optional character vector of gene names for targeted Z-score expression plotting
+#' @param gene_sets_zscore Optional named list of character vectors of gene names. Produces three
+#'   outputs: (1) a per-sample average Z-score ("module score") per set plotted by condition, plus
+#'   an automatic pooled "Global (All Genes)" panel; and (2) a per-individual-gene Z-score by
+#'   condition plot (one facet per gene), e.g.
+#'   \code{list(Tightness = c("Cdh5","Pdgfa"), "Lipid Scavengers" = c("Cd36","Stab1"))}
 #' @param run_dge Logical: perform standard gene-level differential expression (default: TRUE)
 #' @param run_isoform Logical: perform isoform-level analysis (DTE, DTU, IsoformSwitchAnalyzeR)
 #' @param run_predictors Logical: Run CPAT, Pfam, and SignalP via WSL/Conda during Isoform analysis
@@ -68,6 +73,7 @@ expressom <- function(count_type        = "salmon",
                       gsea_metric       = "stat",
                       nBest             = 20000,
                       zscore_genes      = NULL,
+                      gene_sets_zscore  = NULL,
                       run_dge           = TRUE,
                       run_isoform       = FALSE,
                       run_predictors    = FALSE,
@@ -276,6 +282,14 @@ expressom <- function(count_type        = "salmon",
         plot_dir <- file.path(out_dir, "Plots")
         plot_sample_zscore(dds_rep, zscore_genes, main_condition, level, base, plot_dir)
         plot_l2fc_heatmap(dds_rep, zscore_genes, main_condition, level, base, plot_dir)
+      }
+
+      if (!is.null(gene_sets_zscore)) {
+        message("Generating average Z-score by condition plot for gene set(s)...")
+        plot_dir <- file.path(out_dir, "Plots")
+        plot_geneset_zscore_avg(dds_rep, gene_sets_zscore, main_condition, level, base, plot_dir)
+        message("Generating individual gene Z-score by condition plot(s)...")
+        plot_gene_zscore_individual(dds_rep, gene_sets_zscore, main_condition, level, base, plot_dir)
       }
 
       func_results <- safe_run(
