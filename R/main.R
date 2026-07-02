@@ -284,13 +284,44 @@ expressom <- function(count_type        = "salmon",
         plot_l2fc_heatmap(dds_rep, zscore_genes, main_condition, level, base, plot_dir)
       }
 
-      if (!is.null(gene_sets_zscore)) {
-        message("Generating average Z-score by condition plot for gene set(s)...")
-        plot_dir <- file.path(out_dir, "Plots")
-        plot_geneset_zscore_avg(dds_rep, gene_sets_zscore, main_condition, level, base, plot_dir)
-        message("Generating individual gene Z-score by condition plot(s)...")
-        plot_gene_zscore_individual(dds_rep, gene_sets_zscore, main_condition, level, base, plot_dir)
-      }
+# ----------------------------------------------------------------------
+# Z‑score plots for gene sets (per‑set PDFs)
+# ----------------------------------------------------------------------
+if (!is.null(gene_sets_zscore)) {
+  message("Generating separate Z‑score plots for each gene set...")
+  plot_dir <- file.path(out_dir, "Plots")
+  if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
+
+  for (set_name in names(gene_sets_zscore)) {
+    # Build a single‑set list to pass to the plotting functions
+    single_set <- list(gene_sets_zscore[[set_name]])
+    names(single_set) <- set_name
+
+    message("   -> Plotting set: ", set_name)
+
+    # Average Z‑score (module score) per set
+    plot_geneset_zscore_avg(
+      dds           = dds_rep,
+      gene_sets     = single_set,
+      condition_col = main_condition,
+      level         = level,
+      base          = base,
+      plot_dir      = plot_dir,
+      set_name      = set_name
+    )
+
+    # Individual gene Z‑score bar plots (one facet per gene)
+    plot_gene_zscore_individual(
+      dds           = dds_rep,
+      gene_sets     = single_set,
+      condition_col = main_condition,
+      level         = level,
+      base          = base,
+      plot_dir      = plot_dir,
+      set_name      = set_name
+    )
+  }
+}
 
       func_results <- safe_run(
         run_functional_analysis(
