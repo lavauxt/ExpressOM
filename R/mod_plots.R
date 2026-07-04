@@ -1,14 +1,20 @@
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
 #' Exploratory Data Analysis for DESeq2
 #'
 #' @param dds DESeqDataSet object
 #' @param edb Ensembl Database
 #' @param out_dir Output directory
-#' @param level Level comparison (e.g. "Treated")
-#' @param base Base Level (e.g. "Control")
-#' @param main_condition The primary modeled condition
+#' @param level Level comparison (e.g. "Treated") – may be NULL for EDA-only
+#' @param base Base Level (e.g. "Control") – may be NULL
+#' @param main_condition The primary modeled condition (could be NULL)
+#' @param group_col Optional column name to use for colouring/annotation (overrides main_condition if non-NULL)
 #' @param batch_col Optional batch column name for limma correction and before/after PCA
 #' @export
-run_eda <- function(dds, edb, out_dir, level, base, main_condition, batch_col = NULL) {
+run_eda <- function(dds, edb, out_dir, level, base, main_condition = NULL, group_col = NULL, batch_col = NULL) {
+  # Determine which column to use for grouping: group_col takes precedence
+  cond_col <- group_col %||% main_condition
+
   rld <- DESeq2::rlog(dds, blind = TRUE)
 
   org_info <- get_organism_info(edb)
@@ -29,11 +35,26 @@ run_eda <- function(dds, edb, out_dir, level, base, main_condition, batch_col = 
   plot_dir <- file.path(out_dir, "Plots")
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 
+  # ---- Determine file name base ----
+  if (!is.null(level) && !is.null(base)) {
+    comp_label <- paste0(level, "_vs_", base)
+  } else {
+    comp_label <- "EDA"
+  }
+
   # --- PCA before batch correction ---
-  p_orig <- plot_custom_pca(rld, condition = main_condition, batch = batch_col,
-                            title = paste0("PCA Before Correction (", level, " vs ", base, ")"),
-                            return_plot = TRUE)
-  pdf(file.path(plot_dir, paste0("PCA_", level, "_vs_", base, ".pdf")), width = 9, height = 7)
+  if (!is.null(cond_col) && cond_col %in% colnames(SummarizedExperiment::colData(dds))) {
+    p_orig <- plot_custom_pca(rld, condition = cond_col, batch = batch_col,
+                              title = paste0("PCA (", cond_col, ")", if (!is.null(level) && !is.null(base)) paste0(" - ", level, " vs ", base) else ""),
+                              return_plot = TRUE)
+  } else {
+    # No grouping column – plot without colour
+    p_orig <- plot_custom_pca(rld, condition = NULL, batch = batch_col,
+                              title = "PCA (no condition grouping)",
+                              return_plot = TRUE)
+  }
+
+  pdf(file.path(plot_dir, paste0("PCA_", comp_label, ".pdf")), width = 9, height = 7)
   print(p_orig)
   dev.off()
 
@@ -42,9 +63,14 @@ run_eda <- function(dds, edb, out_dir, level, base, main_condition, batch_col = 
       requireNamespace("limma", quietly = TRUE)) {
     batch_vec <- SummarizedExperiment::colData(dds)[[batch_col]]
     if (length(unique(batch_vec)) > 1) {
+      # Build a design matrix; if no main_condition, use ~1
+      if (!is.null(cond_col) && cond_col %in% colnames(SummarizedExperiment::colData(dds))) {
+        design_mat <- model.matrix(as.formula(paste0("~ ", cond_col)),
+                                   data = as.data.frame(SummarizedExperiment::colData(dds)))
+      } else {
+        design_mat <- model.matrix(~1, data = as.data.frame(SummarizedExperiment::colData(dds)))
+      }
       message("Applying limma batch correction for PCA visualisation...")
-      design_mat <- model.matrix(as.formula(paste0("~ ", main_condition)),
-                                 data = as.data.frame(SummarizedExperiment::colData(rld)))
       corrected_mat <- tryCatch(
         limma::removeBatchEffect(SummarizedExperiment::assay(rld), batch = batch_vec, design = design_mat),
         error = function(e) { warning("Batch correction failed: ", e$message); NULL }
@@ -52,10 +78,10 @@ run_eda <- function(dds, edb, out_dir, level, base, main_condition, batch_col = 
       if (!is.null(corrected_mat)) {
         rld_corrected <- rld
         SummarizedExperiment::assay(rld_corrected) <- corrected_mat
-        p_corr <- plot_custom_pca(rld_corrected, condition = main_condition, batch = batch_col,
+        p_corr <- plot_custom_pca(rld_corrected, condition = cond_col, batch = batch_col,
                                   title = "PCA After Batch Correction (limma)",
                                   return_plot = TRUE)
-        pdf(file.path(plot_dir, paste0("PCA_BatchCorrected_", level, "_vs_", base, ".pdf")), width = 9, height = 7)
+        pdf(file.path(plot_dir, paste0("PCA_BatchCorrected_", comp_label, ".pdf")), width = 9, height = 7)
         print(p_corr)
         dev.off()
         message("   -> Batch-corrected PCA saved to: ", plot_dir)
@@ -68,17 +94,20 @@ run_eda <- function(dds, edb, out_dir, level, base, main_condition, batch_col = 
   if (anyNA(rld_cor)) {
     warning("Correlation matrix contains NA/NaN values. ",
             "Number of NA: ", sum(is.na(rld_cor)))
-    # Optionally replace NA with 0 or remove affected samples
     rld_cor[is.na(rld_cor)] <- 0
   }
 
-  # Verify annotation rownames match
-  anno <- as.data.frame(SummarizedExperiment::colData(dds)[, main_condition, drop = FALSE])
-  if (!all(rownames(anno) == colnames(rld_cor))) {
-    warning("Annotation rownames do not match correlation matrix columns.")
+  # Build annotation for heatmap (if cond_col available)
+  if (!is.null(cond_col) && cond_col %in% colnames(SummarizedExperiment::colData(dds))) {
+    anno <- as.data.frame(SummarizedExperiment::colData(dds)[, cond_col, drop = FALSE])
+    if (!all(rownames(anno) == colnames(rld_cor))) {
+      warning("Annotation rownames do not match correlation matrix columns.")
+    }
+  } else {
+    anno <- NULL
   }
 
-  safe_pdf(file.path(plot_dir, paste0("HeatMap_", level, "_vs_", base, ".pdf")), expr = {
+  safe_pdf(file.path(plot_dir, paste0("HeatMap_", comp_label, ".pdf")), expr = {
     pheatmap::pheatmap(rld_cor, annotation_col = anno, main = "Sample Correlation (Gene Symbols)")
   })
 }
@@ -158,7 +187,7 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
 
 #' Custom PCA Plot (ggplot2, fully customisable)
 #' @param vsd VST-transformed DESeqDataSet or matrix
-#' @param condition Character column name in colData for colour grouping
+#' @param condition Character column name in colData for colour grouping (can be NULL)
 #' @param batch Optional batch column for shape grouping
 #' @param title Plot title
 #' @param ellipse Logical, whether to add 95% confidence ellipses
@@ -181,19 +210,34 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
   pca_df     <- data.frame(PC1 = pca$x[, 1], PC2 = pca$x[, 2], coldata)
   pca_df$sample_label <- rownames(pca_df)
 
+  # ---- Handle NULL or missing condition ----
+  if (is.null(condition) || !(condition %in% colnames(pca_df))) {
+    # Create a dummy group so ggplot gets a colour aesthetic
+    pca_df$Group <- "All Samples"
+    condition    <- "Group"
+    # Disable ellipses (only one group)
+    ellipse      <- FALSE
+    message("plot_custom_pca: no valid condition column; using constant colour.")
+  }
+
   p <- ggplot2::ggplot(pca_df, ggplot2::aes(x = .data[["PC1"]], y = .data[["PC2"]],
                                              color = .data[[condition]]))
-  # stat_ellipse needs >= 3 points per group; also requires > 1 group
+
+  # stat_ellipse needs >= 3 points per group and > 1 group
   min_pts_per_group <- min(table(pca_df[[condition]]))
   if (ellipse && length(unique(pca_df[[condition]])) > 1 && min_pts_per_group >= 3) {
     p <- p + ggplot2::stat_ellipse(level = 0.95, linetype = 2)
   } else if (ellipse) {
     message("plot_custom_pca: ellipse skipped (need >= 3 samples per group and >= 2 groups)")
   }
+
   p <- p + ggplot2::geom_point(size = 3.5, alpha = 0.8)
+
+  # Handle batch: if provided and in data, add shape
   if (!is.null(batch) && batch %in% colnames(pca_df)) {
     p <- p + ggplot2::aes(shape = .data[[batch]])
   }
+
   p <- p +
     ggrepel::geom_text_repel(ggplot2::aes(label = .data[["sample_label"]]),
                              size = 3, show.legend = FALSE,
@@ -203,6 +247,7 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
     ggplot2::theme_bw() +
     ggplot2::theme(panel.grid.minor = ggplot2::element_blank()) +
     ggplot2::labs(title = title)
+
   if (return_plot) return(p) else print(p)
 }
 

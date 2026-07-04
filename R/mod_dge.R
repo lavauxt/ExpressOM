@@ -178,40 +178,58 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
 #' Create DESeqDataSet object
 #'
 #' @param tx_data List returned by import_counts
-#' @param level Target level
-#' @param base Reference level
-#' @param model Design formula as a string
+#' @param level Target level (can be NULL if model == "~1")
+#' @param base Reference level (can be NULL if model == "~1")
+#' @param model Design formula as a string (e.g., "~1" for EDA only)
 #' @param replicate_col Column containing replicate information
 #' @return DESeqDataSet object
 #' @export
 create_dds_object <- function(tx_data, level, base, model, replicate_col) {
 
   meta <- tx_data$meta
+  design_formula <- as.formula(model)
 
-  design_vars <- all.vars(as.formula(model))
+  # If design is ~1, we skip factor conversions and releveling
+  if (identical(design_formula, ~1)) {
+    dds <- if (tx_data$type == "tximport") {
+      DESeq2::DESeqDataSetFromTximport(tx_data$txi, colData = meta, design = ~1)
+    } else {
+      DESeq2::DESeqDataSetFromMatrix(countData = round(tx_data$counts),
+                                     colData = meta, design = ~1)
+    }
+    keep <- rowSums(DESeq2::counts(dds)) >= 1
+    dds <- dds[keep, ]
+    return(dds)
+  }
+
+  # Normal path (model has factors)
+  design_vars <- all.vars(design_formula)
   for (var in design_vars) {
     if (var %in% colnames(meta) && is.character(meta[[var]])) {
       meta[[var]] <- as.factor(meta[[var]])
     }
   }
-
-  main_condition <- tail(all.vars(as.formula(model)), 1)
+  main_condition <- tail(design_vars, 1)
   meta[[main_condition]] <- as.factor(meta[[main_condition]])
 
-  if (tx_data$type == "tximport") {
-    dds <- DESeq2::DESeqDataSetFromTximport(tx_data$txi, colData = meta, design = as.formula(model))
-  } else if (tx_data$type == "matrix") {
-    dds <- DESeq2::DESeqDataSetFromMatrix(countData = round(tx_data$counts), colData = meta, design = as.formula(model))
+  # Build dds
+  dds <- if (tx_data$type == "tximport") {
+    DESeq2::DESeqDataSetFromTximport(tx_data$txi, colData = meta, design = design_formula)
   } else {
-    stop("Invalid tx_data type: ", tx_data$type)
+    DESeq2::DESeqDataSetFromMatrix(countData = round(tx_data$counts),
+                                   colData = meta, design = design_formula)
   }
 
-  dds[[main_condition]] <- relevel(dds[[main_condition]], base)
+  # Only relevel if level and base are provided (non-NULL)
+  if (!is.null(level) && !is.null(base)) {
+    dds[[main_condition]] <- relevel(dds[[main_condition]], base)
+  } else {
+    message("Note: level/base not provided; skipping releveling.")
+  }
 
-  # Minimal filter (>= 1 total read): keeps virtually everything.
-  # Stricter filtering (e.g. >= 10) can be applied post-hoc on the returned dds.
+  # Minimal filter
   keep <- rowSums(DESeq2::counts(dds)) >= 1
-  dds  <- dds[keep, ]
+  dds <- dds[keep, ]
 
   if (!is.null(replicate_col) && replicate_col %in% colnames(meta)) {
     dds <- DESeq2::collapseReplicates(dds, groupby = dds[[replicate_col]])

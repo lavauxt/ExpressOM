@@ -1,3 +1,5 @@
+`%||%` <- function(x, y) if (is.null(x)) y else x
+
 #' Safely create a directory
 #' @keywords internal
 safe_dir <- function(path) {

@@ -47,6 +47,8 @@
 #' @param resume_isoform_from Path to directory with saved DTE/DTU RDS files to resume isoform analysis
 #' @param isoform_report_genes Gene symbols (e.g., c("TP53", "BCL2")) for transcript-proportion plots
 #' @param nBest Number of top genes to include in RegionReport
+#' @param eda_only Logical: if TRUE, run only import + EDA (PCA, heatmap) then stop (no DGE or isoform).
+#' @param group_col Optional column name in metadata for colouring PCA/heatmap when no model is given.
 #' @return NULL (invisibly)
 expressom <- function(count_type        = "salmon",
                       data_dir          = "./data",
@@ -84,7 +86,9 @@ expressom <- function(count_type        = "salmon",
                       use_wsl           = FALSE,
                       wsl_distro        = "Ubuntu-22.04",
                       resume_isoform_from = NULL,
-                      isoform_report_genes = NULL) {
+                      isoform_report_genes = NULL,
+                      eda_only          = FALSE,
+                      group_col         = NULL) {
 
   execution_order <- match.arg(execution_order)
 
@@ -132,8 +136,29 @@ expressom <- function(count_type        = "salmon",
               conda_env = "isoform_tools", verbose = TRUE)
   }
 
+  # ==========================================================================
+  # EDA-ONLY MODE: override run_dge/run_isoform if conditions are missing or explicitly requested
+  # ==========================================================================
+  if (isTRUE(eda_only) || is.null(model) || is.null(level) || is.null(base)) {
+    message("DESeq2 model not fully specified or eda_only=TRUE. ",
+            "Running only data import and exploratory analysis (EDA).")
+    run_dge     <- FALSE
+    run_isoform <- FALSE
+    model_eda   <- "~1"
+    # Determine main condition for EDA: use group_col if provided, else extract from original model if possible
+    if (!is.null(group_col) && group_col %in% colnames(read.csv(sample_table, nrows=1))) {
+      main_condition <- group_col
+    } else if (!is.null(model) && model != "~1") {
+      main_condition <- tail(all.vars(as.formula(model)), 1)
+    } else {
+      main_condition <- NULL
+    }
+  } else {
+    model_eda <- model  # not used in normal path
+    main_condition <- tail(all.vars(as.formula(model)), 1)
+  }
+
   comp_name      <- paste0(level, "_vs_", base)
-  main_condition <- tail(all.vars(as.formula(model)), 1)
   edb_obj        <- getExportedValue(ensembl_package_name, ensembl_package_name)
 
   if (!is.null(batch_col) && !(batch_col %in% all.vars(as.formula(model)))) {
@@ -141,6 +166,46 @@ expressom <- function(count_type        = "salmon",
     message("Consider adding it to prevent confounding your DGE results (e.g., model = '~ ", batch_col, " + ", main_condition, "').")
   }
 
+  # Always import counts and run EDA (this is needed even in EDA-only mode)
+  tx_data <- import_counts(
+    data_dir             = data_dir,
+    sample_table         = sample_table,
+    ensembl_package_name = ensembl_package_name,
+    count_type           = count_type,
+    out_dir              = out_dir,
+    matrix_file          = matrix_file,
+    subset_sample        = subset_sample,
+    remove_sample        = remove_sample
+  )
+
+  # Build the DESeqDataSet (uses dummy model if eda_only, else real model)
+  dds <- create_dds_object(
+    tx_data,
+    level = if (run_dge) level else NULL,
+    base  = if (run_dge) base  else NULL,
+    model = if (run_dge || (!eda_only && !is.null(model))) model else "~1",
+    replicate_col = replicate_col
+  )
+
+  # Run EDA (always)
+  run_eda(
+    dds            = dds,
+    edb            = edb_obj,
+    out_dir        = out_dir,
+    level          = level,
+    base           = base,
+    main_condition = main_condition,
+    group_col      = group_col,
+    batch_col      = batch_col
+  )
+
+  # If eda_only, stop here
+  if (!run_dge && !run_isoform) {
+    message("EDA completed. Skipping differential expression and isoform analyses.")
+    return(invisible(NULL))
+  }
+
+  # Otherwise continue with the full pipeline...
   pipeline_steps  <- if (execution_order == "dge_first") c("dge", "isoform") else c("isoform", "dge")
   dge_results     <- NULL
   isoform_results <- NULL
@@ -153,26 +218,11 @@ expressom <- function(count_type        = "salmon",
     if (step == "dge" && run_dge) {
       message("\n=== Running Gene-Level DGE Analysis ===")
 
-      tx_data <- import_counts(
-        data_dir             = data_dir,
-        sample_table         = sample_table,
-        ensembl_package_name = ensembl_package_name,
-        count_type           = count_type,
-        out_dir              = out_dir,
-        matrix_file          = matrix_file,
-        subset_sample        = subset_sample,
-        remove_sample        = remove_sample
-      )
-
+      # (Note: tx_data already imported, but we may need to re-import if subset changed? No, it's the same.)
+      # The dds object above was created with dummy model if eda_only; we need to rebuild with real model.
+      # However, run_dge will not be triggered if eda_only was TRUE, so we are safe.
+      # For completeness, recreate dds with real model inside the block.
       dds <- create_dds_object(tx_data, level, base, model, replicate_col)
-
-      run_eda(dds            = dds,
-              edb            = edb_obj,
-              out_dir        = out_dir,
-              level          = level,
-              base           = base,
-              main_condition = main_condition,
-              batch_col      = batch_col)
 
       res_list <- run_deseq2_analysis(dds, model, level, base, shrink_method, out_dir,
                                       padj_cutoff, test, reduced)
@@ -229,12 +279,6 @@ expressom <- function(count_type        = "salmon",
       volcano_file  <- file.path(plot_dir_rel, paste0("DE_Volcanoplot_",   level, "_vs_", base, ".pdf"))
       ma_file       <- file.path(plot_dir_rel, paste0("MAplot_shrunken_",  level, "_vs_", base, ".pdf"))
 
-      # BUG FIX 1: extension must be .Rmd, not .R — regionReport::DESeq2Report()
-      #            expects an Rmd fragment for its customCode argument.
-      # BUG FIX 2: each chunk header must be a single string; previously the code
-      #            used c("...'", path_var, "'...") which split the header across
-      #            three separate lines, producing invalid Rmd.  Use paste0() so
-      #            each element of the writeLines vector is one complete line.
       custom_script <- tempfile(fileext = ".Rmd")
       writeLines(c(
         paste0("```{r pca_orig, echo=FALSE, fig.cap='PCA plot (Original)', eval=file.exists('", pca_file, "')}"),
