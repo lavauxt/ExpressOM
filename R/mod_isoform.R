@@ -341,6 +341,8 @@ run_dtu <- function(
 #' @param save_dir Optional directory to save per-step RDS checkpoints
 #' @param resume_from Optional path to a save_dir with a prior switch_list.rds
 #' @param bsgenome_name Optional BSgenome package name
+#' @param predictor_cpu Integer: CPU threads for hmmscan / InterProScan
+#'   (default NULL auto-detects with \code{parallel::detectCores() - 1})
 #' @return IsoformSwitchAnalyzeR results object
 #' @export
 run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
@@ -349,7 +351,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
                                run_predictors = FALSE,
                                use_wsl = FALSE, wsl_distro = "Ubuntu-22.04",
                                save_dir = NULL, resume_from = NULL,
-                               bsgenome_name = NULL) {
+                               bsgenome_name = NULL, predictor_cpu = NULL) {
 
   if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE))
     stop("Please install IsoformSwitchAnalyzeR: BiocManager::install('IsoformSwitchAnalyzeR')")
@@ -362,18 +364,25 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 
   # --------------------------------------------------------------------------
-  # WSL debug and logging (if predictors requested)
+  # Predictor environment check and logging (Windows+WSL or native Linux/macOS)
   # --------------------------------------------------------------------------
-  if (run_predictors && .Platform$OS.type == "windows" && use_wsl) {
-    message("Running WSL environment check...")
+  if (isTRUE(run_predictors)) {
+    message("Checking external predictor tool availability...")
     debug_info <- debug_wsl(distro = wsl_distro, out_dir = out_dir,
-                            conda_env = "isoform_tools", verbose = TRUE)
-    if (!debug_info$wsl_available) {
-      stop("WSL is not available. Please install WSL or set use_wsl=FALSE.")
+                            conda_env = "isoform_tools", verbose = TRUE,
+                            use_wsl = use_wsl)
+    if (!isTRUE(debug_info$wsl_available)) {
+      stop(if (.Platform$OS.type == "windows" && use_wsl)
+             "WSL is not available. Please install WSL or set use_wsl = FALSE."
+           else
+             paste0("Could not execute external predictor tools in this environment ",
+                    "(no working bash shell found)."))
     }
-    if (run_predictors && !debug_info$conda_env_exists) {
-      warning("Conda environment 'isoform_tools' not found. Predictors may fail.\n",
-              "Run install_wsl_isoform_tools() to set up the environment.")
+    if (!isTRUE(debug_info$conda_env_exists)) {
+      warning("Conda environment 'isoform_tools' not found. Predictors may still work if the ",
+              "required tools (CPAT, SignalP, hmmscan/InterProScan) are already on PATH.\n",
+              "On Windows/WSL run install_wsl_isoform_tools() to set up the environment; ",
+              "on Linux/macOS install these tools manually or via conda/mamba.")
     }
     # Write summary to log
     .log_wsl_command("debug_wsl()", exit_code = 0,
@@ -549,7 +558,8 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
         use_wsl     = use_wsl,
         wsl_distro  = wsl_distro,
         isoform_obj = isoform_obj,
-        save_dir    = save_dir
+        save_dir    = save_dir,
+        n_cpu       = predictor_cpu
       )
       .ckpt_save(switch_list, "step3_predictors.rds")
     }
@@ -583,51 +593,77 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 #   * ISA functions: analyzeCPAT / analyzeSignalIP / analyzePFAM / analyzeInterProScan
 #
 .run_external_predictors <- function(switch_list, fasta_file, out_dir,
-                                      use_wsl, wsl_distro, isoform_obj, save_dir) {
+                                      use_wsl, wsl_distro, isoform_obj, save_dir,
+                                      n_cpu = NULL) {
   is_windows <- .Platform$OS.type == "windows"
-  via_wsl    <- is_windows && use_wsl
+  via_wsl    <- is_windows && isTRUE(use_wsl)
 
   log_dir <- file.path(out_dir, "Log")
   if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 
   # --------------------------------------------------------------------------
+  # 0. Decide how many CPU threads hmmscan / InterProScan may use. Auto-detect
+  #    when not supplied, leaving one core free for the R session itself.
+  # --------------------------------------------------------------------------
+  if (is.null(n_cpu) || !is.finite(n_cpu) || n_cpu < 1) {
+    detected <- tryCatch(parallel::detectCores(logical = TRUE), error = function(e) NA_integer_)
+    n_cpu <- if (is.na(detected) || detected < 1) 1L else max(1L, detected - 1L)
+  }
+  n_cpu <- as.integer(n_cpu)
+  message("Using ", n_cpu, " CPU thread(s) for hmmscan / InterProScan.")
+
+  # --------------------------------------------------------------------------
   # 1. Discover conda.sh and verify 'isoform_tools' environment
+  #    (cached per distro/execution-mode within the R session to avoid
+  #    repeating a filesystem-wide `find` on every predictor run)
   # --------------------------------------------------------------------------
   message("Detecting conda environment in execution context...")
-  conda_sh      <- NULL
-  has_conda_env <- FALSE
+  cache_key <- paste0("conda_sh::", wsl_distro, "::", via_wsl)
 
-  find_out <- .wsl_exec_script(
-    bash_body = paste(
-      "find /home /opt /root -maxdepth 8",
-      "-name 'conda.sh' -path '*/profile.d/*'",
-      "2>/dev/null | head -5"
-    ),
-    wsl_distro = wsl_distro, use_wsl = via_wsl,
-    conda_sh = NULL, intern = TRUE, ignore_stderr = TRUE,
-    log_dir = log_dir
-  )
-  find_out <- trimws(find_out[nzchar(trimws(find_out))])
+  if (exists(cache_key, envir = .expressom_cache, inherits = FALSE)) {
+    cached        <- get(cache_key, envir = .expressom_cache, inherits = FALSE)
+    conda_sh      <- if (nzchar(cached)) cached else NULL
+    has_conda_env <- nzchar(cached) > 0
+    message("  Using cached conda lookup: ",
+            if (has_conda_env) conda_sh else "no 'isoform_tools' env found")
+  } else {
+    conda_sh      <- NULL
+    has_conda_env <- FALSE
 
-  for (csh in find_out) {
-    ok <- .wsl_exec_script(
-      bash_body = c(
-        sprintf('. "%s"', csh),
-        'conda env list 2>/dev/null | grep -q "isoform_tools"'
+    find_out <- .wsl_exec_script(
+      bash_body = paste(
+        "find /home /opt /root -maxdepth 8",
+        "-name 'conda.sh' -path '*/profile.d/*'",
+        "2>/dev/null | head -5"
       ),
       wsl_distro = wsl_distro, use_wsl = via_wsl,
-      conda_sh = NULL, intern = FALSE, ignore_stderr = TRUE,
+      conda_sh = NULL, intern = TRUE, ignore_stderr = TRUE,
       log_dir = log_dir
     )
-    if (isTRUE(ok == 0L)) { conda_sh <- csh; has_conda_env <- TRUE; break }
+    find_out <- trimws(find_out[nzchar(trimws(find_out))])
+
+    for (csh in find_out) {
+      ok <- .wsl_exec_script(
+        bash_body = c(
+          sprintf('. "%s"', csh),
+          'conda env list 2>/dev/null | grep -q "isoform_tools"'
+        ),
+        wsl_distro = wsl_distro, use_wsl = via_wsl,
+        conda_sh = NULL, intern = FALSE, ignore_stderr = TRUE,
+        log_dir = log_dir
+      )
+      if (isTRUE(ok == 0L)) { conda_sh <- csh; has_conda_env <- TRUE; break }
+    }
+
+    assign(cache_key, if (has_conda_env) conda_sh else "", envir = .expressom_cache)
+
+    if (has_conda_env)
+      message("  Using conda env 'isoform_tools' (", conda_sh, ")")
+    else
+      message("  No 'isoform_tools' env found. Using system PATH.")
   }
 
   active_conda <- if (has_conda_env) conda_sh else NULL
-
-  if (has_conda_env)
-    message("  Using conda env 'isoform_tools' (", conda_sh, ")")
-  else
-    message("  No 'isoform_tools' env found. Using system PATH.")
 
   # --------------------------------------------------------------------------
   # 2. Convenience wrappers
@@ -788,9 +824,11 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     has_sp5 <- tool_ok("signalp")
 
     sp_result_file <- NULL
-    sp_status      <- 1L
+    sp_attempted   <- FALSE
+    sp_status      <- NA_integer_
 
     if (has_sp6) {
+      sp_attempted <- TRUE
       # SignalP 6 syntax
       sp_cmd <- sprintf(
         "signalp6 --fastafile %s --organism eukarya --output_dir %s --format txt --mode fast",
@@ -808,6 +846,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       }
 
     } else if (has_sp5) {
+      sp_attempted <- TRUE
       # SignalP 5 syntax
       sp_cmd <- sprintf(
         "signalp -fasta %s -org euk -format short -output %s",
@@ -836,7 +875,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
         error = function(e) { message("  analyzeSignalIP(): ", e$message); switch_list }
       )
       message("  SignalP results imported successfully.")
-    } else if (sp_status != 0L) {
+    } else if (sp_attempted && !is.na(sp_status) && sp_status != 0L) {
       message("  SignalP execution failed (exit ", sp_status, "). Skipping.")
     }
   }
@@ -858,9 +897,10 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       iprscan_xml_w <- w2l(iprscan_xml_l)
 
       ips_cmd <- sprintf(
-        "interproscan.sh -i %s -f XML -o %s -dp -appl Pfam -goterms -iprlookup",
+        "interproscan.sh -i %s -f XML -o %s -dp -appl Pfam -goterms -iprlookup -cpu %d",
         shQuote(pfam_fa_w,     type = "sh"),
-        shQuote(iprscan_xml_w, type = "sh")
+        shQuote(iprscan_xml_w, type = "sh"),
+        n_cpu
       )
       message("  Running InterProScan...")
       ips_status <- run_tool(ips_cmd)
@@ -896,7 +936,8 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
           # Use --domtblout (domain table) – the format ISA's analyzePFAM expects
           hm_cmd <- sprintf(
-            "hmmscan --cpu 4 --domtblout %s %s %s",
+            "hmmscan --cpu %d --domtblout %s %s %s",
+            n_cpu,
             shQuote(pfam_tbl_w, type = "sh"),
             shQuote(pfam_db_w,  type = "sh"),
             shQuote(pfam_fa_w,  type = "sh")

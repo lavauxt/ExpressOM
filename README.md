@@ -259,6 +259,48 @@ run_bulk_pipeline(
 )
 ```
 
+## Isoform-Level Analysis: External Predictors (CPAT, SignalP, Pfam)
+
+When `run_isoform = TRUE` and `run_predictors = TRUE`, `run_isoform_switch()`
+can enrich the `IsoformSwitchAnalyzeR` result with coding-potential (CPAT),
+signal-peptide (SignalP), and protein-domain (Pfam via InterProScan or
+`hmmscan`) predictions. **This now works the same way on Windows and on
+Linux/macOS:**
+
+* **Windows**: the tools run inside a WSL Ubuntu distribution. Set
+  `use_wsl = TRUE` (the default on Windows) and `wsl_distro` to the name of
+  your installed distribution.
+* **Linux / macOS** (including an R session already running *inside* WSL):
+  the tools run natively against `PATH` / a conda environment named
+  `isoform_tools`. No `use_wsl` / `wsl_distro` configuration is needed.
+
+```R
+# Check tool/database availability first (works on any platform):
+debug_wsl(use_wsl = FALSE)          # native Linux / macOS
+debug_wsl(distro = "Ubuntu-22.04")  # Windows, routes through WSL
+
+# Install tools + reference databases:
+install_wsl_isoform_tools(distro = "Ubuntu-22.04")   # Windows / WSL
+install_isoform_databases(use_wsl = FALSE)           # Linux / macOS (tools via mamba/conda separately)
+
+switch_list <- run_isoform_switch(
+  isoform_obj    = isoform_import,
+  condition      = "condition",
+  level          = "Treated",
+  base           = "Control",
+  fasta_file     = "reference/transcripts.fa",
+  gff_file       = "reference/annotation.gtf",
+  out_dir        = "results/isoform",
+  run_predictors = TRUE,
+  use_wsl        = TRUE,             # ignored on Linux/macOS
+  wsl_distro     = "Ubuntu-22.04",   # ignored on Linux/macOS
+  predictor_cpu  = NULL              # NULL auto-detects available CPU cores
+)
+```
+
+See `vignette("isoform-predictors", package = "ExpressOM")` for a full
+walkthrough, including troubleshooting and performance notes.
+
 ## License
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE).

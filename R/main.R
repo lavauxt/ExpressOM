@@ -42,8 +42,14 @@
 #' @param execution_order String: "dge_first" or "isoform_first" to prioritise which analysis runs first
 #' @param isoform_fasta Path to transcript FASTA file (auto-downloads if NULL and run_isoform=TRUE)
 #' @param isoform_gff Path to GFF/GTF annotation file (auto-downloads if NULL and run_isoform=TRUE)
-#' @param use_wsl Logical: use WSL Ubuntu for external tools (Windows only)
-#' @param wsl_distro Name of WSL distribution (default "Ubuntu-22.04")
+#' @param use_wsl Logical: route external predictor tools (CPAT, SignalP,
+#'   Pfam) through WSL. Only meaningful on Windows; defaults to TRUE there.
+#'   Ignored on Linux/macOS, where tools run natively against PATH.
+#' @param wsl_distro Name of WSL distribution (default "Ubuntu-22.04"), only
+#'   used when running on Windows with use_wsl = TRUE
+#' @param predictor_cpu Integer: CPU threads for hmmscan / InterProScan during
+#'   the Pfam prediction step. Default NULL auto-detects available cores
+#'   (\code{parallel::detectCores() - 1}).
 #' @param resume_isoform_from Path to directory with saved DTE/DTU RDS files to resume isoform analysis
 #' @param isoform_report_genes Gene symbols (e.g., c("TP53", "BCL2")) for transcript-proportion plots
 #' @param nBest Number of top genes to include in RegionReport
@@ -83,8 +89,9 @@ expressom <- function(count_type        = "salmon",
                       execution_order   = c("dge_first", "isoform_first"),
                       isoform_fasta     = NULL,
                       isoform_gff       = NULL,
-                      use_wsl           = FALSE,
+                      use_wsl           = (.Platform$OS.type == "windows"),
                       wsl_distro        = "Ubuntu-22.04",
+                      predictor_cpu     = NULL,
                       resume_isoform_from = NULL,
                       isoform_report_genes = NULL,
                       eda_only          = FALSE,
@@ -92,12 +99,15 @@ expressom <- function(count_type        = "salmon",
 
   execution_order <- match.arg(execution_order)
 
-  # Guard: warn if external predictors requested without WSL on Windows
+  # Guard: warn if external predictors requested without WSL on native Windows
+  # (Linux/macOS -- including R already running inside WSL -- need no warning:
+  # tools are simply expected to be on PATH there.)
   if (isTRUE(run_predictors) && .Platform$OS.type == "windows" && !use_wsl) {
     warning(
       "run_predictors = TRUE but use_wsl = FALSE on Windows. ",
-      "External tools (CPAT, SignalP, Pfam) run inside WSL; set use_wsl = TRUE. ",
-      "Predictors will be skipped unless you are running R inside WSL itself."
+      "External tools (CPAT, SignalP, Pfam) normally run inside WSL on Windows; ",
+      "set use_wsl = TRUE, or ensure bash + the tools are directly reachable ",
+      "(e.g. Git-Bash/MSYS2) if you intend to run them natively."
     )
   }
   old_warn        <- getOption("nwarnings")
@@ -130,10 +140,10 @@ expressom <- function(count_type        = "salmon",
     }
   }
 
-  # Early WSL debug if requested
-  if (run_isoform && .Platform$OS.type == "windows" && use_wsl) {
+  # Early predictor-environment check (Windows+WSL or native Linux/macOS)
+  if (run_isoform && isTRUE(run_predictors)) {
     debug_wsl(distro = wsl_distro, out_dir = out_dir,
-              conda_env = "isoform_tools", verbose = TRUE)
+              conda_env = "isoform_tools", verbose = TRUE, use_wsl = use_wsl)
   }
 
   # ==========================================================================
@@ -534,7 +544,8 @@ if (!is.null(gene_sets_zscore)) {
         use_wsl        = use_wsl,
         wsl_distro     = wsl_distro,
         save_dir       = iso_save_dir,
-        resume_from    = resume_isoform_from
+        resume_from    = resume_isoform_from,
+        predictor_cpu  = predictor_cpu
       )
 
       # Final copies to iso_dir top level for backward compatibility

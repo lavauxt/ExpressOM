@@ -1,0 +1,174 @@
+---
+title: "Running External Isoform Predictors (CPAT, SignalP, Pfam) on Windows and Linux"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Running External Isoform Predictors on Windows and Linux}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment  = "#>",
+  eval     = FALSE
+)
+```
+
+## Overview
+
+`run_isoform_switch(..., run_predictors = TRUE)` can enrich an
+`IsoformSwitchAnalyzeR` result with three external predictions that are not
+pure-R tools:
+
+| Tool                    | Predicts                          | R import function       |
+|--------------------------|-----------------------------------|--------------------------|
+| CPAT (`cpat`/`run_cpat.py`) | Coding potential                | `analyzeCPAT()`          |
+| SignalP (`signalp`/`signalp6`) | Signal peptides              | `analyzeSignalIP()`     |
+| InterProScan / hmmscan  | Pfam protein domains              | `analyzeInterProScan()` / `analyzePFAM()` |
+
+These tools only ship Linux binaries. ExpressOM handles this transparently on
+every platform:
+
+* **Native Linux / macOS** (including an R session already running *inside*
+  WSL): the tools are called directly through the local `bash` -- no extra
+  configuration needed beyond having them on `PATH` (or in a conda
+  environment named `isoform_tools`).
+* **Windows**: the same commands are transparently routed through
+  `wsl -d <distro> bash ...`, so you keep the familiar R/RStudio-on-Windows
+  workflow while the heavy lifting happens inside a WSL Ubuntu distribution.
+
+You do not need to write different code for each platform -- `use_wsl`
+defaults to `TRUE` on Windows and is ignored everywhere else.
+
+## 1. Checking your environment first
+
+Before running a full analysis, use `debug_wsl()` to verify that the tools,
+conda environment, and reference databases are reachable. This works
+identically on Windows and Linux/macOS:
+
+```{r}
+library(ExpressOM)
+
+# On Windows (routes through WSL by default):
+debug_wsl(distro = "Ubuntu-22.04", out_dir = "./results")
+
+# On native Linux / macOS (no distro needed):
+debug_wsl(use_wsl = FALSE, out_dir = "./results")
+```
+
+This prints a checklist and writes a machine-readable summary to
+`results/Log/wsl_debug.json`:
+
+```
+Checking external predictor tools in the native execution environment...
+  ✓ execution environment reachable
+  ✓ conda found
+  ✓ conda environment 'isoform_tools' exists
+  ✓ cpat
+  ✗ run_cpat.py
+  ✓ signalp6
+  ✗ signalp
+  ✓ hmmscan
+  ✗ interproscan.sh
+  ✓ Pfam-A.hmm
+  ✓ CPAT logit models
+```
+
+If `wsl_available` is `FALSE`, the underlying shell itself could not be
+reached (missing `wsl` executable on Windows, or no `bash` on PATH on
+Linux/macOS) -- fix that first. If `conda_env_exists` is `FALSE`, the tools
+are still tried directly on `PATH`, but a warning is issued so you know why a
+tool might be missing.
+
+## 2. Installing the tools
+
+### Windows (via WSL)
+
+```{r}
+install_wsl_isoform_tools(
+  distro              = "Ubuntu-22.04",
+  use_mamba           = TRUE,
+  install_databases   = TRUE,
+  windows_signalp_dir = "C:/tools/signalp-6.0"  # optional, if you have a licensed copy
+)
+```
+
+### Linux / macOS
+
+Install the tools with conda/mamba directly (no WSL layer involved):
+
+```bash
+mamba create -n isoform_tools -c bioconda cpat hmmer signalp
+conda activate isoform_tools
+```
+
+Then fetch the CPAT/Pfam reference data with the same helper used on
+Windows:
+
+```{r}
+install_isoform_databases(use_wsl = FALSE)
+```
+
+## 3. Running the predictors
+
+```{r}
+switch_list <- run_isoform_switch(
+  isoform_obj    = isoform_import,
+  condition      = "condition",
+  level          = "Treated",
+  base           = "Control",
+  fasta_file     = "reference/transcripts.fa",
+  gff_file       = "reference/annotation.gtf",
+  out_dir        = "results/isoform",
+  run_predictors = TRUE,
+
+  # Windows only -- ignored on Linux/macOS:
+  use_wsl        = TRUE,
+  wsl_distro     = "Ubuntu-22.04",
+
+  # Optional: cap CPU threads used by hmmscan / InterProScan.
+  # Leave NULL to auto-detect (all cores minus one).
+  predictor_cpu  = 4
+)
+```
+
+Internally, `run_isoform_switch()`:
+
+1. Calls `debug_wsl()` once up front and stops with a clear error if the
+   execution shell itself (WSL, or native `bash`) cannot be reached, or
+   warns (without stopping) if the `isoform_tools` conda environment is
+   missing but tools might still be found directly on `PATH`.
+2. Extracts NT/AA FASTA sequences from the `SwitchList`.
+3. Runs CPAT on the NT sequences, then SignalP and Pfam (InterProScan first,
+   falling back to `hmmscan`) on the AA sequences.
+4. Imports each tool's results back into the `SwitchList` via the matching
+   `IsoformSwitchAnalyzeR::analyze*()` function.
+5. Checkpoints the result to `step3_predictors.rds` inside `save_dir`, so a
+   crashed or interrupted run can resume without repeating already-finished
+   predictor steps.
+
+## 4. Performance notes
+
+* `predictor_cpu` controls the `--cpu` / `-cpu` flag passed to `hmmscan` and
+  `interproscan.sh`. Leaving it `NULL` auto-detects available cores via
+  `parallel::detectCores()` and reserves one core for the R session itself.
+* Conda-environment discovery (`conda.sh` lookup) is cached for the duration
+  of the R session, so calling `run_isoform_switch()` repeatedly (e.g. once
+  per contrast in a loop, as described in the main package README for
+  subgroup analyses) does not repeat an expensive filesystem-wide `find` each
+  time.
+* CPAT, SignalP, and Pfam are still run sequentially per call, since each
+  step is itself already multi-threaded; if you are looping over many
+  contrasts, consider parallelising *across* contrasts with
+  `BiocParallel::bplapply()` instead, giving each worker its own `out_dir`.
+
+## 5. Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| `debug_wsl()` reports `wsl_available = FALSE` on Windows | WSL is not installed, or the named `distro` does not exist. Run `wsl --list` in a terminal to check. |
+| `debug_wsl()` reports `wsl_available = FALSE` on Linux/macOS | No `bash` on `PATH`. This should not normally happen; check your shell configuration. |
+| A specific tool shows `✗` even though it is installed | It may only exist inside a conda environment with a different name than `isoform_tools`, or your shell's login profile does not source `conda.sh` automatically. Pass the correct `conda_env` name, or activate the environment before launching R. |
+| `Pfam-A.hmm not found` | Run `install_isoform_databases()` (with `use_wsl = TRUE` on Windows or `FALSE` on Linux/macOS). |
+| Predictor step silently skipped | Every predictor step is optional and fails soft: if a tool or database is missing, that section is skipped with a `message()` rather than stopping the whole pipeline. Check the console output and `results/isoform/Log/wsl_commands.log` for details. |

@@ -1,6 +1,23 @@
 # ==============================================================================
 # utils_isoform.R - WSL/conda helpers + install/database utilities
 # ==============================================================================
+#
+# Cross-platform notes
+# ---------------------------------------------------------------------------
+# External predictor tools (CPAT, SignalP, hmmscan/InterProScan) are launched
+# through a single chokepoint, .wsl_exec_script(). On Windows with
+# use_wsl = TRUE, commands are routed through `wsl -d <distro> bash <script>`.
+# On every other platform (native Linux, macOS, or R already running inside
+# WSL) commands are simply run with the local `bash`. Both branches are
+# wrapped defensively so a missing `wsl` or `bash` executable produces a
+# clean, informative skip instead of a hard R error that would abort the
+# whole pipeline.
+# ---------------------------------------------------------------------------
+
+# Small in-session cache to avoid repeatedly shelling out to `find` for the
+# same conda.sh / distro combination during a single predictor run.
+# @keywords internal
+.expressom_cache <- new.env(parent = emptyenv())
 
 # ---- Internal WSL + conda execution helpers ----------------------------------
 
@@ -94,41 +111,85 @@
   script <- c("#!/bin/bash", "set -e", activate, bash_body)
   tmp    <- tempfile(fileext = ".sh")
   on.exit(unlink(tmp), add = TRUE)
-  writeLines(script, tmp)
+  writeLines(script, tmp, useBytes = TRUE)
 
-  via_wsl <- (.Platform$OS.type == "windows") && use_wsl
+  # Route through WSL only on Windows AND when explicitly requested. Every
+  # other case (native Linux, macOS, or R already running inside WSL itself)
+  # executes the script with the local `bash` -- no WSL concept applies there.
+  via_wsl <- (.Platform$OS.type == "windows") && isTRUE(use_wsl)
+
+  run_status      <- 127L
+  out             <- character(0)
+  missing_exe_msg <- NULL
 
   if (via_wsl) {
-    wsl_sh <- .to_wsl_path(tmp, wsl_distro)
-    args   <- c("-d", wsl_distro, "bash", wsl_sh)
-    if (intern) {
-      out <- system2("wsl", args, stdout = TRUE, stderr = FALSE)
-      status <- attr(out, "status") %||% 0L
+    if (!nzchar(Sys.which("wsl"))) {
+      missing_exe_msg <- paste0(
+        "'wsl' executable not found on PATH. Install WSL (wsl --install) or ",
+        "set use_wsl = FALSE if the required tools are available natively."
+      )
     } else {
-      status <- system2("wsl", args,
-                        stdout = if (ignore_stderr) FALSE else "",
-                        stderr = if (ignore_stderr) FALSE else "")
+      wsl_sh <- .to_wsl_path(tmp, wsl_distro)
+      args   <- c("-d", wsl_distro, "bash", wsl_sh)
+      res <- tryCatch({
+        if (intern) {
+          o <- suppressWarnings(system2("wsl", args,
+                                        stdout = TRUE,
+                                        stderr = if (ignore_stderr) FALSE else TRUE))
+          list(out = o, status = attr(o, "status") %||% 0L)
+        } else {
+          s <- system2("wsl", args,
+                      stdout = if (ignore_stderr) FALSE else "",
+                      stderr = if (ignore_stderr) FALSE else "")
+          list(out = character(0), status = s)
+        }
+      }, error = function(e) list(out = character(0), status = 127L,
+                                   error = conditionMessage(e)))
+      out <- res$out; run_status <- res$status
+      if (!is.null(res$error)) missing_exe_msg <- res$error
     }
   } else {
-    if (intern) {
-      out <- system2("bash", tmp, stdout = TRUE, stderr = FALSE)
-      status <- attr(out, "status") %||% 0L
+    bash_bin <- Sys.which("bash")
+    if (!nzchar(bash_bin)) {
+      missing_exe_msg <- paste0(
+        "'bash' executable not found on PATH. External predictor tools ",
+        "(CPAT / SignalP / Pfam) require a bash shell -- on native Windows ",
+        "without WSL/Git-Bash these steps will be skipped."
+      )
     } else {
-      status <- system2("bash", tmp,
-                        stdout = if (ignore_stderr) FALSE else "",
-                        stderr = if (ignore_stderr) FALSE else "")
+      res <- tryCatch({
+        if (intern) {
+          o <- suppressWarnings(system2(bash_bin, tmp,
+                                        stdout = TRUE,
+                                        stderr = if (ignore_stderr) FALSE else TRUE))
+          list(out = o, status = attr(o, "status") %||% 0L)
+        } else {
+          s <- system2(bash_bin, tmp,
+                      stdout = if (ignore_stderr) FALSE else "",
+                      stderr = if (ignore_stderr) FALSE else "")
+          list(out = character(0), status = s)
+        }
+      }, error = function(e) list(out = character(0), status = 127L,
+                                   error = conditionMessage(e)))
+      out <- res$out; run_status <- res$status
+      if (!is.null(res$error)) missing_exe_msg <- res$error
     }
+  }
+
+  if (!is.null(missing_exe_msg)) {
+    warning(missing_exe_msg, call. = FALSE)
+    run_status <- 127L
   }
 
   if (!is.null(log_dir)) {
     .log_wsl_command(paste(bash_body, collapse = "; "),
-                     exit_code = status,
-                     stdout = if(intern) out else NULL,
-                     stderr = NULL,
+                     exit_code = run_status,
+                     stdout = if (intern) out else NULL,
+                     stderr = missing_exe_msg,
                      log_dir = log_dir)
   }
 
-  if (intern) return(out) else return(status)
+  if (intern) return(out) else return(run_status)
 }
 
 #' Check whether a command-line tool is accessible in the execution environment
@@ -232,121 +293,153 @@ check_wsl <- function(distro = "Ubuntu") {
   return(length(res) > 0 && trimws(res[[1]]) == "OK")
 }
 
-#' Debug WSL environment for isoform analysis
+#' Debug the external-predictor execution environment (CPAT / SignalP / Pfam)
 #'
-#' Checks WSL availability, distribution, conda environment, and external tools.
-#' Writes a detailed log file to `out_dir/Log/wsl_debug.json`.
+#' Checks that the shell used to run external predictor tools is reachable,
+#' whether conda is available, whether the `isoform_tools` conda environment
+#' exists, whether each required tool is on PATH, and whether the Pfam / CPAT
+#' databases can be located. Writes a detailed log file to
+#' `out_dir/Log/wsl_debug.json`.
 #'
-#' @param distro WSL distribution name (default "Ubuntu")
+#' This function is fully cross-platform:
+#' \itemize{
+#'   \item On Windows with \code{use_wsl = TRUE} (the default on Windows),
+#'     every check is routed through \code{wsl -d <distro> bash ...}.
+#'   \item On native Linux, macOS, or when R itself is already running inside
+#'     WSL, every check runs against the local \code{bash} / PATH directly --
+#'     no WSL distribution is required or contacted.
+#' }
+#'
+#' @param distro WSL distribution name (only used when routing through WSL)
 #' @param out_dir Output directory for logs (if NULL, returns only the list)
 #' @param conda_env Name of the conda environment to check (default "isoform_tools")
 #' @param verbose Print progress messages
+#' @param use_wsl Logical: route checks through WSL. Defaults to `TRUE` on
+#'   Windows and is ignored (treated as `FALSE`) on every other platform.
 #' @return Invisibly, a list with check results
 #' @export
 debug_wsl <- function(distro = "Ubuntu", out_dir = NULL,
-                      conda_env = "isoform_tools", verbose = TRUE) {
-  
-  if (.Platform$OS.type != "windows") {
-    msg <- "Not on Windows – WSL checks are only relevant for Windows systems."
-    if (verbose) message(msg)
-    return(invisible(list(available = FALSE, reason = msg)))
+                      conda_env = "isoform_tools", verbose = TRUE,
+                      use_wsl = NULL) {
+
+  is_windows <- .Platform$OS.type == "windows"
+  if (is.null(use_wsl)) use_wsl <- is_windows
+  via_wsl <- is_windows && isTRUE(use_wsl)
+
+  if (verbose) {
+    where <- if (via_wsl) paste0("WSL (distro: ", distro, ")") else "the native execution environment"
+    message("Checking external predictor tools in ", where, "...")
   }
-  
-  if (verbose) message("Checking WSL environment (distro: ", distro, ")...")
-  
-  # Helper to run a bash command inside WSL and capture output/exit code
-  run_wsl <- function(cmd, capture = TRUE) {
-    full_cmd <- c("-d", distro, "bash", "-c", shQuote(cmd))
-    if (capture) {
-      out <- system2("wsl", full_cmd, stdout = TRUE, stderr = TRUE)
-      attr(out, "status") <- attr(out, "status") %||% 0L
-      out
-    } else {
-      system2("wsl", full_cmd)
-    }
-  }
-  
+
   results <- list(
-    timestamp = Sys.time(),
-    distro = distro,
-    wsl_available = FALSE,
-    conda_available = FALSE,
+    timestamp        = Sys.time(),
+    platform         = if (via_wsl) "windows+wsl" else .Platform$OS.type,
+    distro           = if (via_wsl) distro else NA_character_,
+    wsl_available    = FALSE,
+    conda_available  = FALSE,
     conda_env_exists = FALSE,
-    tools = list(),
-    errors = character()
+    tools            = list(),
+    errors           = character()
   )
-  
-  # 1. WSL basic availability
-  wsl_test <- tryCatch({
-    run_wsl("echo OK", capture = TRUE)
-  }, error = function(e) NULL)
-  if (!is.null(wsl_test) && length(wsl_test) == 1 && wsl_test[1] == "OK") {
-    results$wsl_available <- TRUE
-  } else {
-    results$errors <- c(results$errors, "WSL not responding or distro not found")
-    if (verbose) message("  ✗ WSL not available")
+
+  # 1. Confirm the wsl executable exists (Windows+WSL path only), then confirm
+  #    the execution shell (WSL distro, or local bash) actually responds.
+  if (via_wsl && !nzchar(Sys.which("wsl"))) {
+    results$errors <- c(results$errors, "'wsl' executable not found on PATH")
+    if (verbose) message("  \u2717 wsl executable not found")
     return(invisible(results))
   }
-  if (verbose) message("  ✓ WSL is available")
-  
+
+  probe <- .wsl_exec_script("echo OK", wsl_distro = distro, use_wsl = via_wsl,
+                            intern = TRUE, ignore_stderr = TRUE)
+  if (length(probe) == 0 || !any(grepl("OK", probe))) {
+    results$errors <- c(results$errors,
+                        if (via_wsl) "WSL not responding or distro not found"
+                        else "Could not execute a bash script natively (is 'bash' on PATH?)")
+    if (verbose) message("  \u2717 execution environment not responding")
+    return(invisible(results))
+  }
+  results$wsl_available <- TRUE
+  if (verbose) message("  \u2713 execution environment reachable")
+
   # 2. Conda installation and environment
-  conda_check <- run_wsl("command -v conda || echo 'not found'")
-  if (any(grepl("conda", conda_check))) {
+  conda_check <- .wsl_exec_script("command -v conda || echo 'not found'",
+                                  wsl_distro = distro, use_wsl = via_wsl,
+                                  intern = TRUE, ignore_stderr = TRUE)
+  if (any(grepl("conda", conda_check)) && !any(grepl("^not found$", trimws(conda_check)))) {
     results$conda_available <- TRUE
-    if (verbose) message("  ✓ conda found")
-    
-    env_check <- run_wsl(paste0("conda env list | grep -q '", conda_env, "' && echo 'exists'"))
+    if (verbose) message("  \u2713 conda found")
+
+    env_check <- .wsl_exec_script(
+      sprintf("conda env list 2>/dev/null | grep -q '%s' && echo 'exists'", conda_env),
+      wsl_distro = distro, use_wsl = via_wsl, intern = TRUE, ignore_stderr = TRUE
+    )
     if (length(env_check) > 0 && any(grepl("exists", env_check))) {
       results$conda_env_exists <- TRUE
-      if (verbose) message("  ✓ conda environment '", conda_env, "' exists")
+      if (verbose) message("  \u2713 conda environment '", conda_env, "' exists")
     } else {
       results$errors <- c(results$errors, paste0("conda environment '", conda_env, "' missing"))
-      if (verbose) message("  ✗ conda environment '", conda_env, "' not found")
+      if (verbose) message("  \u2717 conda environment '", conda_env, "' not found")
     }
   } else {
-    results$errors <- c(results$errors, "conda not found in WSL")
-    if (verbose) message("  ✗ conda not found")
+    results$errors <- c(results$errors, "conda not found")
+    if (verbose) message("  \u2717 conda not found (tools may still be available directly on PATH)")
   }
-  
+
+  # Best-effort conda.sh discovery, reused for tool checks below so tools
+  # that only exist inside the conda env (and not on the bare PATH) are
+  # still detected correctly.
+  conda_sh_guess <- NULL
+  if (results$conda_env_exists) {
+    csh <- .wsl_exec_script(
+      paste(
+        'for c in "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh"',
+        '"$HOME/miniconda3/etc/profile.d/conda.sh" "$HOME/anaconda3/etc/profile.d/conda.sh"',
+        '"$HOME/mambaforge/etc/profile.d/conda.sh" "$HOME/miniforge3/etc/profile.d/conda.sh";',
+        'do [ -f "$c" ] && echo "$c" && break; done'
+      ),
+      wsl_distro = distro, use_wsl = via_wsl, intern = TRUE, ignore_stderr = TRUE
+    )
+    csh <- trimws(csh[nzchar(trimws(csh))])
+    if (length(csh) > 0) conda_sh_guess <- csh[1]
+  }
+
   # 3. Required tools (CPAT, SignalP, hmmscan, interproscan.sh)
   tools_list <- c("cpat", "run_cpat.py", "signalp6", "signalp", "hmmscan", "interproscan.sh")
   for (tool in tools_list) {
-    # Use `command -v` inside the conda environment if available
-    check_cmd <- if (results$conda_env_exists) {
-      paste0("source $(conda info --base)/etc/profile.d/conda.sh && conda activate ", conda_env,
-             " && command -v ", tool, " 2>/dev/null || echo 'NOTFOUND'")
-    } else {
-      paste0("command -v ", tool, " 2>/dev/null || echo 'NOTFOUND'")
+    found <- .wsl_tool_exists(tool, wsl_distro = distro, use_wsl = via_wsl,
+                              conda_sh = NULL, conda_env = conda_env)
+    if (!found && !is.null(conda_sh_guess)) {
+      found <- .wsl_tool_exists(tool, wsl_distro = distro, use_wsl = via_wsl,
+                                conda_sh = conda_sh_guess, conda_env = conda_env)
     }
-    out <- run_wsl(check_cmd)
-    found <- !any(grepl("NOTFOUND", out))
     results$tools[[tool]] <- found
-    if (verbose) message("  ", if(found) "✓" else "✗", " ", tool)
+    if (verbose) message("  ", if (found) "\u2713" else "\u2717", " ", tool)
     if (!found && tool %in% c("cpat", "run_cpat.py", "signalp6", "signalp", "hmmscan")) {
       results$errors <- c(results$errors, paste0("Missing tool: ", tool))
     }
   }
-  
+
   # 4. Additional databases (Pfam, CPAT models)
-  pfam_path <- .find_pfam_db(wsl_distro = distro, use_wsl = TRUE,
-                             conda_sh = NULL, conda_env = conda_env)
+  pfam_path <- .find_pfam_db(wsl_distro = distro, use_wsl = via_wsl,
+                             conda_sh = conda_sh_guess, conda_env = conda_env)
   results$pfam_db_found <- !is.null(pfam_path)
-  if (verbose) message("  ", if(results$pfam_db_found) "✓" else "✗", " Pfam-A.hmm")
-  
-  cpat_logit_human <- .find_cpat_logit_model("Human", distro, TRUE, NULL, conda_env)
-  cpat_logit_mouse <- .find_cpat_logit_model("Mouse", distro, TRUE, NULL, conda_env)
+  if (verbose) message("  ", if (results$pfam_db_found) "\u2713" else "\u2717", " Pfam-A.hmm")
+
+  cpat_logit_human <- .find_cpat_logit_model("Human", distro, via_wsl, conda_sh_guess, conda_env)
+  cpat_logit_mouse <- .find_cpat_logit_model("Mouse", distro, via_wsl, conda_sh_guess, conda_env)
   results$cpat_models_found <- !is.null(cpat_logit_human) && !is.null(cpat_logit_mouse)
-  if (verbose) message("  ", if(results$cpat_models_found) "✓" else "✗", " CPAT logit models")
-  
+  if (verbose) message("  ", if (results$cpat_models_found) "\u2713" else "\u2717", " CPAT logit models")
+
   # 5. Write log file if out_dir provided
   if (!is.null(out_dir)) {
     log_dir <- file.path(out_dir, "Log")
     if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
     log_file <- file.path(log_dir, "wsl_debug.json")
     jsonlite::write_json(results, log_file, pretty = TRUE, auto_unbox = TRUE)
-    if (verbose) message("  → Log written to ", log_file)
+    if (verbose) message("  \u2192 Log written to ", log_file)
   }
-  
+
   invisible(results)
 }
 
