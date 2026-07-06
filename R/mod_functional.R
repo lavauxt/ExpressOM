@@ -257,7 +257,9 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     message("=== END DEBUG ===")
   }
 
-  for (pkg in c("ReactomePA", "DOSE", "pathview", "enrichplot", "enrichR", "clusterProfiler")) {
+  # Ensure required packages are available
+  required_pkgs <- c("ReactomePA", "DOSE", "pathview", "enrichplot", "enrichR", "clusterProfiler", "msigdbr")
+  for (pkg in required_pkgs) {
     if (!requireNamespace(pkg, quietly = TRUE)) {
       stop("The required package '", pkg, "' is missing. Please install it to proceed with functional analysis.")
     }
@@ -291,8 +293,9 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   # PART 1: ORA (Fisher / Hypergeometric)
   # ==============================================================================
 
-  # ---- 1A. ORA EnrichR TF (no library attach)
-  message("Running EnrichR TF ORA...")
+  # ---- 1A. Transcription Factor (TF) enrichment ----
+  #    Try EnrichR online first; if unreachable, fall back to local MSigDB C3 (TFT)
+  message("Running Transcription Factor (TF) enrichment...")
   if (length(tf_db) > 0) {
     websiteLive <- getOption("enrichR.live", NA)
     if (is.na(websiteLive)) {
@@ -300,13 +303,11 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
         enrichR::listEnrichrDbs()
         TRUE
       }, error = function(e) FALSE)
-      # Cache the result so subsequent calls skip the network check
       options(enrichR.live = websiteLive)
     }
 
-    if (!isTRUE(websiteLive)) {
-      message("      Skipping EnrichR: API unreachable (enrichR.live is FALSE)")
-    } else {
+    if (isTRUE(websiteLive)) {
+      message("   Using EnrichR API...")
       enrichr_results <- list()
       for (db in tf_db) {
         res <- safe_run({
@@ -326,9 +327,54 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
       } else {
         message("      EnrichR TF: No DBs returned valid results.")
       }
+    } else {
+      message("      EnrichR API unreachable; falling back to local TF enrichment using MSigDB C3 (TFT).")
+      # Local enrichment using MSigDB C3 (TFT subset)
+      msig_org <- org_info$msig_org
+      message("      Using MSigDB C3 (TFT) for ", msig_org)
+      
+      m_t2g <- tryCatch({
+        msigdbr::msigdbr(species = msig_org, collection = "C3", subcategory = "TFT") %>%
+          dplyr::select(gs_name, gene_symbol)
+      }, error = function(e) {
+        message("      C3 TFT subcategory not available; using full C3 collection.")
+        msigdbr::msigdbr(species = msig_org, collection = "C3") %>%
+          dplyr::select(gs_name, gene_symbol)
+      })
+      
+      if (nrow(m_t2g) > 0) {
+        term2gene <- data.frame(term = m_t2g$gs_name, gene = m_t2g$gene_symbol, stringsAsFactors = FALSE)
+        local_res <- tryCatch({
+          clusterProfiler::enricher(
+            gene = sigOE_genes,
+            universe = allOE_genes,
+            TERM2GENE = term2gene,
+            pvalueCutoff = go_pvalue_cutoff,
+            qvalueCutoff = go_qvalue_cutoff
+          )
+        }, error = function(e) {
+          message("      Local TF enrichment failed: ", e$message)
+          NULL
+        })
+        
+        if (!is.null(local_res) && nrow(as.data.frame(local_res)) > 0) {
+          dir_tf <- safe_dir(file.path(out_dir, "Transcription_Factors"))
+          write.csv(as.data.frame(local_res), file.path(dir_tf, paste0("Local_TF_Enrichment_C3_", comp_name, ".csv")), row.names = FALSE)
+          message("      Local TF enrichment completed with ", nrow(as.data.frame(local_res)), " terms.")
+          if (nrow(local_res@result) > 5) {
+            safe_pdf(file.path(dir_tf, paste0("Local_TF_Dotplot_", comp_name, ".pdf")),
+                     width = 12, height = 10,
+                     expr = print(enrichplot::dotplot(local_res, showCategory = 20, label_format = 50)))
+          }
+        } else {
+          message("      No significant TF enrichment found locally.")
+        }
+      } else {
+        message("      No gene sets found in MSigDB C3 for organism ", msig_org)
+      }
     }
   } else {
-    message("      No TF databases specified for EnrichR ORA.")
+    message("      No TF databases specified; skipping TF enrichment.")
   }
 
   # ---- 1B. ORA GO (BP, MF, CC)

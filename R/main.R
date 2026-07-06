@@ -51,7 +51,19 @@
 #'   the Pfam prediction step. Default NULL auto-detects available cores
 #'   (\code{parallel::detectCores() - 1}).
 #' @param resume_isoform_from Path to directory with saved DTE/DTU RDS files to resume isoform analysis
-#' @param isoform_report_genes Gene symbols (e.g., c("TP53", "BCL2")) for transcript-proportion plots
+#' @param isoform_report_genes Gene symbols (e.g., c("TP53", "BCL2")) for transcript-proportion plots.
+#'   These genes also receive the enhanced isoform-level visualizations: an
+#'   IsoformSwitchAnalyzeR switch summary plot (structure/ORF/domains + gene,
+#'   isoform, and usage expression), a sashimi-style junction usage plot, an
+#'   exon-bin usage comparison plot, and (if run_dexseq = TRUE) a DEXSeq
+#'   transcript-usage plot.
+#' @param run_dexseq Logical: also run a complementary DEXSeq-based DTU engine
+#'   (transcripts treated as DEXSeq exonic bins) alongside the DRIMSeq-based
+#'   DTU test, and unlock DEXSeq-style per-gene transcript-usage plots in the
+#'   HTML report (default: FALSE, since it duplicates Step C at extra runtime cost)
+#' @param isoform_plot_top_n Number of top isoform switches (by significance)
+#'   to automatically render as switch summary plots, independent of
+#'   isoform_report_genes (default: 10)
 #' @param nBest Number of top genes to include in RegionReport
 #' @param eda_only Logical: if TRUE, run only import + EDA (PCA, heatmap) then stop (no DGE or isoform).
 #' @param group_col Optional column name in metadata for colouring PCA/heatmap when no model is given.
@@ -94,6 +106,8 @@ expressom <- function(count_type        = "salmon",
                       predictor_cpu     = NULL,
                       resume_isoform_from = NULL,
                       isoform_report_genes = NULL,
+                      run_dexseq        = FALSE,
+                      isoform_plot_top_n = 10,
                       eda_only          = FALSE,
                       group_col         = NULL) {
 
@@ -442,6 +456,7 @@ if (!is.null(gene_sets_zscore)) {
 
       dte_res        <- NULL
       dtu_res        <- NULL
+      dexseq_res     <- NULL
       isoform_import <- NULL
 
       # ---- Load from explicit resume directory first -----------------------
@@ -451,6 +466,7 @@ if (!is.null(gene_sets_zscore)) {
         isoform_import <- loaded$isoform_import
         dte_res        <- loaded$dte_results
         dtu_res        <- loaded$dtu_results
+        dexseq_res     <- loaded$dexseq_results
         if (!is.null(dte_res) && !is.null(dtu_res))
           message("Loaded DTE and DTU results from resume directory.")
         else
@@ -464,6 +480,8 @@ if (!is.null(gene_sets_zscore)) {
         dte_res <- .iso_ckpt_load("dte_results.rds")
       if (is.null(dtu_res) && .iso_ckpt_exists("dtu_results.rds"))
         dtu_res <- .iso_ckpt_load("dtu_results.rds")
+      if (is.null(dexseq_res) && .iso_ckpt_exists("dexseq_results.rds"))
+        dexseq_res <- .iso_ckpt_load("dexseq_results.rds")
 
       # ---- Ensure reference files are available (needed for switch step) ---
       if (is.null(isoform_fasta) || is.null(isoform_gff)) {
@@ -504,7 +522,7 @@ if (!is.null(gene_sets_zscore)) {
         message("Step B: DTE results loaded from checkpoint. Skipping.")
       }
 
-      # ---- Step C: DTU ----------------------------------------------------
+      # ---- Step C: DTU (DRIMSeq engine) ------------------------------------
       if (is.null(dtu_res)) {
         message("Step C: Running DTU (Differential Transcript Usage)...")
         dtu_res <- run_dtu(isoform_import, main_condition, level, base, bpparam = bpparam)
@@ -513,23 +531,27 @@ if (!is.null(gene_sets_zscore)) {
         message("Step C: DTU results loaded from checkpoint. Skipping.")
       }
 
-      # ---- DTE/DTU report --------------------------------------------------
-      if (!is.null(dte_res) && !is.null(dtu_res) && !is.null(isoform_import)) {
-        generate_dte_dtu_report(
-          dte_results       = dte_res,
-          dtu_results       = dtu_res,
-          isoform_obj       = isoform_import,
-          out_dir           = out_dir,
-          condition         = main_condition,
-          level             = level,
-          base              = base,
-          genes_of_interest = isoform_report_genes,
-          top_n             = 15
-        )
+      # ---- Step C.5: DTU via DEXSeq (optional, complementary engine) -------
+      # Treats each transcript as a DEXSeq exonic bin (Soneson/Love/Robinson
+      # "Swimming downstream" workflow). Off by default since it duplicates
+      # the DRIMSeq-based test in Step C at additional runtime cost; enable
+      # via run_dexseq = TRUE to cross-validate DTU calls and unlock the
+      # DEXSeq-style per-gene transcript-usage plots in the HTML report.
+      if (isTRUE(run_dexseq)) {
+        if (is.null(dexseq_res)) {
+          message("Step C.5: Running DEXSeq-based DTU (complementary engine)...")
+          dexseq_res <- safe_run(
+            run_dexseq_dtu(isoform_import, main_condition, level, base, bpparam = bpparam),
+            label = "DEXSeq DTU"
+          )
+          if (!is.null(dexseq_res)) .iso_ckpt_save(dexseq_res, "dexseq_results.rds")
+        } else {
+          message("Step C.5: DEXSeq DTU results loaded from checkpoint. Skipping.")
+        }
       }
 
       # ---- Step D: IsoformSwitchAnalyzeR (checkpoints handled internally) --
-      # save_dir = iso_save_dir so step1/step2/step3 checkpoints land there
+      # save_dir = iso_save_dir so step1/step2/step3/step3.5 checkpoints land there
       switch_res <- run_isoform_switch(
         dte_results    = dte_res,
         dtu_results    = dtu_res,
@@ -548,11 +570,33 @@ if (!is.null(gene_sets_zscore)) {
         predictor_cpu  = predictor_cpu
       )
 
+      # ---- DTE/DTU/DEXSeq/Switch report -------------------------------------
+      # Generated last so the report can embed the isoform switch summary
+      # plots, sashimi-style junction plots, and exon-usage comparisons that
+      # depend on switch_res (and, if computed, the DEXSeq results).
+      if (!is.null(dte_res) && !is.null(dtu_res) && !is.null(isoform_import)) {
+        generate_dte_dtu_report(
+          dte_results         = dte_res,
+          dtu_results         = dtu_res,
+          isoform_obj         = isoform_import,
+          out_dir             = out_dir,
+          condition           = main_condition,
+          level               = level,
+          base                = base,
+          genes_of_interest   = isoform_report_genes,
+          top_n               = 15,
+          switch_list         = switch_res,
+          dexseq_results      = dexseq_res,
+          switch_plot_top_n   = isoform_plot_top_n
+        )
+      }
+
       # Final copies to iso_dir top level for backward compatibility
       if (!dir.exists(iso_dir)) dir.create(iso_dir, recursive = TRUE)
       saveRDS(dte_res,    file.path(iso_dir, "dte_results.rds"))
       saveRDS(dtu_res,    file.path(iso_dir, "dtu_results.rds"))
       saveRDS(switch_res, file.path(iso_dir, "switch_list.rds"))
+      if (!is.null(dexseq_res)) saveRDS(dexseq_res, file.path(iso_dir, "dexseq_results.rds"))
 
       message("Isoform analysis complete. Results saved in: ", iso_dir)
       while (grDevices::dev.cur() > 1) grDevices::dev.off()
@@ -561,6 +605,7 @@ if (!is.null(gene_sets_zscore)) {
         isoform_import = isoform_import,
         dte_res        = dte_res,
         dtu_res        = dtu_res,
+        dexseq_res     = dexseq_res,
         switch_res     = switch_res
       )
     }

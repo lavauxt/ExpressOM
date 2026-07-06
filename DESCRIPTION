@@ -7,7 +7,10 @@ Maintainer: TL <lavauxt@gmail.com>
 Description: A fully modularized R package for bulk RNA-seq analysis, wrapping
     tximport, DESeq2, clusterProfiler, SPIA, fgsea, ReactomePA, DOSE and Enrichr
     into a streamlined, automated workflow. Also supports isoform-level analysis
-    with DTE/DTU and IsoformSwitchAnalyzeR.
+    with DTE/DTU (DRIMSeq and complementary DEXSeq engines) and
+    IsoformSwitchAnalyzeR, including enhanced graphic interpretation via
+    isoform switch summary plots, sashimi-style junction usage diagrams, and
+    exon-bin usage comparison plots.
 License: GPL-3
 Encoding: UTF-8
 LazyData: true
@@ -61,6 +64,8 @@ Suggests:
     DRIMSeq,
     DT,
     DEXSeq,
+    GenomicRanges,
+    S4Vectors,
     IsoformSwitchAnalyzeR (>= 2.6.0),
     htmlwidgets,
     knitr,

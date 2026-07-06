@@ -1,3 +1,7 @@
+# ==============================================================================
+# mod_isoform.R - DTE, DTU, and IsoformSwitchAnalyzeR integration
+# ==============================================================================
+
 convert_pdf_to_png <- function(pdf_file, dpi = 200) {
 
   if (!file.exists(pdf_file)) {
@@ -23,11 +27,6 @@ convert_pdf_to_png <- function(pdf_file, dpi = 200) {
 
   return(NULL)
 }
-
-
-# ==============================================================================
-# mod_isoform.R - DTE, DTU, and IsoformSwitchAnalyzeR integration
-# ==============================================================================
 
 #' Import transcript-level counts for isoform analysis
 #'
@@ -310,6 +309,8 @@ run_dtu <- function(
   }
 
   dtu_results <- do.call(rbind, all_results)
+  rm(all_results)
+  gc()
 
   if (nrow(dtu_results) == 0) {
     stop("No DTU results were produced.")
@@ -322,6 +323,294 @@ run_dtu <- function(
   dtu_results$adj_pvalue <- p.adjust(dtu_results[[pcol]], method = "BH")
 
   return(list(dtu_results = dtu_results))
+}
+
+# ==============================================================================
+# DEXSeq-based DTU (complementary engine to run_dtu / DRIMSeq)
+# ==============================================================================
+#
+# Follows the "transcript-level DEXSeq" workflow described by Soneson, Love &
+# Robinson (F1000Research, 2016; "Swimming downstream: statistical analysis of
+# differential transcript usage following Salmon quantification"): each
+# transcript is treated as a DEXSeq exonic "bin" within its parent gene, and
+# DEXSeq's negative-binomial GLM is used to test for differential usage. This
+# is independent from the DRIMSeq engine in run_dtu() and is commonly run
+# alongside it as a cross-validation of DTU calls. Crucially it also exposes
+# the native DEXSeqResults object, which unlocks DEXSeq::plotDEXSeq() (wrapped
+# below as plot_dexseq_gene()) for classic per-transcript expression/usage
+# plots across conditions.
+
+#' Run DEXSeq-based Differential Transcript Usage
+#'
+#' @param isoform_obj Output from import_transcript_counts()
+#' @param condition Column name in metadata containing groups
+#' @param level Foreground level for contrast
+#' @param base Reference level
+#' @param min_gene_expr Minimum total expression per gene (default: 10)
+#' @param min_transcript_expr Minimum transcript proportion per gene (default: 0.05)
+#' @param min_samps_gene_expr Min samples for gene expression (default: 50% of samples)
+#' @param min_samps_feature_expr Min samples for transcript expression (default: 3)
+#' @param chunk_size Number of genes to process at once (default: 2000)
+#' @param max_transcripts Maximum number of transcripts per gene to keep (default: 300)
+#' @param min_transcript_total Minimum total counts across all samples for a transcript (default: 10)
+#' @param keep_dxr Logical: retain the per-chunk DEXSeqResults objects so
+#'   individual genes can later be visualised with plot_dexseq_gene() (default TRUE).
+#'   Set FALSE to reduce memory usage for very large datasets when only the flat
+#'   results table is needed.
+#' @param bpparam Optional BiocParallel parameter object for DEXSeq operations
+#' @return List with `results_df` (annotated per-transcript data.frame including
+#'   pvalue/padj plus a Simes-aggregated, BH-corrected gene-level q-value) and
+#'   `dxr_list` (list of per-chunk DEXSeqResults objects, or an empty list if
+#'   keep_dxr = FALSE)
+#' @export
+run_dexseq_dtu <- function(
+  isoform_obj,
+  condition,
+  level,
+  base,
+  min_gene_expr = 10,
+  min_transcript_expr = 0.05,
+  min_samps_gene_expr = NULL,
+  min_samps_feature_expr = 3,
+  chunk_size = 2000,
+  max_transcripts = 300,
+  min_transcript_total = 10,
+  keep_dxr = TRUE,
+  bpparam = NULL
+) {
+
+  if (!requireNamespace("DEXSeq", quietly = TRUE)) {
+    stop("DEXSeq is required for run_dexseq_dtu(). Install with BiocManager::install('DEXSeq').")
+  }
+
+  bp_param <- if (is.null(bpparam)) BiocParallel::SerialParam() else bpparam
+  BiocParallel::register(bp_param)
+
+  counts <- if (isoform_obj$type == "tximport") {
+    isoform_obj$txi$counts
+  } else {
+    isoform_obj$counts
+  }
+
+  sample_data <- isoform_obj$meta
+  sample_data$condition <- factor(sample_data[[condition]], levels = c(base, level))
+
+  num_samples <- ncol(counts)
+  if (is.null(min_samps_gene_expr)) min_samps_gene_expr <- ceiling(num_samples * 0.5)
+  min_samps_gene_expr    <- min(min_samps_gene_expr, num_samples)
+  min_samps_feature_expr <- min(min_samps_feature_expr, num_samples)
+
+  tx2gene <- isoform_obj$tx2gene
+  gene_id_map <- tx2gene$gene_id[match(rownames(counts), tx2gene$tx_id)]
+
+  keep_mapped <- !is.na(gene_id_map)
+  counts <- counts[keep_mapped, , drop = FALSE]
+  gene_id_map <- gene_id_map[keep_mapped]
+  tx_ids_original <- rownames(counts)
+  if (nrow(counts) == 0) stop("No transcripts could be mapped to genes after version handling.")
+
+  keep_tx <- rowSums(counts) >= min_transcript_total
+  counts <- counts[keep_tx, , drop = FALSE]
+  gene_id_map <- gene_id_map[keep_tx]
+  tx_ids_original <- tx_ids_original[keep_tx]
+  if (nrow(counts) == 0) stop("No transcripts passed min_transcript_total filter.")
+
+  # Gene-level expression filter, mirroring DRIMSeq::dmFilter()'s min_gene_expr /
+  # min_samps_gene_expr semantics: require a minimum number of samples where the
+  # gene's TOTAL transcript expression reaches min_gene_expr.
+  gene_expr_matrix <- rowsum(counts, group = gene_id_map)
+  keep_genes_expr  <- rownames(gene_expr_matrix)[
+    rowSums(gene_expr_matrix >= min_gene_expr) >= min_samps_gene_expr
+  ]
+  keep_tx <- gene_id_map %in% keep_genes_expr
+  counts <- counts[keep_tx, , drop = FALSE]
+  gene_id_map <- gene_id_map[keep_tx]
+  tx_ids_original <- tx_ids_original[keep_tx]
+  if (nrow(counts) == 0) stop("No genes passed the min_gene_expr / min_samps_gene_expr filter.")
+
+  keep_tx <- rowSums(counts > min_transcript_expr) >= min_samps_feature_expr
+  counts <- counts[keep_tx, , drop = FALSE]
+  gene_id_map <- gene_id_map[keep_tx]
+  tx_ids_original <- tx_ids_original[keep_tx]
+  if (nrow(counts) == 0) stop("No transcripts passed expression filtering.")
+
+  gene_split <- split(seq_len(nrow(counts)), gene_id_map)
+  keep_idx <- unlist(lapply(gene_split, function(idx) {
+    if (length(idx) <= max_transcripts) return(idx)
+    gene_expr <- rowMeans(counts[idx, , drop = FALSE])
+    idx[order(gene_expr, decreasing = TRUE)[seq_len(max_transcripts)]]
+  }))
+  counts <- counts[keep_idx, , drop = FALSE]
+  gene_id_map <- gene_id_map[keep_idx]
+  tx_ids_original <- tx_ids_original[keep_idx]
+
+  # DEXSeq needs >= 2 features per group to test differential usage
+  gene_counts_tbl <- table(gene_id_map)
+  multi_tx_genes  <- names(gene_counts_tbl)[gene_counts_tbl > 1]
+  keep_multi      <- gene_id_map %in% multi_tx_genes
+  counts          <- counts[keep_multi, , drop = FALSE]
+  gene_id_map     <- gene_id_map[keep_multi]
+  tx_ids_original <- tx_ids_original[keep_multi]
+  if (nrow(counts) == 0) stop("No multi-transcript genes remained after filtering.")
+
+  message("DEXSeq DTU: ", nrow(counts), " transcripts across ",
+          length(unique(gene_id_map)), " genes.")
+
+  unique_genes <- unique(gene_id_map)
+  gene_chunks  <- split(unique_genes, ceiling(seq_along(unique_genes) / chunk_size))
+
+  # colData for DEXSeqDataSet only needs the 'condition' column; the 'sample'
+  # and 'exon' terms referenced in the design formula are generated internally.
+  sample_meta <- data.frame(
+    condition = sample_data[colnames(counts), "condition"],
+    row.names = colnames(counts)
+  )
+
+  all_results <- list()
+  dxr_list    <- list()
+
+  for (i in seq_along(gene_chunks)) {
+    message("DEXSeq DTU: processing chunk ", i, " / ", length(gene_chunks))
+
+    current_genes <- gene_chunks[[i]]
+    idx <- which(gene_id_map %in% current_genes)
+
+    curr_counts   <- round(as.matrix(counts[idx, , drop = FALSE]))
+    curr_gene_ids <- gene_id_map[idx]
+    curr_tx_ids   <- tx_ids_original[idx]
+
+    dxd <- tryCatch({
+      DEXSeq::DEXSeqDataSet(
+        countData  = curr_counts,
+        sampleData = sample_meta,
+        design     = ~sample + exon + condition:exon,
+        featureID  = curr_tx_ids,
+        groupID    = curr_gene_ids
+      )
+    }, error = function(e) {
+      message("  Chunk ", i, " DEXSeqDataSet construction failed: ", e$message)
+      NULL
+    })
+
+    if (is.null(dxd)) next
+
+    res <- tryCatch({
+      dxd <- DEXSeq::estimateSizeFactors(dxd)
+      dxd <- DEXSeq::estimateDispersions(dxd, quiet = TRUE, BPPARAM = bp_param)
+      dxd <- DEXSeq::testForDEU(dxd, BPPARAM = bp_param)
+      dxd <- DEXSeq::estimateExonFoldChanges(dxd, fitExpToVar = "condition", BPPARAM = bp_param)
+      DEXSeq::DEXSeqResults(dxd, independentFiltering = FALSE)
+    }, error = function(e) {
+      message("  Chunk ", i, " DEXSeq testing failed: ", e$message)
+      NULL
+    })
+
+    if (!is.null(res)) {
+      res_df <- as.data.frame(res)
+      wanted <- intersect(
+        c("groupID", "featureID", "exonBaseMean", "dispersion", "stat", "pvalue", "padj",
+          grep("^log2fold_", colnames(res_df), value = TRUE)),
+        colnames(res_df)
+      )
+      res_df <- res_df[, wanted, drop = FALSE]
+      all_results[[length(all_results) + 1]] <- res_df
+      if (isTRUE(keep_dxr)) dxr_list[[length(dxr_list) + 1]] <- res
+    }
+
+    rm(dxd, curr_counts)
+    gc()
+  }
+
+  if (length(all_results) == 0) stop("No DEXSeq DTU results were produced.")
+
+  results_df <- do.call(rbind, all_results)
+  rm(all_results)
+  gc()
+
+  # Aggregate per-transcript p-values into a per-gene p-value via Simes' method,
+  # then BH-adjust across all genes -- the same two-step approach used by
+  # DEXSeq's own perGeneQValue(), reimplemented here so it stays correct when
+  # results are combined across processing chunks.
+  pval_by_gene <- split(results_df$pvalue, results_df$groupID)
+  gene_pvals <- vapply(pval_by_gene, function(p) {
+    p <- p[!is.na(p)]
+    if (length(p) == 0) return(NA_real_)
+    n <- length(p)
+    min(sort(p) * n / seq_len(n))
+  }, numeric(1))
+  gene_qvals <- stats::p.adjust(gene_pvals, method = "BH")
+
+  results_df$gene_pvalue_simes <- gene_pvals[results_df$groupID]
+  results_df$gene_qvalue       <- gene_qvals[results_df$groupID]
+
+  colnames(results_df)[colnames(results_df) == "featureID"] <- "transcript_id"
+  colnames(results_df)[colnames(results_df) == "groupID"]   <- "gene_id"
+  results_df$gene_symbol <- isoform_obj$gene_map$symbol[match(results_df$gene_id, isoform_obj$gene_map$ensembl)]
+
+  n_sig_genes <- sum(gene_qvals < 0.05, na.rm = TRUE)
+  message("DEXSeq DTU complete: ", length(unique(results_df$gene_id)), " genes tested, ",
+          n_sig_genes, " significant at gene q-value < 0.05.")
+
+  list(results_df = results_df, dxr_list = dxr_list)
+}
+
+#' DEXSeq-style Transcript Usage Plot for a Single Gene
+#'
+#' Thin wrapper around \code{DEXSeq::plotDEXSeq()} producing the classic
+#' per-feature (transcript-as-exon) expression-by-condition plot, with the
+#' feature(s) showing significant differential usage highlighted. This is the
+#' "DEXSeq plot" style requested for comparing transcript/exon usage across
+#' conditions.
+#'
+#' @param dxr_list List of DEXSeqResults objects, as returned in the `dxr_list`
+#'   element of run_dexseq_dtu() (requires keep_dxr = TRUE there)
+#' @param gene_id Ensembl gene ID to plot (must be present in one of the DEXSeqResults chunks)
+#' @param plot_dir Output directory for the PDF
+#' @param gene_symbol Optional display name used for the output filename
+#' @param splicing If TRUE, plots usage with the overall gene expression effect
+#'   averaged out (isolates the usage/splicing signal); default FALSE shows
+#'   fitted expression per transcript per condition
+#' @return Invisibly, the path to the generated PDF (or NULL if the gene wasn't
+#'   found in any chunk or plotting failed)
+#' @export
+plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL, splicing = FALSE) {
+  if (!requireNamespace("DEXSeq", quietly = TRUE)) {
+    message("DEXSeq is required for plot_dexseq_gene(). Skipping.")
+    return(invisible(NULL))
+  }
+  if (is.null(dxr_list) || length(dxr_list) == 0) {
+    message("No DEXSeqResults available (run run_dexseq_dtu() with keep_dxr = TRUE). Skipping.")
+    return(invisible(NULL))
+  }
+
+  label    <- if (!is.null(gene_symbol) && nzchar(gene_symbol)) gene_symbol else gene_id
+  pdf_path <- file.path(plot_dir, paste0("DEXSeq_", label, ".pdf"))
+
+  plotted <- FALSE
+  for (dxr in dxr_list) {
+    if (is.null(dxr)) next
+    if (!(gene_id %in% dxr$groupID)) next
+    ok <- tryCatch({
+      pdf(pdf_path, width = 9, height = 6)
+      DEXSeq::plotDEXSeq(dxr, geneID = gene_id, fitExpToVar = "condition",
+                         expression = !splicing, splicing = splicing,
+                         legend = TRUE, cex.axis = 1.1, cex = 1.2, lwd = 2)
+      dev.off()
+      TRUE
+    }, error = function(e) {
+      if (grDevices::dev.cur() > 1) grDevices::dev.off()
+      message("   -> plotDEXSeq() failed for ", label, ": ", e$message)
+      FALSE
+    })
+    if (ok) { plotted <- TRUE; break }
+  }
+
+  if (!plotted) {
+    message("   -> Gene '", label, "' not found in DEXSeq results (or not testable). Skipping plot.")
+    return(invisible(NULL))
+  }
+  message("   -> DEXSeq transcript-usage plot saved to: ", pdf_path)
+  invisible(pdf_path)
 }
 
 #' Run IsoformSwitchAnalyzeR analysis using isoformSwitchAnalysisCombined
@@ -508,6 +797,16 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
     # Save step-1 checkpoint immediately
     .ckpt_save(switch_list, "step1_imported.rds")
+    
+    # Free the large count matrix now that switch_list is built
+    if (!is.null(isoform_obj$txi$counts)) {
+      isoform_obj$txi$counts <- NULL
+      gc()
+    }
+    if (!is.null(isoform_obj$counts)) {
+      isoform_obj$counts <- NULL
+      gc()
+    }
   }
 
   # --------------------------------------------------------------------------
@@ -562,6 +861,63 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
         n_cpu       = predictor_cpu
       )
       .ckpt_save(switch_list, "step3_predictors.rds")
+    }
+  }
+
+  # --------------------------------------------------------------------------
+  # Step 3.5 - Refresh switch consequence analysis & switch plots now that
+  # external predictor annotations (CPAT / SignalP / Pfam) are available.
+  # NOTE: the plots generated inside isoformSwitchAnalysisCombined() (Step 2)
+  # predate these annotations, so protein-domain / signal-peptide / coding-
+  # potential evidence would otherwise never appear in the final isoform
+  # switch plots. This step is purely additive: on failure it leaves
+  # switch_list untouched and the Step-2 plots remain valid.
+  # --------------------------------------------------------------------------
+  if (isTRUE(run_predictors)) {
+    if (.ckpt_exists("step3_5_refreshed.rds")) {
+      message("Loading refreshed switch consequences from step-3.5 checkpoint.")
+      switch_list <- .ckpt_load("step3_5_refreshed.rds")
+    } else {
+      message("Refreshing switch consequence analysis and plots with predictor annotations...")
+      plot_refresh_dir <- file.path(out_dir, "plots", "switch_plots_with_predictors")
+
+      switch_list <- tryCatch({
+        feat_cols <- colnames(switch_list$isoformFeatures)
+        consequences_available <- c("intron_retention", "ORF_seq_similarity", "NMD_status")
+        if (any(grepl("coding_potential|coding_prob", feat_cols, ignore.case = TRUE)))
+          consequences_available <- c(consequences_available, "coding_potential")
+        if (any(grepl("signal_peptide", feat_cols, ignore.case = TRUE)))
+          consequences_available <- c(consequences_available, "signal_peptide_identified")
+        if (any(grepl("^domain", feat_cols, ignore.case = TRUE)))
+          consequences_available <- c(consequences_available, "domains_identified", "domain_isotype")
+
+        sl <- IsoformSwitchAnalyzeR::analyzeSwitchConsequences(
+          switch_list,
+          consequencesToAnalyze = consequences_available,
+          alpha     = 0.05,
+          dIFcutoff = 0.1
+        )
+
+        if (!dir.exists(plot_refresh_dir)) dir.create(plot_refresh_dir, recursive = TRUE)
+        IsoformSwitchAnalyzeR::switchPlotTopSwitches(
+          switchAnalyzeRlist          = sl,
+          n                           = 50,
+          filterForConsequences       = TRUE,
+          splitFunctionalConsequences = TRUE,
+          sortByQvals                 = TRUE,
+          pathToOutput                = plot_refresh_dir,
+          fileType                    = "pdf"
+        )
+        message("  Refreshed switch plots (now including predictor annotations) saved to: ",
+                plot_refresh_dir)
+        sl
+      }, error = function(e) {
+        message("  Could not refresh switch consequences/plots with predictor data: ", e$message,
+                "\n  Falling back to the plots generated in Step 2 (without predictor annotations).")
+        switch_list
+      })
+
+      .ckpt_save(switch_list, "step3_5_refreshed.rds")
     }
   }
 
@@ -666,21 +1022,29 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   active_conda <- if (has_conda_env) conda_sh else NULL
 
   # --------------------------------------------------------------------------
-  # 2. Convenience wrappers
+  # 2. Convenience wrappers – now with enhanced logging
   # --------------------------------------------------------------------------
 
   # Run a single bash command string (conda activation is handled automatically)
   run_tool <- function(cmd_str, show_stderr = TRUE) {
-    .wsl_exec_script(
+    message("  Executing: ", cmd_str)
+    res <- .wsl_exec_script(
       bash_body     = cmd_str,
       wsl_distro    = wsl_distro,
       use_wsl       = via_wsl,
       conda_sh      = active_conda,
       conda_env     = "isoform_tools",
-      intern        = FALSE,
+      intern        = TRUE,              # capture stdout
       ignore_stderr = !show_stderr,
       log_dir       = log_dir
     )
+    # Print stdout/stderr if any (res contains both if intern=TRUE)
+    if (length(res) > 0) {
+      msg <- paste(res, collapse = "\n")
+      if (nzchar(msg)) message("  Output:\n", msg)
+    }
+    # Return exit code (the status attribute is stored on the output)
+    attr(res, "status") %||% 0L
   }
 
   # Check tool availability (conda-aware)
@@ -966,9 +1330,439 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   return(switch_list)
 }
 
+# ==============================================================================
+# Enhanced isoform-level visualization: switch summaries, sashimi-style
+# junction plots, and exon-bin usage comparison
+# ==============================================================================
+#
+# These functions build on the switchAnalyzeRlist produced by
+# run_isoform_switch() to give richer graphic interpretation of isoform-level
+# results:
+#   - plot_isoform_switch_summary(): wraps IsoformSwitchAnalyzeR's own
+#     switchPlot()/switchPlotTopSwitches() to render, per gene, the isoform
+#     structure (exons/domains/ORF) alongside gene expression, isoform
+#     expression, and isoform usage.
+#   - plot_isoform_sashimi(): a custom, mirrored sashimi-style diagram of a
+#     gene's exon structure with splice-junction arcs whose thickness reflects
+#     isoform-fraction-weighted usage in each condition. NOTE this is a
+#     transcript-quantification-based approximation (built from the per-isoform
+#     IF1/IF2 values IsoformSwitchAnalyzeR already computes) and NOT derived
+#     from spliced-read alignments/junction coverage -- true base-pair
+#     resolution coverage requires BAM files, which are outside the scope of
+#     this quantification-only (salmon/kallisto/rsem/stringtie) pipeline.
+#   - plot_exon_usage_comparison(): collapses overlapping isoform exons into
+#     non-overlapping genomic "exon bins" (the same disjoint-interval strategy
+#     DEXSeq uses for its flattened exonic-part annotation) and compares the
+#     isoform-expression-weighted signal assigned to each bin between conditions.
+
+#' @keywords internal
+.resolve_gene_id <- function(isoform_features, gene) {
+  if (is.null(gene) || !nzchar(gene)) return(NULL)
+  if (gene %in% isoform_features$gene_id) return(gene)
+  if ("gene_name" %in% colnames(isoform_features)) {
+    idx <- which(toupper(isoform_features$gene_name) == toupper(gene))
+    if (length(idx) > 0) return(isoform_features$gene_id[idx[1]])
+  }
+  NULL
+}
+
+#' Build shared, non-overlapping exon bins for a gene's isoforms
+#'
+#' Uses \code{GenomicRanges::disjoin()} (the same strategy behind DEXSeq's
+#' flattened exonic-part annotation) so that alternative splice sites produce
+#' distinct adjacent bins rather than being silently merged together.
+#' @keywords internal
+.get_exon_bins <- function(switch_list, gene_id) {
+  if (is.null(switch_list$exons)) {
+    stop("switch_list has no 'exons' slot (unexpected switchAnalyzeRlist structure).")
+  }
+  exon_mcols <- S4Vectors::mcols(switch_list$exons)
+  if (!"isoform_id" %in% colnames(exon_mcols)) {
+    stop("switch_list$exons has no 'isoform_id' metadata column (unexpected switchAnalyzeRlist structure).")
+  }
+
+  feat    <- switch_list$isoformFeatures
+  iso_ids <- unique(feat$isoform_id[feat$gene_id == gene_id])
+  if (length(iso_ids) == 0) return(NULL)
+
+  exon_gr <- switch_list$exons[exon_mcols$isoform_id %in% iso_ids]
+  if (length(exon_gr) == 0) return(NULL)
+
+  bins <- GenomicRanges::disjoin(exon_gr, ignore.strand = TRUE)
+  bins <- sort(bins)
+  S4Vectors::mcols(bins)$bin_id <- seq_along(bins)
+
+  list(exon_gr = exon_gr, bins = bins, iso_ids = iso_ids)
+}
+
+#' Generate Isoform Switch Summary Plots (structure + expression + usage)
+#'
+#' Wraps \code{IsoformSwitchAnalyzeR::switchPlotTopSwitches()} to automatically
+#' render the top-N most significant isoform switches, and additionally forces
+#' individual \code{switchPlot()} figures for any explicitly requested genes
+#' (even if not among the automatically selected top switches). Each figure is
+#' a composite panel showing (1) isoform/transcript structure with any
+#' annotated ORF, coding potential, protein domains, or signal peptides,
+#' (2) gene expression, (3) isoform expression, and (4) isoform usage (IF),
+#' including the switch-test result.
+#'
+#' @param switch_list Object returned by run_isoform_switch()
+#' @param plot_dir Directory to save plots into (created if missing)
+#' @param genes_of_interest Optional character vector of gene symbols to
+#'   force-include regardless of significance
+#' @param level Foreground condition label (used to resolve condition2 for
+#'   forced gene plots; if NULL, taken from switch_list)
+#' @param base Reference condition label (used to resolve condition1 for
+#'   forced gene plots; if NULL, taken from switch_list)
+#' @param top_n Number of top switching genes to auto-plot (default 10)
+#' @param alpha Significance cutoff on the isoform switch q-value (default 0.05)
+#' @param dIFcutoff Minimum |dIF| for a switch to be considered (default 0.1)
+#' @return Invisibly, a character vector of generated PDF paths
+#' @export
+plot_isoform_switch_summary <- function(switch_list, plot_dir,
+                                         genes_of_interest = NULL,
+                                         level = NULL, base = NULL,
+                                         top_n = 10,
+                                         alpha = 0.05,
+                                         dIFcutoff = 0.1) {
+  if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE)) {
+    message("IsoformSwitchAnalyzeR is required for switch summary plots. Skipping.")
+    return(invisible(character(0)))
+  }
+  if (is.null(switch_list$isoformFeatures) || nrow(switch_list$isoformFeatures) == 0) {
+    message("switch_list has no isoformFeatures - skipping switch summary plots.")
+    return(invisible(character(0)))
+  }
+  if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
+
+  generated <- character(0)
+  feat <- switch_list$isoformFeatures
+
+  # ---- Automatic top-N plots (ranked by significance / effect size) --------
+  top_dir <- file.path(plot_dir, "top_switches")
+  auto_ok <- tryCatch({
+    IsoformSwitchAnalyzeR::switchPlotTopSwitches(
+      switchAnalyzeRlist          = switch_list,
+      n                           = top_n,
+      filterForConsequences       = FALSE,
+      splitFunctionalConsequences = FALSE,
+      sortByQvals                 = TRUE,
+      alpha                       = alpha,
+      dIFcutoff                   = dIFcutoff,
+      pathToOutput                = top_dir,
+      fileType                    = "pdf"
+    )
+    TRUE
+  }, error = function(e) {
+    message("   -> switchPlotTopSwitches() failed: ", e$message)
+    FALSE
+  })
+  if (isTRUE(auto_ok) && dir.exists(top_dir)) {
+    found <- list.files(top_dir, pattern = "\\.pdf$", full.names = TRUE, recursive = TRUE)
+    generated <- c(generated, found)
+    message("   -> Top ", top_n, " isoform switch plots saved to: ", top_dir,
+            " (", length(found), " file(s))")
+  }
+
+  # ---- Force-include explicitly requested genes -----------------------------
+  if (!is.null(genes_of_interest)) {
+    cond1 <- if (!is.null(base))  base  else feat$condition_1[1]
+    cond2 <- if (!is.null(level)) level else feat$condition_2[1]
+
+    for (gene_sym in genes_of_interest) {
+      gene_id <- .resolve_gene_id(feat, gene_sym)
+      if (is.null(gene_id)) {
+        message("   -> Gene '", gene_sym, "' not found in switch_list. Skipping switch plot.")
+        next
+      }
+      pdf_path <- file.path(plot_dir, paste0("SwitchPlot_", gene_sym, ".pdf"))
+      ok <- tryCatch({
+        pdf(pdf_path, onefile = FALSE, width = 11, height = 9)
+        IsoformSwitchAnalyzeR::switchPlot(switch_list, gene = gene_id,
+                                          condition1 = cond1, condition2 = cond2)
+        dev.off()
+        TRUE
+      }, error = function(e) {
+        if (grDevices::dev.cur() > 1) grDevices::dev.off()
+        message("   -> switchPlot() failed for ", gene_sym, ": ", e$message)
+        FALSE
+      })
+      if (ok) {
+        generated <- c(generated, pdf_path)
+        message("   -> Isoform switch plot saved to: ", pdf_path)
+      }
+    }
+  }
+
+  invisible(generated)
+}
+
+#' Pseudo-Sashimi Isoform Structure & Junction Usage Plot
+#'
+#' Draws a mirrored, sashimi-style diagram of a gene's exon structure with
+#' splice-junction arcs whose thickness reflects isoform-fraction-weighted
+#' usage in each condition: arcs above the exon track represent \code{level}
+#' usage, arcs below represent \code{base} usage, so the two conditions can be
+#' compared directly at a glance. See the section header above for an
+#' important note on how this differs from a read-coverage sashimi plot.
+#'
+#' @param switch_list Object returned by run_isoform_switch()
+#' @param gene Gene symbol or gene_id to plot
+#' @param level Foreground condition label (arcs drawn above the exon track)
+#' @param base Reference condition label (arcs drawn below the exon track)
+#' @param plot_dir Output directory for the PDF
+#' @param min_if Minimum isoform-fraction-weighted usage in either condition
+#'   for a junction to be drawn (removes near-zero-usage clutter, default 0.01)
+#' @return Invisibly, the path to the generated PDF (or NULL if skipped)
+#' @export
+plot_isoform_sashimi <- function(switch_list, gene, level, base, plot_dir, min_if = 0.01) {
+  if (!requireNamespace("GenomicRanges", quietly = TRUE) ||
+      !requireNamespace("S4Vectors", quietly = TRUE)) {
+    message("GenomicRanges/S4Vectors are required for sashimi-style plots. Skipping.")
+    return(invisible(NULL))
+  }
+  if (!requireNamespace("ggplot2", quietly = TRUE)) stop("ggplot2 is required for plotting")
+
+  feat_all <- switch_list$isoformFeatures
+  gene_id  <- .resolve_gene_id(feat_all, gene)
+  if (is.null(gene_id)) {
+    message("   -> Gene '", gene, "' not found in switch_list. Skipping sashimi plot.")
+    return(invisible(NULL))
+  }
+
+  feat <- feat_all[feat_all$gene_id == gene_id &
+                    feat_all$condition_1 == base &
+                    feat_all$condition_2 == level, ]
+  if (nrow(feat) == 0) {
+    message("   -> No isoformFeatures rows for gene '", gene, "' with condition_1=", base,
+            ", condition_2=", level, ". Skipping sashimi plot.")
+    return(invisible(NULL))
+  }
+
+  ginfo <- tryCatch(.get_exon_bins(switch_list, gene_id), error = function(e) {
+    message("   -> Could not build exon structure for '", gene, "': ", e$message)
+    NULL
+  })
+  if (is.null(ginfo)) {
+    message("   -> No exon structure found for '", gene, "'. Skipping sashimi plot.")
+    return(invisible(NULL))
+  }
+
+  exon_gr    <- ginfo$exon_gr
+  exon_mcols <- S4Vectors::mcols(exon_gr)
+  exon_df <- data.frame(
+    isoform_id = exon_mcols$isoform_id,
+    start      = GenomicRanges::start(exon_gr),
+    end        = GenomicRanges::end(exon_gr),
+    stringsAsFactors = FALSE
+  )
+
+  # Build per-isoform junctions from consecutive exons in genomic order
+  junction_list <- lapply(split(exon_df, exon_df$isoform_id), function(d) {
+    d <- d[order(d$start), ]
+    if (nrow(d) < 2) return(NULL)
+    data.frame(
+      isoform_id = d$isoform_id[1],
+      jstart     = d$end[-nrow(d)],
+      jend       = d$start[-1],
+      stringsAsFactors = FALSE
+    )
+  })
+  junctions <- do.call(rbind, junction_list)
+  if (is.null(junctions) || nrow(junctions) == 0) {
+    message("   -> Gene '", gene, "' has no multi-exon isoforms (no junctions to plot). Skipping.")
+    return(invisible(NULL))
+  }
+
+  junctions <- merge(junctions, feat[, c("isoform_id", "IF1", "IF2")], by = "isoform_id")
+  junc_summary <- stats::aggregate(cbind(IF1, IF2) ~ jstart + jend, data = junctions,
+                                   FUN = function(x) sum(x, na.rm = TRUE))
+  colnames(junc_summary)[colnames(junc_summary) == "IF1"] <- "base_weight"
+  colnames(junc_summary)[colnames(junc_summary) == "IF2"] <- "level_weight"
+  junc_summary <- junc_summary[junc_summary$base_weight >= min_if | junc_summary$level_weight >= min_if, ]
+  if (nrow(junc_summary) == 0) {
+    message("   -> No junctions passed the min_if = ", min_if, " threshold for '", gene, "'. Skipping.")
+    return(invisible(NULL))
+  }
+  junc_summary$junction_id <- seq_len(nrow(junc_summary))
+
+  .make_arc <- function(jstart, jend, height, junction_id, side, weight, n_points = 40) {
+    t <- seq(0, 1, length.out = n_points)
+    data.frame(
+      x = jstart + t * (jend - jstart),
+      y = 4 * height * t * (1 - t),
+      junction_id = junction_id,
+      side = side,
+      weight = weight
+    )
+  }
+
+  max_w <- max(c(junc_summary$base_weight, junc_summary$level_weight), na.rm = TRUE)
+  max_w <- max(max_w, 1e-6)
+
+  arc_rows <- list()
+  for (i in seq_len(nrow(junc_summary))) {
+    r <- junc_summary[i, ]
+    if (r$level_weight >= min_if) {
+      arc_rows[[length(arc_rows) + 1]] <- .make_arc(
+        r$jstart, r$jend, height = r$level_weight / max_w,
+        junction_id = r$junction_id, side = level, weight = r$level_weight
+      )
+    }
+    if (r$base_weight >= min_if) {
+      arc_rows[[length(arc_rows) + 1]] <- .make_arc(
+        r$jstart, r$jend, height = -(r$base_weight / max_w),
+        junction_id = r$junction_id, side = base, weight = r$base_weight
+      )
+    }
+  }
+  arc_df <- do.call(rbind, arc_rows)
+  arc_df$side <- factor(arc_df$side, levels = c(base, level))
+
+  bins_df <- as.data.frame(ginfo$bins)
+  bins_df$bin_id <- S4Vectors::mcols(ginfo$bins)$bin_id
+  chrom_label <- as.character(GenomicRanges::seqnames(ginfo$bins)[1])
+
+  p <- ggplot2::ggplot() +
+    ggplot2::geom_rect(data = bins_df,
+                       ggplot2::aes(xmin = start, xmax = end, ymin = -0.04, ymax = 0.04),
+                       fill = "grey35", color = NA) +
+    ggplot2::geom_path(data = arc_df,
+                       ggplot2::aes(x = x, y = y, group = interaction(junction_id, side),
+                                    linewidth = weight, color = side),
+                       lineend = "round") +
+    ggplot2::scale_color_manual(values = stats::setNames(c("dodgerblue4", "red3"), c(base, level)),
+                                name = "Condition") +
+    ggplot2::scale_linewidth(range = c(0.3, 3), name = "Usage (IF)") +
+    ggplot2::geom_hline(yintercept = 0, color = "grey70", linewidth = 0.3) +
+    ggplot2::labs(
+      title = paste0("Isoform Structure & Junction Usage: ", gene),
+      subtitle = paste0(level, " (above) vs ", base,
+                        " (below) \u2014 arc thickness \u221d isoform-fraction-weighted junction usage"),
+      x = paste0("Genomic position (", chrom_label, ")"),
+      y = NULL
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      axis.text.y = ggplot2::element_blank(),
+      axis.ticks.y = ggplot2::element_blank(),
+      panel.grid.major.y = ggplot2::element_blank(),
+      panel.grid.minor = ggplot2::element_blank(),
+      plot.title = ggplot2::element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = ggplot2::element_text(hjust = 0.5, size = 9, color = "grey30")
+    )
+
+  pdf_path <- file.path(plot_dir, paste0("Sashimi_", gene, ".pdf"))
+  ggplot2::ggsave(filename = pdf_path, plot = p, width = 11, height = 5, device = "pdf")
+  message("   -> Isoform sashimi-style junction plot saved to: ", pdf_path)
+  invisible(pdf_path)
+}
+
+#' Compare Aggregated Exon-Bin Expression Between Conditions
+#'
+#' For a given gene, collapses all isoform exon structures into non-overlapping
+#' genomic "exon bins" (via \code{GenomicRanges::disjoin()}, the same strategy
+#' DEXSeq uses to build its flattened exonic-part annotation) and sums the
+#' per-isoform mean expression already computed by IsoformSwitchAnalyzeR
+#' (stored as \code{iso_value_1}/\code{iso_value_2} in isoformFeatures) across
+#' every isoform overlapping each bin, per condition. This approximates
+#' per-exon "coverage" from transcript-level quantification without requiring
+#' aligned BAM files.
+#'
+#' @inheritParams plot_isoform_sashimi
+#' @return Invisibly, the path to the generated PDF (or NULL if skipped)
+#' @export
+plot_exon_usage_comparison <- function(switch_list, gene, level, base, plot_dir) {
+  if (!requireNamespace("GenomicRanges", quietly = TRUE) ||
+      !requireNamespace("S4Vectors", quietly = TRUE)) {
+    message("GenomicRanges/S4Vectors are required for exon usage plots. Skipping.")
+    return(invisible(NULL))
+  }
+  if (!requireNamespace("ggplot2", quietly = TRUE)) stop("ggplot2 is required for plotting")
+  if (!requireNamespace("tidyr", quietly = TRUE)) stop("tidyr is required for plotting")
+
+  feat_all <- switch_list$isoformFeatures
+  gene_id  <- .resolve_gene_id(feat_all, gene)
+  if (is.null(gene_id)) {
+    message("   -> Gene '", gene, "' not found in switch_list. Skipping exon usage plot.")
+    return(invisible(NULL))
+  }
+
+  feat <- feat_all[feat_all$gene_id == gene_id &
+                    feat_all$condition_1 == base &
+                    feat_all$condition_2 == level, ]
+  if (nrow(feat) == 0) {
+    message("   -> No isoformFeatures rows for gene '", gene, "' with condition_1=", base,
+            ", condition_2=", level, ". Skipping exon usage plot.")
+    return(invisible(NULL))
+  }
+
+  ginfo <- tryCatch(.get_exon_bins(switch_list, gene_id), error = function(e) {
+    message("   -> Could not build exon structure for '", gene, "': ", e$message)
+    NULL
+  })
+  if (is.null(ginfo)) {
+    message("   -> No exon structure found for '", gene, "'. Skipping exon usage plot.")
+    return(invisible(NULL))
+  }
+
+  exon_gr <- ginfo$exon_gr
+  bins    <- ginfo$bins
+
+  ov <- GenomicRanges::findOverlaps(exon_gr, bins, ignore.strand = TRUE)
+  map_df <- data.frame(
+    isoform_id = S4Vectors::mcols(exon_gr)$isoform_id[S4Vectors::queryHits(ov)],
+    bin_id     = S4Vectors::mcols(bins)$bin_id[S4Vectors::subjectHits(ov)],
+    stringsAsFactors = FALSE
+  )
+  map_df <- unique(map_df)
+  map_df <- merge(map_df, feat[, c("isoform_id", "iso_value_1", "iso_value_2")], by = "isoform_id")
+  if (nrow(map_df) == 0) {
+    message("   -> No overlapping isoform/bin data for '", gene, "'. Skipping exon usage plot.")
+    return(invisible(NULL))
+  }
+
+  bin_summary <- stats::aggregate(cbind(iso_value_1, iso_value_2) ~ bin_id, data = map_df, FUN = sum)
+  colnames(bin_summary) <- c("bin_id", base, level)
+
+  plot_df <- tidyr::pivot_longer(bin_summary, cols = -bin_id, names_to = "Condition", values_to = "expression")
+  plot_df$Condition <- factor(plot_df$Condition, levels = c(base, level))
+  plot_df$bin_id    <- factor(plot_df$bin_id, levels = sort(unique(plot_df$bin_id)))
+
+  p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = bin_id, y = expression, fill = Condition)) +
+    ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.7), width = 0.6,
+                      color = "black", linewidth = 0.2) +
+    ggplot2::scale_fill_manual(values = stats::setNames(c("dodgerblue4", "red3"), c(base, level))) +
+    ggplot2::labs(
+      title = paste0("Exon-Bin Expression Comparison: ", gene),
+      subtitle = "Non-overlapping exon bins (DEXSeq-style flattened annotation); bars = summed isoform expression per bin",
+      x = "Exon bin (5'\u2192 3', genomic order)", y = "Summed isoform expression"
+    ) +
+    ggplot2::theme_minimal(base_size = 12) +
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = ggplot2::element_text(hjust = 0.5, size = 9, color = "grey30"),
+      legend.title = ggplot2::element_blank()
+    )
+
+  pdf_path <- file.path(plot_dir, paste0("ExonUsage_", gene, ".pdf"))
+  ggplot2::ggsave(filename = pdf_path, plot = p,
+                  width = max(7, 0.35 * nrow(bin_summary) + 2), height = 5, device = "pdf")
+  message("   -> Exon-bin expression comparison plot saved to: ", pdf_path)
+  invisible(pdf_path)
+}
+
+#' Generate DTE/DTU HTML Report with conditional image includes
+#' (Now uses eval = file.exists(...) to avoid "Could not fetch resource" warnings)
 generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
                                     out_dir, condition, level, base,
-                                    genes_of_interest = NULL, top_n = 15) {
+                                    genes_of_interest = NULL, top_n = 15,
+                                    switch_list = NULL,
+                                    dexseq_results = NULL,
+                                    plot_switch_summary = TRUE,
+                                    switch_plot_top_n = 10,
+                                    plot_sashimi = TRUE,
+                                    plot_exon_usage = TRUE) {
   
   if (!requireNamespace("ggplot2", quietly = TRUE)) {
     stop("ggplot2 is required for plotting")
@@ -1004,6 +1798,13 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
   # Save annotated tables as CSV
   write.csv(dte, file.path(report_dir, "DTE_results_annotated.csv"), row.names = FALSE)
   write.csv(dtu, file.path(report_dir, "DTU_results_annotated.csv"), row.names = FALSE)
+
+  # 2b. Save DEXSeq results as CSV, if the complementary DEXSeq DTU engine was run
+  has_dexseq <- !is.null(dexseq_results) && !is.null(dexseq_results$results_df)
+  if (has_dexseq) {
+    write.csv(dexseq_results$results_df, file.path(report_dir, "DEXSeq_results_annotated.csv"),
+              row.names = FALSE)
+  }
   
   # ---- 3. Generate plots ----
   plot_dir <- file.path(report_dir, "plots")
@@ -1089,6 +1890,80 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
       ggplot2::ggsave(file.path(plot_dir, paste0("proportions_", gene_sym, ".pdf")), p_prop, width = 10, height = 6)
     }
   }
+
+  # 3f. Isoform switch overview + summary plots (structure, expression, usage)
+  has_switch <- !is.null(switch_list) && !is.null(switch_list$isoformFeatures) &&
+                nrow(switch_list$isoformFeatures) > 0
+
+  if (has_switch) {
+    feat_sw <- switch_list$isoformFeatures
+    if (all(c("dIF", "isoform_switch_q_value") %in% colnames(feat_sw))) {
+      feat_sw_plot <- feat_sw[!is.na(feat_sw$isoform_switch_q_value), ]
+      if (nrow(feat_sw_plot) > 0) {
+        p_switch_overview <- ggplot2::ggplot(
+          feat_sw_plot, ggplot2::aes(x = dIF, y = -log10(isoform_switch_q_value))
+        ) +
+          ggplot2::geom_point(
+            ggplot2::aes(color = abs(dIF) > 0.1 & isoform_switch_q_value < 0.05),
+            size = 1, alpha = 0.6
+          ) +
+          ggplot2::geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+          ggplot2::geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed") +
+          ggplot2::scale_color_manual("Significant\nIsoform Switch", values = c("grey60", "red3")) +
+          ggplot2::labs(title = "Isoform Switch Overview",
+                        x = "dIF (Isoform Fraction change)",
+                        y = "-log10(Isoform Switch q-value)") +
+          ggplot2::theme_minimal()
+        ggplot2::ggsave(file.path(plot_dir, "IsoformSwitch_overview.pdf"),
+                        p_switch_overview, width = 7, height = 6)
+      }
+    }
+
+    # Automatic top-N + forced-gene switch summary plots (structure/ORF/domains
+    # alongside gene expression, isoform expression, and isoform usage)
+    if (isTRUE(plot_switch_summary)) {
+      safe_run(
+        plot_isoform_switch_summary(switch_list, plot_dir = plot_dir,
+                                    genes_of_interest = genes_of_interest,
+                                    level = level, base = base,
+                                    top_n = switch_plot_top_n),
+        label = "Isoform switch summary plots"
+      )
+    }
+
+    # Sashimi-style junction usage + exon-bin coverage comparison, per requested gene
+    if (!is.null(genes_of_interest)) {
+      for (gene_sym in genes_of_interest) {
+        if (isTRUE(plot_sashimi)) {
+          safe_run(
+            plot_isoform_sashimi(switch_list, gene = gene_sym, level = level, base = base,
+                                 plot_dir = plot_dir),
+            label = paste0("Sashimi plot for ", gene_sym)
+          )
+        }
+        if (isTRUE(plot_exon_usage)) {
+          safe_run(
+            plot_exon_usage_comparison(switch_list, gene = gene_sym, level = level, base = base,
+                                       plot_dir = plot_dir),
+            label = paste0("Exon usage plot for ", gene_sym)
+          )
+        }
+      }
+    }
+  }
+
+  # 3g. DEXSeq per-gene transcript-usage plots (if the DEXSeq DTU engine was run)
+  if (has_dexseq && !is.null(dexseq_results$dxr_list) && !is.null(genes_of_interest)) {
+    for (gene_sym in genes_of_interest) {
+      gene_ens <- isoform_obj$gene_map$ensembl[isoform_obj$gene_map$symbol == gene_sym]
+      if (length(gene_ens) == 0) next
+      safe_run(
+        plot_dexseq_gene(dexseq_results$dxr_list, gene_id = gene_ens[1],
+                         plot_dir = plot_dir, gene_symbol = gene_sym),
+        label = paste0("DEXSeq plot for ", gene_sym)
+      )
+    }
+  }
   
   # ---- 4. Create R Markdown report using absolute paths for CSV files ----
   rmd_file <- tempfile(fileext = ".Rmd")
@@ -1100,6 +1975,9 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
   # (e.g. C:\Users\... → \U is treated as a Unicode escape sequence).
   dte_abs_path <- normalizePath(file.path(report_dir, "DTE_results_annotated.csv"), winslash = "/")
   dtu_abs_path <- normalizePath(file.path(report_dir, "DTU_results_annotated.csv"), winslash = "/")
+  if (has_dexseq) {
+    dexseq_abs_path <- normalizePath(file.path(report_dir, "DEXSeq_results_annotated.csv"), winslash = "/")
+  }
   
   rmd_lines <- c(
     "---",
@@ -1130,13 +2008,19 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
     "## DTE Results (Differential Transcript Expression)",
     "",
     "### Volcano Plot",
-    "![Volcano](plots/DTE_volcano.pdf)",
+    "```{r volcano, echo=FALSE, fig.cap='Volcano plot', eval=file.exists('plots/DTE_volcano.pdf')}",
+    "knitr::include_graphics('plots/DTE_volcano.pdf')",
+    "```",
     "",
     "### MA Plot",
-    "![MA](plots/DTE_MA.pdf)",
+    "```{r ma, echo=FALSE, fig.cap='MA plot', eval=file.exists('plots/DTE_MA.pdf')}",
+    "knitr::include_graphics('plots/DTE_MA.pdf')",
+    "```",
     "",
     "### Top Significant Transcripts",
-    "![Top Barplot](plots/DTE_top_barplot.pdf)",
+    "```{r topbar, echo=FALSE, fig.cap='Top DE transcripts', eval=file.exists('plots/DTE_top_barplot.pdf')}",
+    "knitr::include_graphics('plots/DTE_top_barplot.pdf')",
+    "```",
     "",
     "### Interactive Table (top 1000 by padj)",
     "```{r dt_dte}",
@@ -1148,26 +2032,116 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
     "## DTU Results (Differential Transcript Usage)",
     "",
     "### P-value Distribution",
-    "![P-value histogram](plots/DTU_pvalue_hist.pdf)",
+    "```{r dtu_hist, echo=FALSE, fig.cap='DTU p-value histogram', eval=file.exists('plots/DTU_pvalue_hist.pdf')}",
+    "knitr::include_graphics('plots/DTU_pvalue_hist.pdf')",
+    "```",
     "",
     "### Interactive Table",
     "```{r dt_dtu}",
     paste0("dtu_data <- read.csv(\"", dtu_abs_path, "\", check.names = FALSE)"),
     "DT::datatable(dtu_data, filter = \"top\", options = list(scrollX = TRUE))",
-    "```",
-    "",
-    "## Gene‑specific Plots"
+    "```"
   )
+
+  # ---- DEXSeq section (only if the complementary engine was run) ----
+  if (has_dexseq) {
+    rmd_lines <- c(rmd_lines,
+      "",
+      "## DEXSeq Results (Differential Transcript/Exon Usage)",
+      "",
+      paste0("DEXSeq treats each transcript as an \"exonic bin\" within its parent gene and ",
+             "tests for differential usage independently of the DRIMSeq-based DTU test above; ",
+             "the two are commonly compared as a cross-validation of DTU calls."),
+      "",
+      "### Interactive Table",
+      "```{r dt_dexseq}",
+      paste0("dexseq_data <- read.csv(\"", dexseq_abs_path, "\", check.names = FALSE)"),
+      "dexseq_data <- dexseq_data[order(dexseq_data$padj), ]",
+      "DT::datatable(dexseq_data, filter = \"top\", options = list(scrollX = TRUE))",
+      "```"
+    )
+  }
+
+  # ---- Isoform Switch Overview section (only if switch_list was supplied) ----
+  if (has_switch) {
+    rmd_lines <- c(rmd_lines, "", "## Isoform Switch Overview", "")
+
+    if (file.exists(file.path(plot_dir, "IsoformSwitch_overview.pdf"))) {
+      rmd_lines <- c(rmd_lines,
+        "### dIF vs. Isoform Switch Significance",
+        "```{r sw_overview, echo=FALSE, fig.cap='Isoform Switch Overview', eval=file.exists('plots/IsoformSwitch_overview.pdf')}",
+        "knitr::include_graphics('plots/IsoformSwitch_overview.pdf')",
+        "```",
+        ""
+      )
+    }
+
+    top_switch_dir <- file.path(plot_dir, "top_switches")
+    if (dir.exists(top_switch_dir)) {
+      top_switch_files <- list.files(top_switch_dir, pattern = "\\.pdf$", recursive = TRUE)
+      if (length(top_switch_files) > 0) {
+        rmd_lines <- c(rmd_lines, paste0("### Top ", switch_plot_top_n, " Isoform Switches"), "")
+        for (fn in top_switch_files) {
+          rel_path <- file.path("plots", "top_switches", fn)
+          fig_label <- tools::file_path_sans_ext(basename(fn))
+          rmd_lines <- c(rmd_lines,
+            paste0("#### ", fig_label),
+            paste0("```{r echo=FALSE, eval=file.exists('", rel_path, "')}"),
+            paste0("knitr::include_graphics('", rel_path, "')"),
+            "```",
+            ""
+          )
+        }
+      }
+    }
+  }
+
+  rmd_lines <- c(rmd_lines, "", "## Gene\u2011specific Plots")
   
-  # Add gene-specific sections if requested
+  # Add gene-specific sections if requested, including any of the enhanced
+  # isoform-level visualizations that were successfully generated for that gene
   if (!is.null(genes_of_interest) && length(genes_of_interest) > 0) {
     for (g in genes_of_interest) {
-      # Only add if the plot file exists
+      gene_section_lines <- character(0)
+
       if (file.exists(file.path(plot_dir, paste0("proportions_", g, ".pdf")))) {
-        rmd_lines <- c(rmd_lines,
-          paste0("\n### ", g),
-          paste0("![Proportions](plots/proportions_", g, ".pdf)")
-        )
+        gene_section_lines <- c(gene_section_lines,
+          "**Transcript proportions**", "",
+          paste0("```{r eval=file.exists('plots/proportions_", g, ".pdf')}"),
+          paste0("knitr::include_graphics('plots/proportions_", g, ".pdf')"),
+          "```", "")
+      }
+      if (file.exists(file.path(plot_dir, paste0("DEXSeq_", g, ".pdf")))) {
+        gene_section_lines <- c(gene_section_lines,
+          "**DEXSeq transcript usage**", "",
+          paste0("```{r eval=file.exists('plots/DEXSeq_", g, ".pdf')}"),
+          paste0("knitr::include_graphics('plots/DEXSeq_", g, ".pdf')"),
+          "```", "")
+      }
+      if (file.exists(file.path(plot_dir, paste0("SwitchPlot_", g, ".pdf")))) {
+        gene_section_lines <- c(gene_section_lines,
+          "**Isoform switch summary (structure, expression, usage)**", "",
+          paste0("```{r eval=file.exists('plots/SwitchPlot_", g, ".pdf')}"),
+          paste0("knitr::include_graphics('plots/SwitchPlot_", g, ".pdf')"),
+          "```", "")
+      }
+      if (file.exists(file.path(plot_dir, paste0("Sashimi_", g, ".pdf")))) {
+        gene_section_lines <- c(gene_section_lines,
+          "**Sashimi-style junction usage**", "",
+          paste0("```{r eval=file.exists('plots/Sashimi_", g, ".pdf')}"),
+          paste0("knitr::include_graphics('plots/Sashimi_", g, ".pdf')"),
+          "```", "")
+      }
+      if (file.exists(file.path(plot_dir, paste0("ExonUsage_", g, ".pdf")))) {
+        gene_section_lines <- c(gene_section_lines,
+          "**Exon-bin usage comparison**", "",
+          paste0("```{r eval=file.exists('plots/ExonUsage_", g, ".pdf')}"),
+          paste0("knitr::include_graphics('plots/ExonUsage_", g, ".pdf')"),
+          "```", "")
+      }
+
+      if (length(gene_section_lines) > 0) {
+        rmd_lines <- c(rmd_lines, paste0("\n### ", g), gene_section_lines)
       }
     }
   } else {
@@ -1179,6 +2153,10 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
   
   # Render the report
   rmarkdown::render(rmd_file, output_file = "report.html", output_dir = report_dir, quiet = TRUE)
+  
+  # Free large objects after report generation
+  rm(dte, dtu, dte_sig, dte_ma, dte_filtered, top_dte)
+  gc()
   
   message("DTE/DTU report generated in: ", report_dir)
   invisible(NULL)

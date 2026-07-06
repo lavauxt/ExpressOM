@@ -301,6 +301,104 @@ switch_list <- run_isoform_switch(
 See `vignette("isoform-predictors", package = "ExpressOM")` for a full
 walkthrough, including troubleshooting and performance notes.
 
+## Isoform-Level Analysis: Enhanced Visualization (DEXSeq, Switch Plots, Sashimi, Exon Usage)
+
+Beyond DTE/DTU tables and the transcript-proportion barplots, the isoform
+pipeline can generate a richer set of graphics for interpreting *how* a
+gene's isoform usage differs between conditions. These are produced
+automatically as part of the DTE/DTU HTML report whenever `run_isoform = TRUE`,
+and are also available as standalone functions for ad-hoc use.
+
+| Plot | Function | What it shows |
+|------|----------|----------------|
+| **Isoform switch summary** | `plot_isoform_switch_summary()` | Composite figure per gene: isoform/transcript structure (with ORF, coding potential, protein domains, signal peptides if `run_predictors = TRUE`) alongside gene expression, isoform expression, and isoform usage (IF). Wraps `IsoformSwitchAnalyzeR::switchPlotTopSwitches()`/`switchPlot()`. |
+| **DEXSeq transcript usage** | `plot_dexseq_gene()` | Classic DEXSeq-style plot comparing fitted expression (or usage, via `splicing = TRUE`) of every transcript in a gene across conditions, with significant transcripts highlighted. Requires `run_dexseq = TRUE`. |
+| **Sashimi-style junction usage** | `plot_isoform_sashimi()` | Mirrored splice-junction diagram: exon structure on a shared genomic axis, with arcs above/below representing isoform-fraction-weighted junction usage in `level` vs `base`. |
+| **Exon-bin usage comparison** | `plot_exon_usage_comparison()` | Bar chart comparing isoform-expression-weighted signal across non-overlapping exon bins (DEXSeq-style flattened annotation) between conditions — a coverage-style comparison built from transcript-level quantification. |
+
+> 💡 **Note on the sashimi-style plot:** `plot_isoform_sashimi()` and
+> `plot_exon_usage_comparison()` are built entirely from transcript-level
+> quantification (the isoform-fraction values IsoformSwitchAnalyzeR already
+> computes), **not** from aligned-read/junction coverage in a BAM file. They
+> give a fast, alignment-free approximation of splicing differences; for
+> base-pair-resolution coverage you would need a BAM-based tool (e.g.
+> ggsashimi, ggbio, Gviz) run separately.
+
+### Turning on the DEXSeq engine and enhanced plots
+
+```R
+switch_list <- run_isoform_switch(
+  isoform_obj    = isoform_import,
+  condition      = "condition",
+  level          = "Treated",
+  base           = "Control",
+  fasta_file     = "reference/transcripts.fa",
+  gff_file       = "reference/annotation.gtf",
+  out_dir        = "results/isoform"
+)
+
+# Complementary DEXSeq-based DTU test (transcripts treated as DEXSeq exonic bins,
+# following the Soneson/Love/Robinson "Swimming downstream" workflow)
+dexseq_res <- run_dexseq_dtu(isoform_import, condition = "condition",
+                              level = "Treated", base = "Control")
+
+# Standalone plots for a gene of interest
+plot_isoform_switch_summary(switch_list, plot_dir = "results/isoform/plots",
+                             genes_of_interest = c("TP53", "BCL2"))
+plot_isoform_sashimi(switch_list, gene = "TP53", level = "Treated", base = "Control",
+                      plot_dir = "results/isoform/plots")
+plot_exon_usage_comparison(switch_list, gene = "TP53", level = "Treated", base = "Control",
+                            plot_dir = "results/isoform/plots")
+plot_dexseq_gene(dexseq_res$dxr_list, gene_id = "ENSG00000141510",
+                  plot_dir = "results/isoform/plots", gene_symbol = "TP53")
+```
+
+From the full pipeline, the same behaviour is reached with two extra arguments
+to `run_bulk_pipeline()`:
+
+```R
+run_bulk_pipeline(
+  ensembl_package_name = "EnsDb.Hsapiens.v107",
+  count_type           = "salmon",
+  data_dir             = "./data/counts",
+  out_dir              = "./results",
+  sample_table         = "./data/sample_table.csv",
+  model                = "~ condition",
+  level                = "Treated",
+  base                 = "Control",
+  run_isoform          = TRUE,
+  run_dexseq           = TRUE,                       # enable the complementary DEXSeq DTU engine
+  isoform_report_genes = c("TP53", "BCL2"),          # gets every plot in the table above
+  isoform_plot_top_n   = 15                          # auto-plot the top 15 isoform switches genome-wide
+)
+```
+
+### Where the files land
+
+```txt
+results/
+└── IsoformSwitch/
+    ├── DTU_DTE_report/
+    │   ├── report.html                       # now includes DEXSeq / Switch Overview / gene sections
+    │   ├── DTE_results_annotated.csv
+    │   ├── DTU_results_annotated.csv
+    │   ├── DEXSeq_results_annotated.csv       # only if run_dexseq = TRUE
+    │   └── plots/
+    │       ├── DTE_volcano.pdf, DTE_MA.pdf, DTU_pvalue_hist.pdf, ...
+    │       ├── IsoformSwitch_overview.pdf     # dIF vs. switch q-value, genome-wide
+    │       ├── top_switches/                  # auto-selected top isoform_plot_top_n switches
+    │       │   └── *.pdf
+    │       ├── proportions_<GENE>.pdf
+    │       ├── SwitchPlot_<GENE>.pdf
+    │       ├── DEXSeq_<GENE>.pdf              # only if run_dexseq = TRUE
+    │       ├── Sashimi_<GENE>.pdf
+    │       └── ExonUsage_<GENE>.pdf
+    ├── plots/switch_plots_with_predictors/    # refreshed switch plots incl. domains/coding potential
+    │   └── ...                                # (only if run_predictors = TRUE)
+    ├── dexseq_results.rds                     # only if run_dexseq = TRUE
+    └── switch_list.rds
+```
+
 ## License
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE).

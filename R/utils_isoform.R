@@ -678,7 +678,9 @@ load_isoform_results <- function(save_dir) {
     list(slot = "switch_list",    file = "switch_list.rds",      label = "Final SwitchList"),
     list(slot = "switch_step1",   file = "step1_imported.rds",   label = "SwitchList step-1 (imported)"),
     list(slot = "switch_step2",   file = "step2_analyzed.rds",   label = "SwitchList step-2 (analyzed)"),
-    list(slot = "switch_step3",   file = "step3_predictors.rds", label = "SwitchList step-3 (predictors)")
+    list(slot = "switch_step3",   file = "step3_predictors.rds", label = "SwitchList step-3 (predictors)"),
+    list(slot = "switch_step3_5", file = "step3_5_refreshed.rds", label = "SwitchList step-3.5 (consequences refreshed)"),
+    list(slot = "dexseq_results", file = "dexseq_results.rds",    label = "DEXSeq DTU results")
   )
 
   res <- lapply(slots, function(s) {
