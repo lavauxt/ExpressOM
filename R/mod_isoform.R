@@ -189,6 +189,15 @@ run_dtu <- function(
   }
 
   sample_data <- isoform_obj$meta
+
+  # --- NEW: Keep only samples belonging to the two conditions of interest ---
+  keep_samples <- sample_data[[condition]] %in% c(base, level)
+  if (sum(keep_samples) < 2) {
+    stop("Fewer than 2 samples available for comparison. Need at least one sample in each condition.")
+  }
+  sample_data <- sample_data[keep_samples, , drop = FALSE]
+  counts <- counts[, rownames(sample_data), drop = FALSE]
+  # Ensure condition is a factor with base as reference
   sample_data$condition <- factor(sample_data[[condition]], levels = c(base, level))
 
   num_samples <- ncol(counts)
@@ -202,14 +211,17 @@ run_dtu <- function(
 
   tx2gene <- isoform_obj$tx2gene
 
-  # Direct mapping: both row names and tx2gene$tx_id are already version‑free
+  # Clean transcript IDs: remove version suffixes (already done in import, but safe)
+  rownames(counts) <- sub("\\..*$", "", rownames(counts))
+  tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
+
   gene_id_map <- tx2gene$gene_id[match(rownames(counts), tx2gene$tx_id)]
 
   # Filter out transcripts with no gene mapping
   keep_mapped <- !is.na(gene_id_map)
   counts <- counts[keep_mapped, , drop = FALSE]
   gene_id_map <- gene_id_map[keep_mapped]
-  tx_ids_original <- rownames(counts)   # original (version‑free) IDs
+  tx_ids_original <- rownames(counts)
 
   if (nrow(counts) == 0) {
     stop("No transcripts could be mapped to genes after version handling.")
@@ -217,6 +229,7 @@ run_dtu <- function(
 
   message("Mapped transcripts: ", nrow(counts))
 
+  # Filter by total expression per transcript
   keep_tx <- rowSums(counts) >= min_transcript_total
   counts <- counts[keep_tx, , drop = FALSE]
   gene_id_map <- gene_id_map[keep_tx]
@@ -226,6 +239,7 @@ run_dtu <- function(
     stop("No transcripts passed min_transcript_total filter.")
   }
 
+  # Filter by minimum proportion and number of samples with expression
   keep_tx <- rowSums(counts > min_transcript_expr) >= min_samps_feature_expr
   counts <- counts[keep_tx, , drop = FALSE]
   gene_id_map <- gene_id_map[keep_tx]
@@ -235,8 +249,8 @@ run_dtu <- function(
     stop("No transcripts passed expression filtering.")
   }
 
+  # Cap number of transcripts per gene
   gene_split <- split(seq_len(nrow(counts)), gene_id_map)
-
   keep_idx <- unlist(lapply(gene_split, function(idx) {
     if (length(idx) <= max_transcripts) return(idx)
     gene_expr <- rowMeans(counts[idx, , drop = FALSE])
@@ -256,6 +270,10 @@ run_dtu <- function(
 
   all_results <- list()
 
+  # Clean sample IDs in metadata and counts
+  rownames(sample_data) <- trimws(rownames(sample_data))
+  colnames(counts) <- trimws(colnames(counts))
+
   for (i in seq_along(gene_chunks)) {
     message("Processing chunk ", i, " / ", length(gene_chunks))
 
@@ -266,6 +284,18 @@ run_dtu <- function(
     curr_gene_ids <- gene_id_map[idx]
     curr_tx_ids <- tx_ids_original[idx]
 
+    # Find common samples between current counts and metadata
+    common_samples <- intersect(colnames(curr_counts), rownames(sample_data))
+    if (length(common_samples) == 0) {
+      warning("Chunk ", i, ": No common samples between counts and metadata. Skipping.")
+      next
+    }
+
+    # Subset both count matrix and metadata to common samples
+    curr_counts <- curr_counts[, common_samples, drop = FALSE]
+    sample_data_sub <- sample_data[common_samples, , drop = FALSE]
+
+    # Prepare data frame for dmDSdata
     curr_df <- data.frame(
       gene_id = curr_gene_ids,
       feature_id = curr_tx_ids,
@@ -273,7 +303,7 @@ run_dtu <- function(
       check.names = FALSE
     )
 
-    d <- DRIMSeq::dmDSdata(counts = curr_df, samples = sample_data)
+    d <- DRIMSeq::dmDSdata(counts = curr_df, samples = sample_data_sub)
 
     d <- DRIMSeq::dmFilter(
       d,
@@ -288,7 +318,22 @@ run_dtu <- function(
       next
     }
 
-    design <- model.matrix(~ condition, data = DRIMSeq::samples(d))
+    # ----- Robust design matrix construction -----
+    counts_d <- DRIMSeq::counts(d)
+    samples_d <- DRIMSeq::samples(d)
+
+    # Ensure samples_d rows are in the same order as the columns of counts_d
+    if (!identical(rownames(samples_d), colnames(counts_d))) {
+      samples_d <- samples_d[colnames(counts_d), , drop = FALSE]
+    }
+
+    # Check dimensions
+    if (nrow(samples_d) != ncol(counts_d)) {
+      warning("Chunk ", i, ": Design matrix rows (", nrow(samples_d), ") do not match number of samples (", ncol(counts_d), "). Skipping.")
+      next
+    }
+
+    design <- model.matrix(~ condition, data = samples_d)
 
     res <- tryCatch({
       d <- DRIMSeq::dmPrecision(d, design = design, BPPARAM = bp_param)
@@ -308,13 +353,13 @@ run_dtu <- function(
     gc()
   }
 
+  if (length(all_results) == 0) {
+    stop("No DTU results were produced. Check that your samples and metadata match, and that there are genes with multiple transcripts meeting the filtering criteria.")
+  }
+
   dtu_results <- do.call(rbind, all_results)
   rm(all_results)
   gc()
-
-  if (nrow(dtu_results) == 0) {
-    stop("No DTU results were produced.")
-  }
 
   pcol <- intersect(c("pvalue", "p_value"), colnames(dtu_results))[1]
   if (is.na(pcol)) {
