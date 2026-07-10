@@ -767,7 +767,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     switch_list <- .ckpt_load("step1_imported.rds")
 
   } else {
-    # ---- Build SwitchList from raw data ----
+    # ====================== FIXED BLOCK ====================================
     message("Building SwitchList from raw data...")
 
     if (isoform_obj$type == "tximport") {
@@ -776,12 +776,31 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       count_matrix <- isoform_obj$counts
     }
 
-    sample_col    <- if ("Sample" %in% colnames(isoform_obj$meta)) "Sample" else "sample_id"
-    sample_vector <- isoform_obj$meta[[sample_col]]
-    if (is.null(sample_vector) || length(sample_vector) == 0)
-      sample_vector <- rownames(isoform_obj$meta)
-    if (!all(sample_vector %in% colnames(count_matrix)))
-      stop("Sample IDs in metadata do not match count matrix column names.")
+    sample_col <- if ("Sample" %in% colnames(isoform_obj$meta)) "Sample" else "sample_id"
+
+    # --- Filter samples to only those in the comparison groups ---
+    meta_sub <- isoform_obj$meta[isoform_obj$meta[[condition]] %in% c(base, level), , drop = FALSE]
+    if (nrow(meta_sub) == 0) {
+      stop("No samples found for the comparison groups: ", base, " and ", level)
+    }
+    # Ensure sample order matches count matrix columns
+    keep_samples <- intersect(rownames(meta_sub), colnames(count_matrix))
+    if (length(keep_samples) == 0) {
+      stop("No matching sample IDs between metadata and count matrix after filtering.")
+    }
+    meta_sub <- meta_sub[keep_samples, , drop = FALSE]
+    count_matrix <- count_matrix[, keep_samples, drop = FALSE]
+
+    # Update sample vector
+    sample_vector <- meta_sub[[sample_col]]
+    # Ensure column names match the sample IDs
+    colnames(count_matrix) <- sample_vector
+
+    # Optionally warn if a group has fewer than 2 samples
+    group_counts <- table(meta_sub[[condition]])
+    if (any(group_counts < 2)) {
+      warning("One or both groups have fewer than 2 samples. DTU/switch analysis may be unreliable.")
+    }
 
     # Pre-filter: keep only transcripts present in the FASTA file
     message("Pre-filtering transcripts to match FASTA file...")
@@ -798,9 +817,10 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     count_matrix     <- count_matrix[keep_in_fasta, , drop = FALSE]
     message("  Kept ", nrow(count_matrix), " / ", length(clean_rownames),
             " transcripts matching the FASTA file.")
-    if (nrow(count_matrix) == 0)
+    if (nrow(count_matrix) == 0) {
       stop("No transcript IDs match between count matrix and FASTA file. ",
            "Check ID formats or set ignoreAfterPeriod = TRUE in importRdata().")
+    }
 
     # Remove genes with only one transcript (DRIMSeq requirement)
     tx2gene      <- isoform_obj$tx2gene
@@ -819,16 +839,17 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     rownames(count_matrix)  <- clean_id(rownames(count_matrix))
     isoform_count_matrix    <- round(count_matrix)
 
+    # Build design matrix from filtered metadata
     design_matrix <- data.frame(
       sampleID  = sample_vector,
-      condition = factor(isoform_obj$meta[[condition]], levels = c(base, level)),
+      condition = factor(meta_sub[[condition]], levels = c(base, level)),
       stringsAsFactors = FALSE
     )
     rownames(design_matrix) <- design_matrix$sampleID
 
     if (!"package:dplyr" %in% search()) attachNamespace("dplyr")
 
-    # ---- importRdata: ALL PARAMETERS UNCHANGED ----
+    # ---- importRdata ----
     switch_list <- IsoformSwitchAnalyzeR::importRdata(
       isoformCountMatrix   = isoform_count_matrix,
       isoformRepExpression = isoform_count_matrix,
@@ -838,11 +859,12 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       ignoreAfterPeriod    = TRUE,
       showProgress         = TRUE
     )
+    # ========================================================================
     message("Isoform data import completed.")
 
     # Save step-1 checkpoint immediately
     .ckpt_save(switch_list, "step1_imported.rds")
-    
+
     # Free the large count matrix now that switch_list is built
     if (!is.null(isoform_obj$txi$counts)) {
       isoform_obj$txi$counts <- NULL
@@ -912,11 +934,6 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   # --------------------------------------------------------------------------
   # Step 3.5 - Refresh switch consequence analysis & switch plots now that
   # external predictor annotations (CPAT / SignalP / Pfam) are available.
-  # NOTE: the plots generated inside isoformSwitchAnalysisCombined() (Step 2)
-  # predate these annotations, so protein-domain / signal-peptide / coding-
-  # potential evidence would otherwise never appear in the final isoform
-  # switch plots. This step is purely additive: on failure it leaves
-  # switch_list untouched and the Step-2 plots remain valid.
   # --------------------------------------------------------------------------
   if (isTRUE(run_predictors)) {
     if (.ckpt_exists("step3_5_refreshed.rds")) {
@@ -977,6 +994,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   message("Isoform switch analysis completed. Results saved in: ", out_dir)
   return(switch_list)
 }
+
 
 # ==============================================================================
 # Internal: run external predictors (CPAT, SignalP, Pfam) via WSL or natively

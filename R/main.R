@@ -513,6 +513,23 @@ if (!is.null(gene_sets_zscore)) {
         message("Step A: Isoform import loaded from checkpoint. Skipping.")
       }
 
+      # ===== Transcript-level PCA ========================================
+      if (!is.null(isoform_import) && !is.null(main_condition) && !is.null(level) && !is.null(base)) {
+        message("Generating transcript-level PCA plots...")
+        plot_transcript_pca(
+          isoform_obj   = isoform_import,
+          condition_col = main_condition,
+          level         = level,
+          base          = base,
+          out_dir       = out_dir,
+          batch_col     = batch_col,
+          subset_to_contrast = FALSE
+        )
+      } else {
+        message("Skipping transcript PCA: missing isoform import or condition information.")
+      }
+      # =======================================================================
+
       # ---- Step B: DTE ----------------------------------------------------
       if (is.null(dte_res)) {
         message("Step B: Running DTE (Differential Transcript Expression)...")
