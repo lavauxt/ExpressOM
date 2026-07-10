@@ -896,6 +896,14 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     }
 
     # ---- isoformSwitchAnalysisCombined: ALL PARAMETERS UNCHANGED ----
+    # FIX: Ensure dplyr is attached so rename_with is available
+    if (!requireNamespace("dplyr", quietly = TRUE)) {
+      stop("dplyr is required but not installed.")
+    }
+    if (!"package:dplyr" %in% search()) {
+      attachNamespace("dplyr")
+    }
+
     switch_list <- IsoformSwitchAnalyzeR::isoformSwitchAnalysisCombined(
       switchAnalyzeRlist = switch_list,
       genomeObject       = genome_object,
