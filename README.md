@@ -144,14 +144,26 @@ results/
 
 The `run_bulk_pipeline` function generates a heavily organized output structure in your designated `out_dir`:
 
-* **`DE_Results/`**: TSV tables of raw/filtered differential expression results and normalized counts.
+* **`DE_raw_results/`**: TSV tables of raw/filtered differential expression results and normalized counts.
 * **`Plots/`**: PCA plots, Sample Correlation Heatmaps, MA plots, Volcano plots, and top DE gene boxplots.
 * **`ORA/` & `GSEA/`**: Extensive targets and plots for GO mapping, Reactome, Disease Ontology, and KEGG generic pathways (Dotplots, Ridgeplots, Pathway Graphs).
 * **`SPIA/`**: Signaling Pathway Impact Analysis graphs and Evidence CSVs.
 * **`Transcription_Factors/`**: Output mapping active transcription factor perturbations based on dynamically mapped Enrichr libraries.
 * **`RegionReport/`**: Auto-generated interactive `RegionReport` HTML documents.
 * **`Save_rdata/`**: The complete populated R environment serialized as an `.RData` file.
-* **`Log/`**: Final model constraints, environment data, session info, and processing warnings/errors log.
+* **`Log/`**: A single, unified log tree for the whole run — always check here first if something looks like it didn't run:
+  * `Log/SessionInfo.txt`, `Log/Warnings.txt` — captured at the very end of the run, regardless of what was enabled.
+  * `Log/DGE/DGE_params_<comparison>.json` — one file per DGE comparison (design formula, contrast, filters, up/down counts).
+  * `Log/Isoform/wsl_debug.json` — output of `debug_wsl()`: which predictor tools were found, whether the Pfam database is present *and* `hmmpress`-indexed, whether the `isoform_tools` conda env exists, etc. Re-run `debug_wsl()` any time to refresh this without re-running the whole pipeline.
+  * `Log/Isoform/wsl_commands.log` — a timestamped audit trail of every command run inside WSL/bash for CPAT, SignalP, hmmscan, and the install helpers, with exit codes and captured output. This is the first place to look if a predictor "silently" didn't produce results.
+
+## Windows / WSL Troubleshooting
+
+If CPAT, SignalP, or Pfam/hmmscan results are missing after a run with `run_predictors = TRUE`, check `Log/Isoform/wsl_debug.json` and `Log/Isoform/wsl_commands.log` first — they will usually show exactly which tool or database was missing or failed, and why. Common causes that are now checked and reported explicitly:
+
+* **Pfam database found but not indexed.** `hmmscan` requires `Pfam-A.hmm` to be `hmmpress`-indexed (companion `.h3f/.h3i/.h3m/.h3p` files). `debug_wsl()` now checks this specifically and `install_isoform_databases()` performs the indexing itself (activating the `isoform_tools` conda environment first, since `hmmer` lives inside it rather than on the bare WSL PATH).
+* **Custom `CPAT_DATA` / `SIGNALP_DIR` paths not taking effect.** These are now persisted to a dedicated file (`~/.isoform_tools_env.sh`) that every predictor invocation sources, instead of `~/.bashrc` (which is never read by the non-interactive scripts this package runs).
+* **`use_wsl` not defaulting the way you'd expect.** All `use_wsl` parameters across the package now default to `TRUE` on Windows and `FALSE` elsewhere; you only need to pass it explicitly to override that.
 
 ## Functional Analysis Methods
 
@@ -225,7 +237,7 @@ for (region in target_regions) {
 The workflow isolates the data on the fly and segments your outputs cleanly:
 results/
 ├── analysis_Cortex/
-│   ├── DE_Results/      # Only Cortex Treated vs Vehicle metrics
+│   ├── DE_raw_results/  # Only Cortex Treated vs Vehicle metrics
 │   ├── Plots/           # Cortex specific PCA, Volcanoplots, and Boxplots
 │   └── ORA/             # Functional pathways enriched specifically in Cortex
 ├── analysis_Striatum/
@@ -292,14 +304,27 @@ switch_list <- run_isoform_switch(
   gff_file       = "reference/annotation.gtf",
   out_dir        = "results/isoform",
   run_predictors = TRUE,
-  use_wsl        = TRUE,             # ignored on Linux/macOS
+  use_wsl        = TRUE,             # ignored on Linux/macOS; defaults to TRUE on Windows anyway
   wsl_distro     = "Ubuntu-22.04",   # ignored on Linux/macOS
-  predictor_cpu  = NULL              # NULL auto-detects available CPU cores
+  predictor_cpu  = NULL,             # NULL auto-detects available CPU cores
+  log_dir        = NULL              # NULL -> out_dir/Log; override to point at a shared log tree
 )
 ```
 
 See `vignette("isoform-predictors", package = "ExpressOM")` for a full
 walkthrough, including troubleshooting and performance notes.
+
+Independently of `run_predictors`, `run_isoform_switch()` also runs
+`IsoformSwitchAnalyzeR::analyzeAlternativeSplicing()` on every call (exon
+skipping, mutually exclusive exons, intron retention, alternative 5'/3'
+splice sites, alternative TSS/TES), and the report generator adds four
+genome-wide summary figures alongside the existing dIF-vs-q-value overview
+plot: `ConsequenceSummary.pdf`, `ConsequenceEnrichment.pdf`,
+`SplicingSummary.pdf`, and `SplicingEnrichment.pdf` — matching the equivalent
+figures in the `IsoformSwitchAnalyzeR` vignette. Each is best-effort: on a
+small or single-direction dataset one or more may legitimately be skipped
+(reported in the console and in `Log/Isoform/`), without affecting anything
+else in the run.
 
 ## Isoform-Level Analysis: Enhanced Visualization (DEXSeq, Switch Plots, Sashimi, Exon Usage)
 
@@ -386,6 +411,10 @@ results/
     │   └── plots/
     │       ├── DTE_volcano.pdf, DTE_MA.pdf, DTU_pvalue_hist.pdf, ...
     │       ├── IsoformSwitch_overview.pdf     # dIF vs. switch q-value, genome-wide
+    │       ├── ConsequenceSummary.pdf         # genome-wide functional consequence bar chart (NEW)
+    │       ├── ConsequenceEnrichment.pdf      # gain-vs-loss enrichment per consequence (NEW)
+    │       ├── SplicingSummary.pdf            # genome-wide alt. splicing event-type bar chart (NEW)
+    │       ├── SplicingEnrichment.pdf         # gain-vs-loss enrichment per splice type (NEW)
     │       ├── top_switches/                  # auto-selected top isoform_plot_top_n switches
     │       │   └── *.pdf
     │       ├── proportions_<GENE>.pdf

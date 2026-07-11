@@ -1,7 +1,7 @@
 Package: ExpressOM
 Type: Package
 Title: Expression Overview and Mapping
-Version: 0.1.0
+Version: 0.1.1
 Author: TL
 Maintainer: TL <lavauxt@gmail.com>
 Description: A fully modularized R package for bulk RNA-seq analysis, wrapping

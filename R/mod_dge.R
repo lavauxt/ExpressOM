@@ -7,7 +7,7 @@
                            filter_criterion = "rowSums(counts) >= 1") {
   if (!requireNamespace("jsonlite", quietly = TRUE)) {
     warning("jsonlite not installed; writing log as text file.")
-    log_dir <- file.path(out_dir, "Log")
+    log_dir <- file.path(out_dir, "Log", "DGE")
     if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
     log_file <- file.path(log_dir, paste0("DGE_params_", comp_name, ".txt"))
     con <- file(log_file, open = "wt")
@@ -45,7 +45,7 @@
     de_genes_down      = n_de_genes_down,
     de_genes_total     = n_de_genes_up + n_de_genes_down
   )
-  log_dir  <- file.path(out_dir, "Log")
+  log_dir  <- file.path(out_dir, "Log", "DGE")
   if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
   log_file <- file.path(log_dir, paste0("DGE_params_", comp_name, ".json"))
   jsonlite::write_json(params, log_file, pretty = TRUE, auto_unbox = TRUE)
@@ -293,7 +293,12 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
   base_dir <- file.path(out_dir, "DE_raw_results")
   if (!dir.exists(base_dir)) dir.create(base_dir, recursive = TRUE)
 
-  .write_dge_log(base_dir, comp_name, model, test, reduced, level, base,
+  # BUG FIX ("log dir is empty"): pass the true top-level out_dir here, not
+  # base_dir. .write_dge_log() appends "Log/DGE" itself; passing base_dir
+  # (out_dir/DE_raw_results) used to nest the log two levels deep at
+  # out_dir/DE_raw_results/Log -- a location the README never documents and
+  # that a user browsing to the documented out_dir/Log would never find.
+  .write_dge_log(out_dir, comp_name, model, test, reduced, level, base,
                  shrink_method, padj_cutoff, n_genes_input, n_genes_after_filter,
                  sig_up, sig_down)
 
@@ -315,9 +320,6 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
                                        level, base, gene_map, padj_cutoff) {
   fc_dir <- file.path(out_dir, "DE_raw_results")
   if (!dir.exists(fc_dir)) dir.create(fc_dir, recursive = TRUE)
-
-  log_dir <- file.path(fc_dir, "Log")
-  if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
 
   res_tbl         <- as.data.frame(res_shrunken)
   res_tbl$ensembl <- rownames(res_tbl)

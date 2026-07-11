@@ -19,6 +19,84 @@
 # @keywords internal
 .expressom_cache <- new.env(parent = emptyenv())
 
+# ---- Shared persistent-environment-variable file -----------------------------
+#
+# BUG FIX (Windows/WSL tools "not working"): install_isoform_databases() and
+# install_signalp_from_windows() used to persist CPAT_DATA / SIGNALP_DIR by
+# appending `export ... >> ~/.bashrc`. That line is only ever read back by an
+# *interactive* bash shell. Every actual tool invocation in this file runs a
+# script non-interactively via `bash <script>` / `wsl -d <distro> bash
+# <script>`, which never sources ~/.bashrc (and stock Ubuntu's default
+# ~/.bashrc explicitly `return`s immediately for non-interactive shells, so it
+# wouldn't help even if sourced). The result: any custom CPAT_DATA/SIGNALP_DIR
+# location silently never reached the tools at prediction time. All install
+# helpers now write to this single dedicated file instead, and
+# .wsl_exec_script() sources it (guarded, so it's a harmless no-op if the file
+# doesn't exist yet) before every command.
+# @keywords internal
+.ISOFORM_ENV_FILE <- "$HOME/.isoform_tools_env.sh"
+
+#' Persist an environment variable for later predictor runs
+#'
+#' Appends (or replaces) an `export VAR="value"` line in the dedicated
+#' env file that `.wsl_exec_script()` sources on every invocation. This is
+#' the supported way for install helpers to make a path available to CPAT /
+#' SignalP / hmmscan at prediction time -- do not write to ~/.bashrc (see
+#' note above).
+#'
+#' @param var        Environment variable name (e.g. "CPAT_DATA").
+#' @param value      Value to assign (will be shell-quoted).
+#' @param wsl_distro WSL distribution name.
+#' @param use_wsl    Route through WSL? (only effective on Windows.)
+#' @return Invisibly, TRUE/FALSE indicating whether the write succeeded.
+#' @keywords internal
+.wsl_write_env_var <- function(var, value, wsl_distro = "Ubuntu", use_wsl = TRUE) {
+  # NOTE: .ISOFORM_ENV_FILE intentionally contains a literal "$HOME" that the
+  # *execution environment* (WSL/native shell) must expand at run time -- it
+  # must always appear double-quoted (or bare) in the generated script,
+  # never single-quoted, since single quotes would freeze it as the literal
+  # string "$HOME" and point at a nonexistent path.
+  export_line <- sprintf("export %s=%s", var, shQuote(value, type = "sh"))
+  body <- c(
+    sprintf('touch "%s"', .ISOFORM_ENV_FILE),
+    sprintf('grep -v "^export %s=" "%s" > "%s.tmp" 2>/dev/null || true', var, .ISOFORM_ENV_FILE, .ISOFORM_ENV_FILE),
+    sprintf('echo %s >> "%s.tmp"', shQuote(export_line, type = "sh"), .ISOFORM_ENV_FILE),
+    sprintf('mv "%s.tmp" "%s"', .ISOFORM_ENV_FILE, .ISOFORM_ENV_FILE)
+  )
+  status <- .wsl_exec_script(body, wsl_distro = wsl_distro, use_wsl = use_wsl,
+                              intern = FALSE, ignore_stderr = TRUE, log_dir = NULL)
+  ok <- isTRUE(status == 0L)
+  if (ok) message("  -> Persisted ", var, " for future predictor runs (", .ISOFORM_ENV_FILE, ")")
+  else message("  ! Could not persist ", var, " to ", .ISOFORM_ENV_FILE,
+               " (non-fatal; export it manually inside the execution environment if predictors can't find it)")
+  invisible(ok)
+}
+
+#' Best-effort discovery of a conda profile script (conda.sh)
+#'
+#' Searches the usual conda/mamba/miniforge install locations inside the
+#' execution environment (WSL distro or native shell). Shared by debug_wsl()
+#' and install_isoform_databases() so both use one, tested search order.
+#'
+#' @param wsl_distro WSL distribution name.
+#' @param use_wsl    Route through WSL? (only effective on Windows.)
+#' @return Path to conda.sh inside the execution environment, or NULL.
+#' @keywords internal
+.find_conda_sh <- function(wsl_distro = "Ubuntu", use_wsl = TRUE) {
+  csh <- .wsl_exec_script(
+    paste(
+      'for c in "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh"',
+      '"$HOME/miniconda3/etc/profile.d/conda.sh" "$HOME/anaconda3/etc/profile.d/conda.sh"',
+      '"$HOME/mambaforge/etc/profile.d/conda.sh" "$HOME/miniforge3/etc/profile.d/conda.sh";',
+      'do [ -f "$c" ] && echo "$c" && break; done'
+    ),
+    wsl_distro = wsl_distro, use_wsl = use_wsl, intern = TRUE, ignore_stderr = TRUE,
+    log_dir = NULL
+  )
+  csh <- trimws(csh[nzchar(trimws(csh))])
+  if (length(csh) > 0) csh[1] else NULL
+}
+
 # ---- Internal WSL + conda execution helpers ----------------------------------
 
 #' Convert a Windows file path to a WSL-compatible Unix path
@@ -103,10 +181,18 @@
                               ignore_stderr = TRUE,
                               log_dir       = NULL) {
 
+  # Source the shared persistent-env-var file first (see .ISOFORM_ENV_FILE
+  # above) so CPAT_DATA / SIGNALP_DIR etc. set by the install_*() helpers are
+  # visible here. Guarded with `|| true` so this is a silent no-op the first
+  # time a user runs predictors, before any install helper has created it.
+  env_file_source <- sprintf('[ -f %s ] && . %s 2>/dev/null || true',
+                             .ISOFORM_ENV_FILE, .ISOFORM_ENV_FILE)
+
   activate <- if (!is.null(conda_sh) && nzchar(conda_sh)) {
-    c(sprintf('. "%s" 2>/dev/null || true', conda_sh),
+    c(env_file_source,
+      sprintf('. "%s" 2>/dev/null || true', conda_sh),
       sprintf("conda activate %s 2>/dev/null || true", conda_env))
-  } else character(0)
+  } else env_file_source
 
   script <- c("#!/bin/bash", "set -e", activate, bash_body)
   tmp    <- tempfile(fileext = ".sh")
@@ -177,6 +263,10 @@
   }
 
   if (!is.null(missing_exe_msg)) {
+    # message() prints immediately (unlike warning(), which the pipeline
+    # defers via options(nwarnings=...) until the run finishes) -- this is
+    # an environment-level failure the user needs to see right away.
+    message("WSL/predictor environment error: ", missing_exe_msg)
     warning(missing_exe_msg, call. = FALSE)
     run_status <- 127L
   }
@@ -311,14 +401,20 @@ check_wsl <- function(distro = "Ubuntu") {
 #' }
 #'
 #' @param distro WSL distribution name (only used when routing through WSL)
-#' @param out_dir Output directory for logs (if NULL, returns only the list)
+#' @param out_dir Output directory for logs (if NULL, returns only the list).
+#'   Logs are written to \code{out_dir/Log/wsl_debug.json} unless
+#'   \code{log_dir} is given, in which case that path is used verbatim.
+#' @param log_dir Optional explicit log directory, overriding the
+#'   \code{out_dir/Log} default. Lets callers that already manage their own
+#'   unified log tree (e.g. the full \code{expressom()} pipeline) point this
+#'   at a single canonical location instead of scattering a second copy.
 #' @param conda_env Name of the conda environment to check (default "isoform_tools")
 #' @param verbose Print progress messages
 #' @param use_wsl Logical: route checks through WSL. Defaults to `TRUE` on
 #'   Windows and is ignored (treated as `FALSE`) on every other platform.
 #' @return Invisibly, a list with check results
 #' @export
-debug_wsl <- function(distro = "Ubuntu", out_dir = NULL,
+debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
                       conda_env = "isoform_tools", verbose = TRUE,
                       use_wsl = NULL) {
 
@@ -391,17 +487,7 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL,
   # still detected correctly.
   conda_sh_guess <- NULL
   if (results$conda_env_exists) {
-    csh <- .wsl_exec_script(
-      paste(
-        'for c in "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh"',
-        '"$HOME/miniconda3/etc/profile.d/conda.sh" "$HOME/anaconda3/etc/profile.d/conda.sh"',
-        '"$HOME/mambaforge/etc/profile.d/conda.sh" "$HOME/miniforge3/etc/profile.d/conda.sh";',
-        'do [ -f "$c" ] && echo "$c" && break; done'
-      ),
-      wsl_distro = distro, use_wsl = via_wsl, intern = TRUE, ignore_stderr = TRUE
-    )
-    csh <- trimws(csh[nzchar(trimws(csh))])
-    if (length(csh) > 0) conda_sh_guess <- csh[1]
+    conda_sh_guess <- .find_conda_sh(wsl_distro = distro, use_wsl = via_wsl)
   }
 
   # 3. Required tools (CPAT, SignalP, hmmscan, interproscan.sh)
@@ -426,18 +512,52 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL,
   results$pfam_db_found <- !is.null(pfam_path)
   if (verbose) message("  ", if (results$pfam_db_found) "\u2713" else "\u2717", " Pfam-A.hmm")
 
+  # BUG FIX: a Pfam-A.hmm file can exist yet still make hmmscan fail outright
+  # if it was never `hmmpress`-indexed (hmmscan requires the companion
+  # .h3f/.h3i/.h3m/.h3p binary index files). install_isoform_databases() used
+  # to check for hmmpress on the bare WSL PATH -- but hmmpress is installed
+  # *inside* the isoform_tools conda env, so that check always failed and
+  # silently skipped indexing. Surface the actual index status here so it is
+  # visible before a real analysis run hits it.
+  results$pfam_db_indexed <- FALSE
+  if (results$pfam_db_found) {
+    idx_check <- .wsl_exec_script(
+      sprintf('[ -f "%s.h3f" ] && [ -f "%s.h3i" ] && [ -f "%s.h3m" ] && [ -f "%s.h3p" ] && echo INDEXED || echo MISSING',
+              pfam_path, pfam_path, pfam_path, pfam_path),
+      wsl_distro = distro, use_wsl = via_wsl,
+      conda_sh = conda_sh_guess, conda_env = conda_env,
+      intern = TRUE, ignore_stderr = TRUE
+    )
+    results$pfam_db_indexed <- any(grepl("INDEXED", idx_check))
+    if (verbose) message("  ", if (results$pfam_db_indexed) "\u2713" else "\u2717",
+                         " Pfam-A.hmm hmmpress-indexed",
+                         if (!results$pfam_db_indexed)
+                           " (found the database but it is NOT indexed -- hmmscan will fail; run `hmmpress <path>` inside the isoform_tools env, or re-run install_isoform_databases())"
+                         else "")
+    if (!results$pfam_db_indexed)
+      results$errors <- c(results$errors, paste0("Pfam-A.hmm found at ", pfam_path, " but not hmmpress-indexed"))
+  }
+
   cpat_logit_human <- .find_cpat_logit_model("Human", distro, via_wsl, conda_sh_guess, conda_env)
   cpat_logit_mouse <- .find_cpat_logit_model("Mouse", distro, via_wsl, conda_sh_guess, conda_env)
   results$cpat_models_found <- !is.null(cpat_logit_human) && !is.null(cpat_logit_mouse)
   if (verbose) message("  ", if (results$cpat_models_found) "\u2713" else "\u2717", " CPAT logit models")
 
-  # 5. Write log file if out_dir provided
-  if (!is.null(out_dir)) {
-    log_dir <- file.path(out_dir, "Log")
-    if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
-    log_file <- file.path(log_dir, "wsl_debug.json")
+  # 5. Write log file. log_dir (explicit override) wins over out_dir/Log so
+  # callers that manage a single unified log tree (e.g. the full pipeline)
+  # don't end up with debug info scattered in a second location.
+  effective_log_dir <- if (!is.null(log_dir)) log_dir
+                        else if (!is.null(out_dir)) file.path(out_dir, "Log")
+                        else NULL
+  if (!is.null(effective_log_dir)) {
+    if (!dir.exists(effective_log_dir)) dir.create(effective_log_dir, recursive = TRUE)
+    log_file <- file.path(effective_log_dir, "wsl_debug.json")
     jsonlite::write_json(results, log_file, pretty = TRUE, auto_unbox = TRUE)
     if (verbose) message("  \u2192 Log written to ", log_file)
+  }
+  if (verbose && length(results$errors) > 0) {
+    message("Predictor environment check found ", length(results$errors), " issue(s):")
+    for (e in results$errors) message("  - ", e)
   }
 
   invisible(results)
@@ -458,7 +578,7 @@ install_signalp_from_windows <- function(windows_signalp_dir,
     stop("Windows directory does not exist: ", windows_signalp_dir)
 
   wsl_windows_path <- tryCatch({
-    system(paste('wsl -d', distro, 'wslpath -u', shQuote(windows_signalp_dir)), intern = TRUE)
+    system2("wsl", c("-d", distro, "wslpath", "-u", shQuote(windows_signalp_dir)), stdout = TRUE)
   }, error = function(e) {
     path <- gsub("\\\\", "/", windows_signalp_dir)
     if (grepl("^[A-Za-z]:", path)) {
@@ -467,25 +587,62 @@ install_signalp_from_windows <- function(windows_signalp_dir,
     }
     path
   })
+  wsl_windows_path <- trimws(wsl_windows_path[nzchar(trimws(wsl_windows_path))])[1]
 
-  message("Copying SignalP from Windows to WSL...")
-  system(paste('wsl -d', distro, '-- sudo mkdir -p', install_path), wait = TRUE)
-  status <- system(paste('wsl -d', distro, '-- sudo cp -r', wsl_windows_path, install_path),
-                   wait = TRUE)
-  if (status != 0) {
-    message("Failed to copy SignalP files. Check permissions and path.")
+  # BUG FIX: every step below now goes through .wsl_exec_script(), which
+  # writes the command to a temp script file rather than interpolating raw
+  # paths into a single system() string. The old code built commands like
+  # `paste('wsl -d', distro, '-- sudo cp -r', wsl_windows_path, install_path)`
+  # with no shell-quoting at all -- any space in windows_signalp_dir (e.g. a
+  # path under "Program Files") silently split into multiple arguments and
+  # broke the copy.
+  message("Copying SignalP from Windows (", wsl_windows_path, ") to WSL (", install_path, ")...")
+  mkdir_status <- .wsl_exec_script(sprintf("sudo mkdir -p %s", shQuote(install_path, type = "sh")),
+                                   wsl_distro = distro, use_wsl = TRUE)
+  if (!isTRUE(mkdir_status == 0L)) {
+    message("Failed to create ", install_path, " (exit code ", mkdir_status, "). Check sudo permissions.")
     return(FALSE)
   }
 
-  system(paste('wsl -d', distro, '-- sudo chmod +x',
-               file.path(install_path, "bin", "signalp")), wait = TRUE)
-  system(paste('wsl -d', distro, '-- sudo ln -sf',
-               file.path(install_path, "bin", "signalp"), '/usr/local/bin/signalp'), wait = TRUE)
+  cp_status <- .wsl_exec_script(
+    sprintf("sudo cp -r %s/. %s/", shQuote(wsl_windows_path, type = "sh"), shQuote(install_path, type = "sh")),
+    wsl_distro = distro, use_wsl = TRUE
+  )
+  if (!isTRUE(cp_status == 0L)) {
+    message("Failed to copy SignalP files (exit code ", cp_status, "). Check permissions and path.")
+    return(FALSE)
+  }
 
+  bin_path <- file.path(install_path, "bin", "signalp")
+  chmod_status <- .wsl_exec_script(sprintf("sudo chmod +x %s", shQuote(bin_path, type = "sh")),
+                                   wsl_distro = distro, use_wsl = TRUE)
+  ln_status <- .wsl_exec_script(
+    sprintf("sudo ln -sf %s /usr/local/bin/signalp", shQuote(bin_path, type = "sh")),
+    wsl_distro = distro, use_wsl = TRUE
+  )
+  if (!isTRUE(chmod_status == 0L) || !isTRUE(ln_status == 0L)) {
+    message("  ! Warning: chmod/symlink step reported a non-zero exit code (chmod=", chmod_status,
+            ", ln=", ln_status, "). signalp may not be directly callable as `signalp`; check ", bin_path)
+  }
+
+  # BUG FIX: the old code checked dir.exists(data_dir) on the *R host*
+  # filesystem, but data_dir ("/usr/local/signalp/data") is a WSL-internal
+  # path -- on a native Windows R session that check always returned FALSE,
+  # so SIGNALP_DIR was silently never recorded even after a successful copy.
+  # The existence check must run inside WSL instead.
   data_dir <- file.path(install_path, "data")
-  if (dir.exists(data_dir))
-    system(paste('wsl -d', distro, '-- echo "export SIGNALP_DIR=', data_dir, '" >> ~/.bashrc'),
-           wait = TRUE)
+  data_dir_exists <- .wsl_exec_script(sprintf("[ -d %s ]", shQuote(data_dir, type = "sh")),
+                                      wsl_distro = distro, use_wsl = TRUE)
+  if (isTRUE(data_dir_exists == 0L)) {
+    # BUG FIX: persist via the shared env file (sourced by .wsl_exec_script
+    # on every run), not ~/.bashrc, which non-interactive script runs never
+    # source (see .ISOFORM_ENV_FILE note).
+    .wsl_write_env_var("SIGNALP_DIR", data_dir, wsl_distro = distro, use_wsl = TRUE)
+  } else {
+    message("  ! No 'data' subdirectory found under ", install_path,
+            " -- SIGNALP_DIR was not set. If this SignalP version stores models elsewhere, ",
+            "set the appropriate env var manually via .wsl_write_env_var().")
+  }
 
   message("SignalP installed to ", install_path, " and linked to /usr/local/bin/signalp")
   TRUE
@@ -497,166 +654,364 @@ install_signalp_from_windows <- function(windows_signalp_dir,
 #' @param use_mamba Logical: use mamba/conda (default TRUE)
 #' @param install_databases Logical: also install CPAT, Pfam databases
 #' @param windows_signalp_dir Optional Windows path to a SignalP installation
+#' @param log_dir Optional directory to write a WSL command audit trail
 #' @export
 install_wsl_isoform_tools <- function(distro              = "Ubuntu",
                                        use_mamba           = TRUE,
                                        install_databases   = TRUE,
-                                       windows_signalp_dir = NULL) {
+                                       windows_signalp_dir = NULL,
+                                       log_dir              = NULL) {
   if (!check_wsl(distro)) stop("WSL with distro ", distro, " not available.")
+
+  .run <- function(cmd, conda = FALSE) {
+    body <- if (conda)
+      sprintf('bash -c "source %s 2>/dev/null && conda activate isoform_tools && %s"',
+              shQuote(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh", type = "sh"), cmd)
+    else cmd
+    status <- .wsl_exec_script(body, wsl_distro = distro, use_wsl = TRUE, log_dir = log_dir)
+    status
+  }
+  .run_intern <- function(cmd) {
+    .wsl_exec_script(cmd, wsl_distro = distro, use_wsl = TRUE, intern = TRUE,
+                     ignore_stderr = TRUE, log_dir = log_dir)
+  }
 
   if (use_mamba) {
     message("Installing tools using mamba/conda in WSL (default)...")
 
-    mamba_check <- system(paste('wsl -d', distro, '-- which mamba'),
-                          intern = TRUE, ignore.stderr = TRUE)
-    if (length(mamba_check) == 0 || mamba_check == "") {
+    mamba_check <- .run_intern("command -v mamba || true")
+    mamba_check <- trimws(mamba_check[nzchar(trimws(mamba_check))])
+    if (length(mamba_check) == 0) {
       message("mamba not found. Installing mambaforge...")
-      for (cmd in c(
-        "wget https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Linux-x86_64.sh -O /tmp/Mambaforge.sh",
-        "bash /tmp/Mambaforge.sh -b -p $HOME/mambaforge",
-        'eval "$($HOME/mambaforge/bin/conda shell.bash hook)"',
-        "conda init",
-        "mamba init"
-      )) system(paste('wsl -d', distro, '--', cmd), wait = TRUE)
+      bootstrap_cmds <- c(
+        "wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Linux-x86_64.sh -O /tmp/Mambaforge.sh",
+        "bash /tmp/Mambaforge.sh -b -p $HOME/mambaforge"
+      )
+      bootstrap_ok <- TRUE
+      for (cmd in bootstrap_cmds) {
+        status <- .run(cmd)
+        if (!isTRUE(status == 0L)) {
+          bootstrap_ok <- FALSE
+          message("  \u2717 FAILED: ", cmd, " (exit code ", status, ")")
+        } else {
+          message("  \u2713 OK: ", cmd)
+        }
+      }
+      if (!bootstrap_ok) {
+        message("mambaforge bootstrap failed -- aborting mamba-based install. ",
+                "Re-run with use_mamba = FALSE for the apt/pip path, or install mambaforge manually.")
+        return(invisible(FALSE))
+      }
     } else {
-      message("mamba already installed.")
+      message("mamba already installed (", mamba_check[1], ").")
     }
 
-    env_check <- system(
-      paste('wsl -d', distro,
-            '-- bash -c "source $HOME/mambaforge/etc/profile.d/conda.sh && conda env list | grep isoform_tools"'),
-      intern = TRUE, ignore.stderr = TRUE
-    )
-    if (length(env_check) == 0 || !grepl("isoform_tools", env_check[1])) {
+    # BUG FIX: resolve the *actual* conda.sh location once, instead of every
+    # subsequent step hardcoding $HOME/mambaforge/etc/profile.d/conda.sh. If
+    # mamba was already present (e.g. via a pre-existing miniconda/anaconda/
+    # miniforge install rather than one just bootstrapped above), that
+    # hardcoded path doesn't exist, "source ... 2>/dev/null" fails silently,
+    # and every later "conda activate isoform_tools" is a silent no-op --
+    # packages then install into the wrong (base, or no) environment with no
+    # error message, and predictors "mysteriously" can't find them later.
+    conda_sh_path <- .find_conda_sh(wsl_distro = distro, use_wsl = TRUE)
+    if (is.null(conda_sh_path)) {
+      message("  ! Could not locate conda.sh after mamba install/detection -- falling back to ",
+              "$HOME/mambaforge/etc/profile.d/conda.sh, which may not exist for this install. ",
+              "If subsequent steps report activation failures, locate conda.sh manually and check ",
+              ".find_conda_sh()'s search paths.")
+    } else {
+      message("  Using conda.sh: ", conda_sh_path)
+    }
+
+    env_check <- .run_intern(sprintf(
+      'bash -c "source %s 2>/dev/null && conda env list | grep isoform_tools || true"',
+      shQuote(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh", type = "sh")
+    ))
+    env_check <- trimws(env_check[nzchar(trimws(env_check))])
+    if (length(env_check) == 0) {
       message("Creating conda environment 'isoform_tools'...")
-      system(paste(
-        'wsl -d', distro,
-        '-- bash -c "source $HOME/mambaforge/etc/profile.d/conda.sh && conda activate base && mamba create -y -n isoform_tools python=3.9"'
-      ), wait = TRUE)
+      create_status <- .run(sprintf(
+        'bash -c "source %s && conda activate base && mamba create -y -n isoform_tools python=3.9"',
+        shQuote(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh", type = "sh")
+      ))
+      if (!isTRUE(create_status == 0L)) {
+        message("  \u2717 Failed to create conda environment 'isoform_tools' (exit code ",
+                create_status, "). Aborting -- fix this before tool installs can proceed.")
+        return(invisible(FALSE))
+      }
+      message("  \u2713 Environment 'isoform_tools' created.")
+    } else {
+      message("Environment 'isoform_tools' already exists.")
     }
 
+    # BUG FIX: SignalP cannot be installed via bioconda or apt under any
+    # circumstance -- its academic license explicitly prohibits
+    # redistribution through package managers (confirmed: there is no
+    # bioconda "signalp" recipe; conda-forge/bioconda maintainers have
+    # repeatedly noted SignalP/TMHMM are excluded from Bioconda for this
+    # reason). The previous code attempted
+    # `mamba install -y -c bioconda signalp` unconditionally when no
+    # windows_signalp_dir was given, which always failed and only surfaced a
+    # generic "install failed" warning -- exactly the kind of silent,
+    # unexplained SignalP failure this audit was asked to track down.
+    # SignalP must always come from install_signalp_from_windows() or a
+    # manual download under license.
     install_cmds <- c("mamba install -y -c bioconda cpat",
                       "mamba install -y -c bioconda hmmer")
-    if (is.null(windows_signalp_dir))
-      install_cmds <- c(install_cmds, "mamba install -y -c bioconda signalp")
-    else
-      message("Skipping conda SignalP; will install from Windows directory.")
 
     for (icmd in install_cmds) {
-      full_cmd <- paste(
-        'wsl -d', distro,
-        '-- bash -c "source $HOME/mambaforge/etc/profile.d/conda.sh && conda activate isoform_tools &&',
-        icmd, '"'
-      )
-      status <- system(full_cmd, wait = TRUE)
-      if (status != 0)
-        message("Warning: ", icmd, " failed. Install manually inside the environment.")
+      status <- .run(icmd, conda = TRUE)
+      if (isTRUE(status == 0L)) {
+        message("  \u2713 ", icmd)
+      } else {
+        message("  \u2717 FAILED: ", icmd, " (exit code ", status,
+                "). Try running this manually inside the 'isoform_tools' conda env to see the full error.")
+      }
     }
 
-    if (!is.null(windows_signalp_dir))
+    if (!is.null(windows_signalp_dir)) {
+      message("Installing SignalP from Windows directory...")
       install_signalp_from_windows(windows_signalp_dir, distro)
+    } else {
+      message("SignalP was not installed (no conda/apt package exists for it -- academic license). ",
+              "Call install_signalp_from_windows(windows_signalp_dir, distro) once you have downloaded ",
+              "a licensed copy from https://services.healthtech.dtu.dk/services/SignalP-6.0/ to enable SignalP predictions.")
+    }
 
-    message("Tools installed in conda environment 'isoform_tools'.")
+    message("Tool install step complete for conda environment 'isoform_tools'. Run debug_wsl() to verify.")
 
   } else {
     message("Installing tools using apt/pip (legacy method)...")
-    cmds <- c(
-      "sudo apt update",
-      "sudo apt install -y python3-pip hmmer",
-      "pip3 install cpat",
-      "wget ftp://ftp.ebi.ac.uk/pub/software/unix/iprscan/5/ -O interproscan.tar.gz",
-      "tar -xzf interproscan.tar.gz",
-      "sudo ln -s $PWD/interproscan-*/interproscan.sh /usr/local/bin/"
-    )
-    if (is.null(windows_signalp_dir))
-      cmds <- c(cmds, "sudo apt install -y signalp")
-    else
-      message("SignalP will be installed from Windows directory.")
+    apt_ok <- TRUE
+    for (cmd in c("sudo apt update", "sudo apt install -y python3-pip hmmer", "pip3 install cpat")) {
+      status <- .run(cmd)
+      if (isTRUE(status == 0L)) message("  \u2713 ", cmd)
+      else { apt_ok <- FALSE; message("  \u2717 FAILED: ", cmd, " (exit code ", status, ")") }
+    }
+    if (!apt_ok) message("  ! One or more base package installs failed -- CPAT/hmmscan may not work until resolved.")
 
-    for (cmd in cmds) system(paste('wsl -d', distro, '--', cmd), wait = TRUE)
-    if (!is.null(windows_signalp_dir))
+    # BUG FIX: the InterProScan URL below used to be
+    # `ftp://ftp.ebi.ac.uk/pub/software/unix/iprscan/5/` -- a *directory
+    # listing*, not a tarball. That "download" silently produced an HTML/FTP
+    # listing instead of a .tar.gz, which `tar -xzf` then failed to extract
+    # (also uncaught, since no exit-status check existed here at all), so
+    # the whole InterProScan install always failed with no visible cause.
+    # The version-specific tarball name changes with every release, so
+    # instead of hardcoding one, we resolve the current release dynamically
+    # from InterProScan's GitHub releases page.
+    message("Resolving latest InterProScan release...")
+    iprscan_url <- .run_intern(paste(
+      "curl -fsSL https://api.github.com/repos/ebi-pf-team/interproscan/releases/latest",
+      "| grep -o '\"browser_download_url\": *\"[^\"]*-64-bit.tar.gz\"'",
+      "| head -1 | sed 's/.*\"\\(https[^\"]*\\)\"/\\1/'"
+    ))
+    iprscan_url <- trimws(iprscan_url[nzchar(trimws(iprscan_url))])
+    if (length(iprscan_url) == 0) {
+      message("  \u2717 Could not resolve a current InterProScan download URL (network access to ",
+              "api.github.com from inside WSL is required). Skipping InterProScan -- Pfam annotation ",
+              "will fall back to hmmscan (already installed above), which is fully supported by this pipeline. ",
+              "To install InterProScan manually later, see https://interproscan-docs.readthedocs.io/en/latest/HowToDownload.html")
+    } else {
+      message("  Found: ", iprscan_url[1])
+      dl_status <- .run(sprintf("wget -q %s -O /tmp/interproscan.tar.gz", shQuote(iprscan_url[1], type = "sh")))
+      if (!isTRUE(dl_status == 0L)) {
+        message("  \u2717 Download failed (exit code ", dl_status, "). Skipping InterProScan (hmmscan fallback still available).")
+      } else {
+        extract_status <- .run("mkdir -p $HOME/interproscan && tar -xzf /tmp/interproscan.tar.gz -C $HOME/interproscan --strip-components=1")
+        if (!isTRUE(extract_status == 0L)) {
+          message("  \u2717 Extraction failed (exit code ", extract_status, "). Skipping InterProScan.")
+        } else {
+          java_ok <- .run("command -v java >/dev/null 2>&1")
+          if (!isTRUE(java_ok == 0L)) {
+            message("  \u2717 Java not found -- InterProScan requires Java 11+. Install it (e.g. `sudo apt install -y default-jre`) ",
+                    "then re-run `python3 $HOME/interproscan/initial_setup.py` manually.")
+          } else {
+            setup_status <- .run("cd $HOME/interproscan && python3 initial_setup.py")
+            if (isTRUE(setup_status == 0L)) {
+              link_status <- .run("sudo ln -sf $HOME/interproscan/interproscan.sh /usr/local/bin/interproscan.sh")
+              if (isTRUE(link_status == 0L)) {
+                message("  \u2713 InterProScan installed and linked to /usr/local/bin/interproscan.sh")
+              } else {
+                message("  ! InterProScan set up but symlink step failed (exit code ", link_status, ")")
+              }
+            } else {
+              message("  \u2717 initial_setup.py failed (exit code ", setup_status, "). InterProScan install incomplete; hmmscan fallback still available.")
+            }
+          }
+        }
+      }
+    }
+
+    # BUG FIX: `sudo apt install -y signalp` can never succeed -- SignalP is
+    # not, and cannot legally be, an apt package (see note above). Removed;
+    # always point to install_signalp_from_windows() instead.
+    if (!is.null(windows_signalp_dir)) {
+      message("Installing SignalP from Windows directory...")
       install_signalp_from_windows(windows_signalp_dir, distro)
+    } else {
+      message("SignalP was not installed (no apt package exists for it -- academic license). ",
+              "Call install_signalp_from_windows(windows_signalp_dir, distro) once you have downloaded ",
+              "a licensed copy from https://services.healthtech.dtu.dk/services/SignalP-6.0/ to enable SignalP predictions.")
+    }
 
-    message("Tools installed via apt/pip.")
+    message("Tool install step complete via apt/pip.")
   }
 
   if (install_databases)
-    install_isoform_databases(distro = distro, use_wsl = TRUE)
+    install_isoform_databases(distro = distro, use_wsl = TRUE, log_dir = log_dir)
 
-  message("Installation complete.")
+  message("Installation complete. Run debug_wsl(distro = ", shQuote(distro, type='sh'),
+          ", use_wsl = TRUE) to verify every tool and database is now detected.")
+  invisible(TRUE)
 }
 
 #' Install required databases for CPAT, Pfam, and SignalP
 #'
 #' Downloads CPAT hexamer tables & logit models (from GitHub) and Pfam-A.hmm
-#' (from EBI FTP). SignalP models require a separate license.
+#' (from EBI FTP), then `hmmpress`-indexes the Pfam database so `hmmscan` can
+#' actually use it. SignalP models require a separate license.
 #'
 #' @param distro        WSL distribution name
-#' @param use_wsl       Run inside WSL (default FALSE)
+#' @param use_wsl       Run inside WSL (default: TRUE on Windows, FALSE elsewhere)
 #' @param cpat_data_dir Where to store CPAT data (auto-detected if NULL)
 #' @param pfam_db_dir   Where to store Pfam database (default: ~/pfam_db)
+#' @param conda_env     Conda environment to activate for tool checks (e.g.
+#'   `hmmpress`), matching the environment install_wsl_isoform_tools() creates
+#'   (default "isoform_tools")
+#' @param log_dir       Optional directory to write a WSL command audit trail
+#'   (via .log_wsl_command()); if NULL, only console messages are produced.
 #' @export
 install_isoform_databases <- function(distro        = "Ubuntu",
-                                       use_wsl       = FALSE,
+                                       use_wsl       = (.Platform$OS.type == "windows"),
                                        cpat_data_dir = NULL,
-                                       pfam_db_dir   = NULL) {
-  cmd_prefix <- if (use_wsl && .Platform$OS.type == "windows")
-    sprintf("wsl -d %s --", distro)
-  else ""
+                                       pfam_db_dir   = NULL,
+                                       conda_env     = "isoform_tools",
+                                       log_dir       = NULL) {
+  via_wsl <- use_wsl && .Platform$OS.type == "windows"
+
+  # BUG FIX: hmmer (which provides hmmpress/hmmscan) is installed by
+  # install_wsl_isoform_tools() *inside* the isoform_tools conda environment,
+  # not on the bare distro PATH. Every check below must therefore go through
+  # .wsl_exec_script() with the conda environment activated -- a plain
+  # `system("wsl -d <distro> -- which hmmpress")` (the old approach) always
+  # reports "not found" and silently skips indexing, even on a fully correct
+  # install. This was the direct cause of hmmscan failing at prediction time.
+  conda_sh <- .find_conda_sh(wsl_distro = distro, use_wsl = via_wsl)
+  if (is.null(conda_sh))
+    message("  (no conda.sh found -- checks below will use the bare PATH; ",
+            "if you installed tools via mamba/conda, make sure the shell ",
+            "that runs this function can see them, or ignore if you used the apt/pip path)")
+
+  .run <- function(body, intern = FALSE) {
+    res <- .wsl_exec_script(body, wsl_distro = distro, use_wsl = via_wsl,
+                             conda_sh = conda_sh, conda_env = conda_env,
+                             intern = intern, ignore_stderr = TRUE, log_dir = NULL)
+    if (!is.null(log_dir)) {
+      .log_wsl_command(if (length(body) > 1) paste(body, collapse = "; ") else body,
+                       exit_code = if (intern) (attr(res, "status") %||% 0L) else res,
+                       stdout = if (intern) res else NULL, log_dir = log_dir)
+    }
+    res
+  }
 
   # ---- CPAT databases ----
   message("Installing CPAT hexamer and logit models...")
-  find_cpat <- system(paste(cmd_prefix, "which run_cpat.py"),
-                      intern = TRUE, ignore.stderr = TRUE)
-  if (length(find_cpat) > 0 && find_cpat[1] != "") {
+  find_cpat <- .run("command -v cpat || command -v run_cpat.py || true", intern = TRUE)
+  find_cpat <- trimws(find_cpat[nzchar(trimws(find_cpat))])
+  if (length(find_cpat) > 0) {
     cpat_base     <- dirname(dirname(find_cpat[1]))
     cpat_data_dir <- file.path(cpat_base, "data")
-    message("CPAT found at: ", cpat_base, ". Installing data to: ", cpat_data_dir)
+    message("  CPAT found at: ", find_cpat[1], ". Installing data to: ", cpat_data_dir)
   } else {
-    if (is.null(cpat_data_dir)) cpat_data_dir <- file.path(Sys.getenv("HOME"), ".cpat_data")
-    message("CPAT not in PATH. Installing data to: ", cpat_data_dir)
+    if (is.null(cpat_data_dir)) cpat_data_dir <- "$HOME/.cpat_data"
+    message("  CPAT not found on PATH/conda env (this is OK if you haven't installed it yet). ",
+            "Installing data to: ", cpat_data_dir)
   }
-  system(paste(cmd_prefix, "mkdir -p", cpat_data_dir), wait = TRUE)
+  mkdir_status <- .run(sprintf("mkdir -p %s", shQuote(cpat_data_dir, type = "sh")))
+  if (!isTRUE(mkdir_status == 0L))
+    message("  ! Could not create ", cpat_data_dir, " (exit code ", mkdir_status, ") -- check permissions.")
 
-  for (url in c(
-    "https://raw.githubusercontent.com/maqinli/CPAT_data/master/Human_Hexamer.tsv",
-    "https://raw.githubusercontent.com/maqinli/CPAT_data/master/Mouse_Hexamer.tsv",
-    "https://raw.githubusercontent.com/maqinli/CPAT_data/master/Human_logitModel.RData",
-    "https://raw.githubusercontent.com/maqinli/CPAT_data/master/Mouse_logitModel.RData"
-  )) {
-    dest <- file.path(cpat_data_dir, basename(url))
-    system(sprintf('%s wget -O %s %s', cmd_prefix, dest, url), wait = TRUE)
-    message("  Downloaded: ", basename(url))
+  # BUG FIX: the previous URLs pointed at raw.githubusercontent.com/maqinli/
+  # CPAT_data, a repository that does not exist (verified: returns HTTP 404
+  # for every file) -- every CPAT database download was silently failing.
+  # These are the real, official prebuilt hexamer tables / logit models,
+  # published by the CPAT authors themselves on SourceForge.
+  cpat_urls <- c(
+    "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_Hexamer.tsv/download",
+    "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_Hexamer.tsv/download",
+    "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_logitModel.RData/download",
+    "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_logitModel.RData/download"
+  )
+  cpat_ok <- TRUE
+  for (url in cpat_urls) {
+    # basename() would otherwise pick up the trailing "/download" segment
+    fname  <- sub("/download$", "", basename(url))
+    dest   <- paste0(cpat_data_dir, "/", fname)
+    status <- .run(sprintf('wget -q -L --max-redirect=20 --user-agent="Mozilla/5.0" -O %s %s',
+                          shQuote(dest, type = "sh"), shQuote(url, type = "sh")))
+    if (isTRUE(status == 0L)) {
+      message("  \u2713 Downloaded: ", fname)
+    } else {
+      cpat_ok <- FALSE
+      message("  \u2717 FAILED to download ", fname, " (exit code ", status,
+              "). Check network access to sourceforge.net inside the execution environment, ",
+              "or download it manually from https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/ ",
+              "and place it in ", cpat_data_dir)
+    }
   }
 
-  if (nchar(cmd_prefix) == 0)
-    Sys.setenv(CPAT_DATA = cpat_data_dir)
-  else
-    system(paste(cmd_prefix, 'echo "export CPAT_DATA=', cpat_data_dir, '" >> ~/.bashrc'), wait = TRUE)
-  message("CPAT data installed. CPAT_DATA -> ", cpat_data_dir)
+  # Persist CPAT_DATA via the shared env file (NOT ~/.bashrc -- see note above
+  # .ISOFORM_ENV_FILE) so it reaches CPAT at actual prediction time.
+  .wsl_write_env_var("CPAT_DATA", cpat_data_dir, wsl_distro = distro, use_wsl = via_wsl)
+  message(if (cpat_ok) "CPAT data installed successfully. CPAT_DATA -> " else
+          "CPAT data installed with errors (see above). CPAT_DATA -> ", cpat_data_dir)
 
   # ---- Pfam database ----
   message("Installing Pfam-A.hmm...")
-  if (is.null(pfam_db_dir)) pfam_db_dir <- file.path(Sys.getenv("HOME"), "pfam_db")
-  system(paste(cmd_prefix, "mkdir -p", pfam_db_dir), wait = TRUE)
+  if (is.null(pfam_db_dir)) pfam_db_dir <- "$HOME/pfam_db"
+  .run(sprintf("mkdir -p %s", shQuote(pfam_db_dir, type = "sh")))
 
-  pfam_url <- "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz"
-  pfam_gz  <- file.path(pfam_db_dir, "Pfam-A.hmm.gz")
-  system(sprintf('%s wget -O %s %s', cmd_prefix, pfam_gz, pfam_url), wait = TRUE)
-  system(paste(cmd_prefix, "gunzip -f", pfam_gz), wait = TRUE)
-
-  if (system(paste(cmd_prefix, "which hmmpress"),
-             ignore.stdout = TRUE, ignore.stderr = TRUE) == 0)
-    system(paste(cmd_prefix, "hmmpress", file.path(pfam_db_dir, "Pfam-A.hmm")), wait = TRUE)
-  else
-    message("hmmpress not found. Pfam database not indexed. Install hmmer to use hmmscan.")
-  message("Pfam database installed at: ", pfam_db_dir)
+  pfam_url    <- "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz"
+  pfam_hmm    <- paste0(pfam_db_dir, "/Pfam-A.hmm")
+  pfam_gz     <- paste0(pfam_hmm, ".gz")
+  dl_status   <- .run(sprintf("wget -q -O %s %s", shQuote(pfam_gz, type = "sh"), shQuote(pfam_url, type = "sh")))
+  if (!isTRUE(dl_status == 0L)) {
+    message("  \u2717 FAILED to download Pfam-A.hmm.gz (exit code ", dl_status,
+            "). Check network access to ftp.ebi.ac.uk inside the execution environment. Aborting Pfam install.")
+  } else {
+    message("  \u2713 Downloaded Pfam-A.hmm.gz")
+    gz_status <- .run(sprintf("gunzip -f %s", shQuote(pfam_gz, type = "sh")))
+    if (!isTRUE(gz_status == 0L)) {
+      message("  \u2717 gunzip failed (exit code ", gz_status, ") -- Pfam-A.hmm.gz may be corrupt or incomplete.")
+    } else {
+      message("  \u2713 Extracted Pfam-A.hmm")
+      hmmpress_found <- .run("command -v hmmpress >/dev/null 2>&1")
+      if (isTRUE(hmmpress_found == 0L)) {
+        press_status <- .run(sprintf("hmmpress -f %s", shQuote(pfam_hmm, type = "sh")))
+        if (isTRUE(press_status == 0L)) {
+          message("  \u2713 hmmpress indexed ", pfam_hmm, " -- hmmscan is ready to use.")
+        } else {
+          message("  \u2717 hmmpress FAILED (exit code ", press_status, ") on ", pfam_hmm,
+                  " -- hmmscan will not work against this database until this is resolved.")
+        }
+      } else {
+        message("  \u2717 hmmpress not found (looked ",
+                if (!is.null(conda_sh)) paste0("inside conda env '", conda_env, "' and ") else "",
+                "on PATH). Pfam database NOT indexed -- hmmscan will fail against it. ",
+                "Install hmmer (`mamba install -c bioconda hmmer` inside '", conda_env,
+                "', or install_wsl_isoform_tools()) and re-run install_isoform_databases().")
+      }
+    }
+  }
+  message("Pfam database step complete. Location: ", pfam_db_dir)
 
   # ---- SignalP ----
   message("SignalP models require a license and cannot be automatically installed.")
   message("Use install_signalp_from_windows() to copy a local SignalP distribution into WSL.")
 
-  message("\nAll databases installed successfully.")
+  message("\nAll database installation steps attempted. Review any \u2717 messages above ",
+          "-- run debug_wsl() to re-check the environment once you've resolved them.")
   invisible(NULL)
 }
 

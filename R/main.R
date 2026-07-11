@@ -128,7 +128,13 @@ expressom <- function(count_type        = "salmon",
   options(nwarnings = 10000)
   on.exit({
     options(nwarnings = old_warn)
-    log_dir <- file.path(out_dir, "DE_raw_results", "Log")
+    # BUG FIX ("log dir is empty"): this used to write to
+    # out_dir/DE_raw_results/Log, a location the README never mentions and
+    # DGE's own per-comparison logs did not consistently use either. The
+    # README documents a single top-level out_dir/Log for exactly this
+    # content (session info, warnings) -- write there instead so it's where
+    # users actually look.
+    log_dir <- file.path(out_dir, "Log")
     dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
     if (dir.exists(log_dir)) {
       capture.output(sessionInfo(), file = file.path(log_dir, "SessionInfo.txt"))
@@ -154,15 +160,15 @@ expressom <- function(count_type        = "salmon",
     }
   }
 
-  # Early predictor-environment check (Windows+WSL or native Linux/macOS)
-  if (run_isoform && isTRUE(run_predictors)) {
-    debug_wsl(distro = wsl_distro, out_dir = out_dir,
-              conda_env = "isoform_tools", verbose = TRUE, use_wsl = use_wsl)
-  }
-
   # ==========================================================================
   # EDA-ONLY MODE: override run_dge/run_isoform if conditions are missing or explicitly requested
   # ==========================================================================
+  # BUG FIX (ordering): this override used to run *after* the early predictor/
+  # WSL environment check below, so eda_only = TRUE combined with
+  # run_isoform = TRUE, run_predictors = TRUE triggered a pointless WSL probe
+  # (and its log write) for an isoform analysis that was about to be skipped
+  # entirely. Moved before that check so run_isoform reflects its final value
+  # first.
   if (isTRUE(eda_only) || is.null(model) || is.null(level) || is.null(base)) {
     message("DESeq2 model not fully specified or eda_only=TRUE. ",
             "Running only data import and exploratory analysis (EDA).")
@@ -180,6 +186,17 @@ expressom <- function(count_type        = "salmon",
   } else {
     model_eda <- model  # not used in normal path
     main_condition <- tail(all.vars(as.formula(model)), 1)
+  }
+
+  # Early predictor-environment check (Windows+WSL or native Linux/macOS).
+  # log_dir points at the same unified out_dir/Log/Isoform location that
+  # run_isoform_switch() itself uses further down, so both checks (this
+  # early one and the one inside run_isoform_switch()) end up in one place
+  # instead of two.
+  if (run_isoform && isTRUE(run_predictors)) {
+    debug_wsl(distro = wsl_distro, out_dir = out_dir,
+              log_dir = file.path(out_dir, "Log", "Isoform"),
+              conda_env = "isoform_tools", verbose = TRUE, use_wsl = use_wsl)
   }
 
   comp_name      <- paste0(level, "_vs_", base)
@@ -513,23 +530,6 @@ if (!is.null(gene_sets_zscore)) {
         message("Step A: Isoform import loaded from checkpoint. Skipping.")
       }
 
-      # ===== Transcript-level PCA ========================================
-      if (!is.null(isoform_import) && !is.null(main_condition) && !is.null(level) && !is.null(base)) {
-        message("Generating transcript-level PCA plots...")
-        plot_transcript_pca(
-          isoform_obj   = isoform_import,
-          condition_col = main_condition,
-          level         = level,
-          base          = base,
-          out_dir       = out_dir,
-          batch_col     = batch_col,
-          subset_to_contrast = FALSE
-        )
-      } else {
-        message("Skipping transcript PCA: missing isoform import or condition information.")
-      }
-      # =======================================================================
-
       # ---- Step B: DTE ----------------------------------------------------
       if (is.null(dte_res)) {
         message("Step B: Running DTE (Differential Transcript Expression)...")
@@ -584,7 +584,8 @@ if (!is.null(gene_sets_zscore)) {
         wsl_distro     = wsl_distro,
         save_dir       = iso_save_dir,
         resume_from    = resume_isoform_from,
-        predictor_cpu  = predictor_cpu
+        predictor_cpu  = predictor_cpu,
+        log_dir        = file.path(out_dir, "Log", "Isoform")
       )
 
       # ---- DTE/DTU/DEXSeq/Switch report -------------------------------------
@@ -647,3 +648,19 @@ if (!is.null(gene_sets_zscore)) {
   message("=== Pipeline complete for: ", comp_name, " ===")
   invisible(NULL)
 }
+
+# BUG FIX: README.md's every usage example (Quick Start, Windows notes, EDA-
+# only mode, full pipeline, etc.) calls `run_bulk_pipeline(...)`, but the
+# actual exported function was always named `expressom()` -- there was no
+# `run_bulk_pipeline` anywhere in the package. Every example in the README,
+# copy-pasted verbatim, failed immediately with "could not find function
+# run_bulk_pipeline". Adding this alias makes the documented name work
+# without having to rename `expressom()` itself (which may already be in use
+# in existing scripts/pipelines).
+#' Run the full ExpressOM bulk RNA-seq pipeline
+#'
+#' Alias for \code{\link{expressom}}, matching the function name used
+#' throughout README.md.
+#' @rdname expressom
+#' @export
+run_bulk_pipeline <- expressom

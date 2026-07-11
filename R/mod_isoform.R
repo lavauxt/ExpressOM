@@ -677,15 +677,25 @@ plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL, sp
 #' @param bsgenome_name Optional BSgenome package name
 #' @param predictor_cpu Integer: CPU threads for hmmscan / InterProScan
 #'   (default NULL auto-detects with \code{parallel::detectCores() - 1})
-#' @return IsoformSwitchAnalyzeR results object
+#' @param log_dir Optional explicit directory for logs (WSL debug info, WSL
+#'   command audit trail). Defaults to \code{file.path(out_dir, "Log")}. Set
+#'   this when calling from a larger pipeline that already manages a single
+#'   unified log tree elsewhere, so isoform logs land there instead of a
+#'   second, separate location.
+#' @return IsoformSwitchAnalyzeR results object, or NULL if no genes were
+#'   found to be switching (see the isoformSwitchAnalysisCombined() tryCatch
+#'   below) -- callers should treat a NULL return as "no isoform switches
+#'   detected", not as an error.
 #' @export
 run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
                                isoform_obj, condition, level, base,
                                fasta_file, gff_file, out_dir,
                                run_predictors = FALSE,
-                               use_wsl = FALSE, wsl_distro = "Ubuntu-22.04",
+                               use_wsl = (.Platform$OS.type == "windows"),
+                               wsl_distro = "Ubuntu-22.04",
                                save_dir = NULL, resume_from = NULL,
-                               bsgenome_name = NULL, predictor_cpu = NULL) {
+                               bsgenome_name = NULL, predictor_cpu = NULL,
+                               log_dir = NULL) {
 
   if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE))
     stop("Please install IsoformSwitchAnalyzeR: BiocManager::install('IsoformSwitchAnalyzeR')")
@@ -694,7 +704,13 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
   if (!dir.exists(out_dir))  dir.create(out_dir,  recursive = TRUE)
   if (!is.null(save_dir) && !dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE)
-  log_dir <- file.path(out_dir, "Log")
+  # log_dir used to always be derived from out_dir, which is fine for
+  # standalone use of this function but meant that when called from the
+  # full expressom() pipeline it wrote to <out_dir>/IsoformSwitch/Log while
+  # the DGE side of the pipeline (and the README) both point users at a
+  # single top-level <out_dir>/Log -- so users following the docs found that
+  # folder empty. log_dir now lets the caller redirect this explicitly.
+  if (is.null(log_dir)) log_dir <- file.path(out_dir, "Log")
   if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 
   # --------------------------------------------------------------------------
@@ -702,7 +718,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   # --------------------------------------------------------------------------
   if (isTRUE(run_predictors)) {
     message("Checking external predictor tool availability...")
-    debug_info <- debug_wsl(distro = wsl_distro, out_dir = out_dir,
+    debug_info <- debug_wsl(distro = wsl_distro, out_dir = out_dir, log_dir = log_dir,
                             conda_env = "isoform_tools", verbose = TRUE,
                             use_wsl = use_wsl)
     if (!isTRUE(debug_info$wsl_available)) {
@@ -717,6 +733,10 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
               "required tools (CPAT, SignalP, hmmscan/InterProScan) are already on PATH.\n",
               "On Windows/WSL run install_wsl_isoform_tools() to set up the environment; ",
               "on Linux/macOS install these tools manually or via conda/mamba.")
+    }
+    if (isTRUE(debug_info$pfam_db_found) && !isTRUE(debug_info$pfam_db_indexed)) {
+      warning("Pfam-A.hmm was found but is not hmmpress-indexed -- hmmscan will fail against it. ",
+              "Run install_isoform_databases() again (now conda-aware) or `hmmpress` it manually.")
     }
     # Write summary to log
     .log_wsl_command("debug_wsl()", exit_code = 0,
@@ -904,13 +924,85 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       attachNamespace("dplyr")
     }
 
-    switch_list <- IsoformSwitchAnalyzeR::isoformSwitchAnalysisCombined(
-      switchAnalyzeRlist = switch_list,
-      genomeObject       = genome_object,
-      pathToOutput       = out_dir,
-      n                  = 50
-    )
-    message("Combined analysis completed.")
+    # BUG FIX (pipeline crash): isoformSwitchAnalysisCombined() -> ... ->
+    # extractSwitchPairs() throws a hard `stop()` ("No genes were considered
+    # switching with the used cutoff values") whenever zero genes pass the
+    # switching cutoffs (alpha / dIFcutoff) -- e.g. small pilot datasets, weak
+    # effects, or an overly strict dIFcutoff for the expression range in this
+    # data. That error previously propagated all the way up through
+    # expressom() and killed the whole run, even though dte_res/dtu_res were
+    # already computed and checkpointed and had nothing to do with the
+    # failure. Catch it here: report clearly what happened, and return NULL
+    # instead of a switch_list. generate_dte_dtu_report() (called from
+    # main.R/expressom() after this function returns) already handles a NULL
+    # switch_list gracefully -- it just skips the switch-dependent sections
+    # of the report and still writes out the DTE/DTU results.
+    switch_list <- tryCatch({
+      sl <- IsoformSwitchAnalyzeR::isoformSwitchAnalysisCombined(
+        switchAnalyzeRlist = switch_list,
+        genomeObject       = genome_object,
+        pathToOutput       = out_dir,
+        n                  = 50
+      )
+      message("Combined analysis completed.")
+      sl
+    }, error = function(e) {
+      no_switches <- grepl("no genes were considered switching", conditionMessage(e), ignore.case = TRUE)
+      if (no_switches) {
+        message("\n=== No isoform switches detected ===")
+        message("isoformSwitchAnalysisCombined() found zero genes meeting the switching ",
+                "cutoffs for '", level, "' vs '", base, "'. This usually means: the effect ",
+                "is genuinely weak/absent in this comparison, sample sizes are too small to ",
+                "reach significance, or the default cutoffs (alpha = 0.05, dIFcutoff = 0.1) ",
+                "are too strict for this dataset. Isoform switch analysis (predictors, ",
+                "consequence/splicing plots, switch plots) will be skipped for this ",
+                "comparison, but DTE and DTU results computed earlier are unaffected and ",
+                "have already been saved.")
+        message("To investigate: try re-running isoformSwitchAnalysisCombined() directly ",
+                "with a relaxed dIFcutoff/alpha, or inspect switch_list$isoformFeatures ",
+                "(available in the step1_imported.rds checkpoint if save_dir was set) for ",
+                "the dIF/q-value distribution actually observed.")
+      } else {
+        message("\n=== isoformSwitchAnalysisCombined() failed ===")
+        message("Error: ", conditionMessage(e))
+        message("Isoform switch analysis will be skipped for this comparison; DTE and DTU ",
+                "results computed earlier are unaffected and have already been saved.")
+      }
+      NULL
+    })
+
+    if (is.null(switch_list)) {
+      return(invisible(NULL))
+    }
+
+    # MISSING FEATURE (found comparing against the IsoformSwitchAnalyzeR
+    # vignette): isoformSwitchAnalysisCombined() does NOT run alternative
+    # splicing annotation the way isoformSwitchAnalysisPart2() does. Without
+    # it, switch_list never gains per-event exon-skipping / mutually-exclusive-
+    # exon / alternative 5'/3' splice site / alternative TSS-TES classification,
+    # so the genome-wide extractSplicingSummary()/extractSplicingEnrichment()
+    # figures the vignette highlights could never be produced downstream. Run
+    # it unconditionally here (not gated on run_predictors) so it's available
+    # for every pipeline run, matching the standard ISA workflow order
+    # (CPAT/PFAM/SignalP -> analyzeAlternativeSplicing -> analyzeSwitchConsequences).
+    switch_list <- tryCatch({
+      message("Annotating alternative splicing events (exon skipping, intron retention, ",
+              "alt. 5'/3' splice sites, alt. TSS/TES)...")
+      sl <- IsoformSwitchAnalyzeR::analyzeAlternativeSplicing(
+        switch_list,
+        onlySwitchingGenes = TRUE,
+        alpha     = 0.05,
+        dIFcutoff = 0.1,
+        quiet     = FALSE
+      )
+      message("  Alternative splicing annotation completed.")
+      sl
+    }, error = function(e) {
+      message("  Could not annotate alternative splicing events: ", e$message,
+              "\n  Splicing-type summary/enrichment plots will be skipped; ",
+              "all other results are unaffected.")
+      switch_list
+    })
 
     # Save step-2 checkpoint immediately
     .ckpt_save(switch_list, "step2_analyzed.rds")
@@ -933,7 +1025,8 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
         wsl_distro  = wsl_distro,
         isoform_obj = isoform_obj,
         save_dir    = save_dir,
-        n_cpu       = predictor_cpu
+        n_cpu       = predictor_cpu,
+        log_dir     = log_dir
       )
       .ckpt_save(switch_list, "step3_predictors.rds")
     }
@@ -1021,11 +1114,11 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 #
 .run_external_predictors <- function(switch_list, fasta_file, out_dir,
                                       use_wsl, wsl_distro, isoform_obj, save_dir,
-                                      n_cpu = NULL) {
+                                      n_cpu = NULL, log_dir = NULL) {
   is_windows <- .Platform$OS.type == "windows"
   via_wsl    <- is_windows && isTRUE(use_wsl)
 
-  log_dir <- file.path(out_dir, "Log")
+  if (is.null(log_dir)) log_dir <- file.path(out_dir, "Log")
   if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 
   # --------------------------------------------------------------------------
@@ -1990,6 +2083,78 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
       }
     }
 
+    # 3f-bis. Genome-wide functional-consequence and alternative-splicing
+    # summary plots.
+    #
+    # MISSING FEATURE (found by comparing this pipeline's isoform outputs
+    # against the IsoformSwitchAnalyzeR vignette's "Examples of Switch
+    # Visualization" / "Analyzing Alternative Splicing" sections): the
+    # vignette's genome-wide overview is not just the dIF-vs-q-value scatter
+    # above -- it also includes bar-chart summaries (and enrichment tests) of
+    # *what kind* of functional and splicing changes occurred across all
+    # switches. analyzeSwitchConsequences() was already being run (Step 3.5 /
+    # inside isoformSwitchAnalysisCombined), so extractConsequenceSummary()
+    # and extractConsequenceEnrichment() only needed to be *called* -- the
+    # underlying data was already there. extractSplicingSummary() and
+    # extractSplicingEnrichment() additionally required the new
+    # analyzeAlternativeSplicing() call added above. All four are wrapped in
+    # safe_run(): they are supplementary figures and must never abort report
+    # generation if a given dataset is too small/uniform for a particular
+    # plot (e.g. extractConsequenceEnrichment requires >= minEventsForPlotting
+    # events in opposite directions).
+    safe_run(
+      {
+        p_cons <- IsoformSwitchAnalyzeR::extractConsequenceSummary(
+          switch_list, consequencesToAnalyze = "all",
+          plot = TRUE, returnResult = FALSE
+        )
+        if (!is.null(p_cons) && inherits(p_cons, "ggplot"))
+          ggplot2::ggsave(file.path(plot_dir, "ConsequenceSummary.pdf"), p_cons, width = 9, height = 6)
+      },
+      label = "Genome-wide consequence summary plot (extractConsequenceSummary)"
+    )
+
+    safe_run(
+      {
+        p_cons_enr <- IsoformSwitchAnalyzeR::extractConsequenceEnrichment(
+          switch_list, consequencesToAnalyze = "all",
+          plot = TRUE, returnResult = FALSE
+        )
+        if (!is.null(p_cons_enr) && inherits(p_cons_enr, "ggplot"))
+          ggplot2::ggsave(file.path(plot_dir, "ConsequenceEnrichment.pdf"), p_cons_enr, width = 9, height = 6)
+      },
+      label = "Genome-wide consequence enrichment plot (extractConsequenceEnrichment)"
+    )
+
+    if (!is.null(switch_list[["AlternativeSplicingAnalysis"]])) {
+      safe_run(
+        {
+          p_spl <- IsoformSwitchAnalyzeR::extractSplicingSummary(
+            switch_list, splicingToAnalyze = "all",
+            plot = TRUE, returnResult = FALSE
+          )
+          if (!is.null(p_spl) && inherits(p_spl, "ggplot"))
+            ggplot2::ggsave(file.path(plot_dir, "SplicingSummary.pdf"), p_spl, width = 9, height = 6)
+        },
+        label = "Genome-wide alternative splicing summary plot (extractSplicingSummary)"
+      )
+
+      safe_run(
+        {
+          p_spl_enr <- IsoformSwitchAnalyzeR::extractSplicingEnrichment(
+            switch_list, splicingToAnalyze = "all",
+            plot = TRUE, returnResult = FALSE
+          )
+          if (!is.null(p_spl_enr) && inherits(p_spl_enr, "ggplot"))
+            ggplot2::ggsave(file.path(plot_dir, "SplicingEnrichment.pdf"), p_spl_enr, width = 9, height = 6)
+        },
+        label = "Genome-wide alternative splicing enrichment plot (extractSplicingEnrichment)"
+      )
+    } else {
+      message("  Skipping splicing summary/enrichment plots: no AlternativeSplicingAnalysis found ",
+              "in switch_list (analyzeAlternativeSplicing() may have failed upstream -- see earlier messages).")
+    }
+
     # Automatic top-N + forced-gene switch summary plots (structure/ORF/domains
     # alongside gene expression, isoform expression, and isoform usage)
     if (isTRUE(plot_switch_summary)) {
@@ -2145,6 +2310,43 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
         "```",
         ""
       )
+    }
+
+    # Genome-wide functional-consequence and alternative-splicing summaries
+    # (extractConsequenceSummary / extractConsequenceEnrichment /
+    # extractSplicingSummary / extractSplicingEnrichment). Each is optional --
+    # generated only if the corresponding PDF exists, since some can be
+    # legitimately skipped for small/uniform datasets (see safe_run() calls
+    # above).
+    genome_wide_figs <- list(
+      list(file = "ConsequenceSummary.pdf",    title = "Functional Consequences (Summary)",
+           chunk = "cons_summary",
+           cap   = "Genome-wide summary of functional consequences of isoform switching"),
+      list(file = "ConsequenceEnrichment.pdf", title = "Functional Consequences (Enrichment)",
+           chunk = "cons_enrichment",
+           cap   = "Enrichment of gain vs. loss for each functional consequence"),
+      list(file = "SplicingSummary.pdf",       title = "Alternative Splicing (Summary)",
+           chunk = "splice_summary",
+           cap   = "Genome-wide summary of alternative splicing event types"),
+      list(file = "SplicingEnrichment.pdf",    title = "Alternative Splicing (Enrichment)",
+           chunk = "splice_enrichment",
+           cap   = "Enrichment of gain vs. loss for each alternative splicing event type")
+    )
+    any_genome_wide <- any(vapply(genome_wide_figs, function(f) file.exists(file.path(plot_dir, f$file)), logical(1)))
+    if (any_genome_wide) {
+      rmd_lines <- c(rmd_lines, "### Genome-wide Functional Consequences & Alternative Splicing", "")
+      for (f in genome_wide_figs) {
+        if (file.exists(file.path(plot_dir, f$file))) {
+          rel_path <- file.path("plots", f$file)
+          rmd_lines <- c(rmd_lines,
+            paste0("#### ", f$title),
+            paste0("```{r ", f$chunk, ", echo=FALSE, fig.cap='", f$cap, "', eval=file.exists('", rel_path, "')}"),
+            paste0("knitr::include_graphics('", rel_path, "')"),
+            "```",
+            ""
+          )
+        }
+      }
     }
 
     top_switch_dir <- file.path(plot_dir, "top_switches")
