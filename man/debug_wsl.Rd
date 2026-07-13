@@ -2,28 +2,53 @@
 % Please edit documentation in R/utils_isoform.R
 \name{debug_wsl}
 \alias{debug_wsl}
-\title{Debug WSL environment for isoform analysis}
+\title{Debug the external-predictor execution environment (CPAT / SignalP / Pfam)}
 \usage{
 debug_wsl(
   distro = "Ubuntu",
   out_dir = NULL,
+  log_dir = NULL,
   conda_env = "isoform_tools",
-  verbose = TRUE
+  verbose = TRUE,
+  use_wsl = NULL
 )
 }
 \arguments{
-\item{distro}{WSL distribution name (default "Ubuntu")}
+\item{distro}{WSL distribution name (only used when routing through WSL)}
 
-\item{out_dir}{Output directory for logs (if NULL, returns only the list)}
+\item{out_dir}{Output directory for logs (if NULL, returns only the list).
+Logs are written to \code{out_dir/Log/wsl_debug.json} unless
+\code{log_dir} is given, in which case that path is used verbatim.}
+
+\item{log_dir}{Optional explicit log directory, overriding the
+\code{out_dir/Log} default. Lets callers that already manage their own
+unified log tree (e.g. the full \code{expressom()} pipeline) point this
+at a single canonical location instead of scattering a second copy.}
 
 \item{conda_env}{Name of the conda environment to check (default "isoform_tools")}
 
 \item{verbose}{Print progress messages}
+
+\item{use_wsl}{Logical: route checks through WSL. Defaults to `TRUE` on
+Windows and is ignored (treated as `FALSE`) on every other platform.}
 }
 \value{
 Invisibly, a list with check results
 }
 \description{
-Checks WSL availability, distribution, conda environment, and external tools.
-Writes a detailed log file to `out_dir/Log/wsl_debug.json`.
+Checks that the shell used to run external predictor tools is reachable,
+whether conda is available, whether the `isoform_tools` conda environment
+exists, whether each required tool is on PATH, and whether the Pfam / CPAT
+databases can be located. Writes a detailed log file to
+`out_dir/Log/wsl_debug.json`.
+}
+\details{
+This function is fully cross-platform:
+\itemize{
+  \item On Windows with \code{use_wsl = TRUE} (the default on Windows),
+    every check is routed through \code{wsl -d <distro> bash ...}.
+  \item On native Linux, macOS, or when R itself is already running inside
+    WSL, every check runs against the local \code{bash} / PATH directly --
+    no WSL distribution is required or contacted.
+}
 }

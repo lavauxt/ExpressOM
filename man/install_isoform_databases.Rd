@@ -6,21 +6,31 @@
 \usage{
 install_isoform_databases(
   distro = "Ubuntu",
-  use_wsl = FALSE,
+  use_wsl = (.Platform$OS.type == "windows"),
   cpat_data_dir = NULL,
-  pfam_db_dir = NULL
+  pfam_db_dir = NULL,
+  conda_env = "isoform_tools",
+  log_dir = NULL
 )
 }
 \arguments{
 \item{distro}{WSL distribution name}
 
-\item{use_wsl}{Run inside WSL (default FALSE)}
+\item{use_wsl}{Run inside WSL (default: TRUE on Windows, FALSE elsewhere)}
 
 \item{cpat_data_dir}{Where to store CPAT data (auto-detected if NULL)}
 
 \item{pfam_db_dir}{Where to store Pfam database (default: ~/pfam_db)}
+
+\item{conda_env}{Conda environment to activate for tool checks (e.g.
+`hmmpress`), matching the environment install_wsl_isoform_tools() creates
+(default "isoform_tools")}
+
+\item{log_dir}{Optional directory to write a WSL command audit trail
+(via .log_wsl_command()); if NULL, only console messages are produced.}
 }
 \description{
 Downloads CPAT hexamer tables & logit models (from GitHub) and Pfam-A.hmm
-(from EBI FTP). SignalP models require a separate license.
+(from EBI FTP), then `hmmpress`-indexes the Pfam database so `hmmscan` can
+actually use it. SignalP models require a separate license.
 }

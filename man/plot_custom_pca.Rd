@@ -16,7 +16,7 @@ plot_custom_pca(
 \arguments{
 \item{vsd}{VST-transformed DESeqDataSet or matrix}
 
-\item{condition}{Character column name in colData for colour grouping}
+\item{condition}{Character column name in colData for colour grouping (can be NULL)}
 
 \item{batch}{Optional batch column for shape grouping}
 

@@ -15,11 +15,13 @@ run_isoform_switch(
   gff_file,
   out_dir,
   run_predictors = FALSE,
-  use_wsl = FALSE,
+  use_wsl = (.Platform$OS.type == "windows"),
   wsl_distro = "Ubuntu-22.04",
   save_dir = NULL,
   resume_from = NULL,
-  bsgenome_name = NULL
+  bsgenome_name = NULL,
+  predictor_cpu = NULL,
+  log_dir = NULL
 )
 }
 \arguments{
@@ -52,9 +54,21 @@ run_isoform_switch(
 \item{resume_from}{Optional path to a save_dir with a prior switch_list.rds}
 
 \item{bsgenome_name}{Optional BSgenome package name}
+
+\item{predictor_cpu}{Integer: CPU threads for hmmscan / InterProScan
+(default NULL auto-detects with \code{parallel::detectCores() - 1})}
+
+\item{log_dir}{Optional explicit directory for logs (WSL debug info, WSL
+command audit trail). Defaults to \code{file.path(out_dir, "Log")}. Set
+this when calling from a larger pipeline that already manages a single
+unified log tree elsewhere, so isoform logs land there instead of a
+second, separate location.}
 }
 \value{
-IsoformSwitchAnalyzeR results object
+IsoformSwitchAnalyzeR results object, or NULL if no genes were
+  found to be switching (see the isoformSwitchAnalysisCombined() tryCatch
+  below) -- callers should treat a NULL return as "no isoform switches
+  detected", not as an error.
 }
 \description{
 Run IsoformSwitchAnalyzeR analysis using isoformSwitchAnalysisCombined

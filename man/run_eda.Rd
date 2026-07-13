@@ -4,7 +4,16 @@
 \alias{run_eda}
 \title{Exploratory Data Analysis for DESeq2}
 \usage{
-run_eda(dds, edb, out_dir, level, base, main_condition, batch_col = NULL)
+run_eda(
+  dds,
+  edb,
+  out_dir,
+  level,
+  base,
+  main_condition = NULL,
+  group_col = NULL,
+  batch_col = NULL
+)
 }
 \arguments{
 \item{dds}{DESeqDataSet object}
@@ -13,11 +22,13 @@ run_eda(dds, edb, out_dir, level, base, main_condition, batch_col = NULL)
 
 \item{out_dir}{Output directory}
 
-\item{level}{Level comparison (e.g. "Treated")}
+\item{level}{Level comparison (e.g. "Treated") – may be NULL for EDA-only}
 
-\item{base}{Base Level (e.g. "Control")}
+\item{base}{Base Level (e.g. "Control") – may be NULL}
 
-\item{main_condition}{The primary modeled condition}
+\item{main_condition}{The primary modeled condition (could be NULL)}
+
+\item{group_col}{Optional column name to use for colouring/annotation (overrides main_condition if non-NULL)}
 
 \item{batch_col}{Optional batch column name for limma correction and before/after PCA}
 }

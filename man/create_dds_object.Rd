@@ -9,11 +9,11 @@ create_dds_object(tx_data, level, base, model, replicate_col)
 \arguments{
 \item{tx_data}{List returned by import_counts}
 
-\item{level}{Target level}
+\item{level}{Target level (can be NULL if model == "~1")}
 
-\item{base}{Reference level}
+\item{base}{Reference level (can be NULL if model == "~1")}
 
-\item{model}{Design formula as a string}
+\item{model}{Design formula as a string (e.g., "~1" for EDA only)}
 
 \item{replicate_col}{Column containing replicate information}
 }

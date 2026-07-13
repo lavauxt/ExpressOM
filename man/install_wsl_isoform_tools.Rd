@@ -8,7 +8,8 @@ install_wsl_isoform_tools(
   distro = "Ubuntu",
   use_mamba = TRUE,
   install_databases = TRUE,
-  windows_signalp_dir = NULL
+  windows_signalp_dir = NULL,
+  log_dir = NULL
 )
 }
 \arguments{
@@ -19,6 +20,8 @@ install_wsl_isoform_tools(
 \item{install_databases}{Logical: also install CPAT, Pfam databases}
 
 \item{windows_signalp_dir}{Optional Windows path to a SignalP installation}
+
+\item{log_dir}{Optional directory to write a WSL command audit trail}
 }
 \description{
 Install required external tools inside WSL using mamba (default) or apt/pip

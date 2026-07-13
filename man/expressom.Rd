@@ -2,6 +2,7 @@
 % Please edit documentation in R/main.R
 \name{expressom}
 \alias{expressom}
+\alias{run_bulk_pipeline}
 \title{Run Expressom Pipeline}
 \usage{
 expressom(
@@ -30,6 +31,7 @@ expressom(
   gsea_metric = "stat",
   nBest = 20000,
   zscore_genes = NULL,
+  gene_sets_zscore = NULL,
   run_dge = TRUE,
   run_isoform = FALSE,
   run_predictors = FALSE,
@@ -37,10 +39,60 @@ expressom(
   execution_order = c("dge_first", "isoform_first"),
   isoform_fasta = NULL,
   isoform_gff = NULL,
-  use_wsl = FALSE,
+  use_wsl = (.Platform$OS.type == "windows"),
   wsl_distro = "Ubuntu-22.04",
+  predictor_cpu = NULL,
   resume_isoform_from = NULL,
-  isoform_report_genes = NULL
+  isoform_report_genes = NULL,
+  run_dexseq = FALSE,
+  isoform_plot_top_n = 10,
+  eda_only = FALSE,
+  group_col = NULL
+)
+
+run_bulk_pipeline(
+  count_type = "salmon",
+  data_dir = "./data",
+  out_dir = "./results",
+  sample_table = "./sample_table.csv",
+  matrix_file = NULL,
+  level = "treated",
+  base = "control",
+  model = "~ condition",
+  batch_col = NULL,
+  replicate_col = NULL,
+  shrink_method = "ashr",
+  ensembl_package_name = "EnsDb.Hsapiens.v107",
+  top_genes = 30,
+  gmt_file = c("C2", "C3", "C5", "C8"),
+  padj_cutoff = 0.01,
+  go_pvalue_cutoff = 0.05,
+  go_qvalue_cutoff = 0.2,
+  test = "Wald",
+  reduced = NULL,
+  highlight_genes = NULL,
+  subset_sample = NULL,
+  remove_sample = NULL,
+  gsea_metric = "stat",
+  nBest = 20000,
+  zscore_genes = NULL,
+  gene_sets_zscore = NULL,
+  run_dge = TRUE,
+  run_isoform = FALSE,
+  run_predictors = FALSE,
+  bpparam = BiocParallel::bpparam(),
+  execution_order = c("dge_first", "isoform_first"),
+  isoform_fasta = NULL,
+  isoform_gff = NULL,
+  use_wsl = (.Platform$OS.type == "windows"),
+  wsl_distro = "Ubuntu-22.04",
+  predictor_cpu = NULL,
+  resume_isoform_from = NULL,
+  isoform_report_genes = NULL,
+  run_dexseq = FALSE,
+  isoform_plot_top_n = 10,
+  eda_only = FALSE,
+  group_col = NULL
 )
 }
 \arguments{
@@ -94,6 +146,12 @@ expressom(
 
 \item{zscore_genes}{Optional character vector of gene names for targeted Z-score expression plotting}
 
+\item{gene_sets_zscore}{Optional named list of character vectors of gene names. Produces three
+outputs: (1) a per-sample average Z-score ("module score") per set plotted by condition, plus
+an automatic pooled "Global (All Genes)" panel; and (2) a per-individual-gene Z-score by
+condition plot (one facet per gene), e.g.
+\code{list(Tightness = c("Cdh5","Pdgfa"), "Lipid Scavengers" = c("Cd36","Stab1"))}}
+
 \item{run_dge}{Logical: perform standard gene-level differential expression (default: TRUE)}
 
 \item{run_isoform}{Logical: perform isoform-level analysis (DTE, DTU, IsoformSwitchAnalyzeR)}
@@ -108,13 +166,38 @@ expressom(
 
 \item{isoform_gff}{Path to GFF/GTF annotation file (auto-downloads if NULL and run_isoform=TRUE)}
 
-\item{use_wsl}{Logical: use WSL Ubuntu for external tools (Windows only)}
+\item{use_wsl}{Logical: route external predictor tools (CPAT, SignalP,
+Pfam) through WSL. Only meaningful on Windows; defaults to TRUE there.
+Ignored on Linux/macOS, where tools run natively against PATH.}
 
-\item{wsl_distro}{Name of WSL distribution (default "Ubuntu-22.04")}
+\item{wsl_distro}{Name of WSL distribution (default "Ubuntu-22.04"), only
+used when running on Windows with use_wsl = TRUE}
+
+\item{predictor_cpu}{Integer: CPU threads for hmmscan / InterProScan during
+the Pfam prediction step. Default NULL auto-detects available cores
+(\code{parallel::detectCores() - 1}).}
 
 \item{resume_isoform_from}{Path to directory with saved DTE/DTU RDS files to resume isoform analysis}
 
-\item{isoform_report_genes}{Gene symbols (e.g., c("TP53", "BCL2")) for transcript-proportion plots}
+\item{isoform_report_genes}{Gene symbols (e.g., c("TP53", "BCL2")) for transcript-proportion plots.
+These genes also receive the enhanced isoform-level visualizations: an
+IsoformSwitchAnalyzeR switch summary plot (structure/ORF/domains + gene,
+isoform, and usage expression), a sashimi-style junction usage plot, an
+exon-bin usage comparison plot, and (if run_dexseq = TRUE) a DEXSeq
+transcript-usage plot.}
+
+\item{run_dexseq}{Logical: also run a complementary DEXSeq-based DTU engine
+(transcripts treated as DEXSeq exonic bins) alongside the DRIMSeq-based
+DTU test, and unlock DEXSeq-style per-gene transcript-usage plots in the
+HTML report (default: FALSE, since it duplicates Step C at extra runtime cost)}
+
+\item{isoform_plot_top_n}{Number of top isoform switches (by significance)
+to automatically render as switch summary plots, independent of
+isoform_report_genes (default: 10)}
+
+\item{eda_only}{Logical: if TRUE, run only import + EDA (PCA, heatmap) then stop (no DGE or isoform).}
+
+\item{group_col}{Optional column name in metadata for colouring PCA/heatmap when no model is given.}
 }
 \value{
 NULL (invisibly)
@@ -123,4 +206,7 @@ NULL (invisibly)
 Executes the complete bulk RNA-seq pipeline including data import, exploratory
 data analysis, differential expression (DESeq2), functional analysis, and
 optional isoform-level analysis (DTE, DTU, IsoformSwitchAnalyzeR).
+
+Alias for \code{\link{expressom}}, matching the function name used
+throughout README.md.
 }
