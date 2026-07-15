@@ -37,13 +37,14 @@ convert_pdf_to_png <- function(pdf_file, dpi = 200) {
 #' @param matrix_file Path to raw counts matrix (if count_type = "matrix")
 #' @param subset_sample Optional filter expression
 #' @param remove_sample Optional sample IDs to exclude
-#' @param custom_tx2gene Optional path to a custom tx2gene file (TSV with columns 'tx_id' and 'gene_id')  # <<< NEW
+#' @param custom_tx2gene Optional path to a custom tx2gene file (TSV with columns 'tx_id' and 'gene_id')
+#' @param custom_gene_map Optional path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')  # <<< NEW
 #' @return List with txi (transcript counts), meta, tx2gene, gene_map
 #' @export
 import_transcript_counts <- function(data_dir, sample_table, ensembl_package_name,
                                       count_type = "salmon", matrix_file = NULL,
                                       subset_sample = NULL, remove_sample = NULL,
-                                      custom_tx2gene = NULL) {  # <<< NEW
+                                      custom_tx2gene = NULL, custom_gene_map = NULL) {
 
   if (!file.exists(sample_table)) stop("Sample table not found: ", sample_table)
   sample_df <- data.table::fread(sample_table, header = TRUE, data.table = FALSE)
@@ -78,10 +79,41 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
     tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
   }
 
-  gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
-  gene_map <- as.data.frame(gene_map)
-  colnames(gene_map) <- c("ensembl", "symbol")
+  # ---- Build gene_map (custom or from Ensembl) ----
+  if (!is.null(custom_gene_map) && file.exists(custom_gene_map)) {
+    message("Using custom gene annotation file: ", custom_gene_map)
+    gene_map <- data.table::fread(custom_gene_map, header = TRUE, data.table = FALSE)
+    if (!all(c("gene_id", "symbol") %in% colnames(gene_map))) {
+      stop("Custom gene map must contain columns 'gene_id' and 'symbol'")
+    }
+    colnames(gene_map)[colnames(gene_map) == "gene_id"] <- "ensembl"
+    if (!"entrezid" %in% colnames(gene_map)) {
+      gene_map$entrezid <- NA_character_
+    }
+    gene_map <- gene_map[, c("ensembl", "symbol", "entrezid")]
+    gene_map <- gene_map[!duplicated(gene_map$ensembl), ]
+  } else {
+    gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
+    gene_map <- as.data.frame(gene_map)
+    colnames(gene_map) <- c("ensembl", "symbol")
+    org_info <- get_organism_info(edb)
+    org_db   <- org_info$org_db
+    if (requireNamespace(org_db, quietly = TRUE)) {
+      org_obj        <- .load_org_db(org_db)
+      mapped_entrez  <- suppressMessages(AnnotationDbi::mapIds(
+        org_obj,
+        keys     = gene_map$ensembl,
+        column   = "ENTREZID",
+        keytype  = "ENSEMBL",
+        multiVals = "first"
+      ))
+      gene_map$entrezid <- as.character(mapped_entrez)
+    } else {
+      gene_map$entrezid <- NA_character_
+    }
+  }
 
+  # ---- Continue with tximport or matrix ----
   if (count_type != "matrix") {
     count_file_name <- switch(count_type,
                               "salmon" = "quant.sf",
@@ -99,7 +131,6 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
     names(file_list) <- sample_df[[sample_col]]
 
     txi <- tximport::tximport(file_list, type = count_type, txOut = TRUE, countsFromAbundance = "lengthScaledTPM")
-    # Strip version suffixes from transcript IDs in the count matrix
     rownames(txi$counts) <- sub("\\..*$", "", rownames(txi$counts))
     meta <- sample_df[colnames(txi$counts), , drop = FALSE]
     return(list(txi = txi, meta = meta, tx2gene = tx2gene, gene_map = gene_map, type = "tximport"))

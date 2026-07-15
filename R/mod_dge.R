@@ -62,12 +62,13 @@
 #' @param matrix_file Path to raw counts file if count_type is "matrix".
 #' @param subset_sample Optional string to filter the sample table.
 #' @param remove_sample Optional character vector of sample IDs to exclude
-#' @param custom_tx2gene Optional path to a custom tx2gene file (TSV with columns 'tx_id' and 'gene_id')  # <<< NEW
+#' @param custom_tx2gene Optional path to a custom tx2gene file (TSV with columns 'tx_id' and 'gene_id')
+#' @param custom_gene_map Optional path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')  # <<< NEW
 #' @return A list containing txi (or counts), meta, edb, gene_map, and type.
 #' @export
 import_counts <- function(data_dir, sample_table, ensembl_package_name, count_type = "salmon",
                           out_dir, matrix_file = NULL, subset_sample = NULL, remove_sample = NULL,
-                          custom_tx2gene = NULL) {   # <<< NEW
+                          custom_tx2gene = NULL, custom_gene_map = NULL) {
 
   if (!requireNamespace("ensembldb", quietly = TRUE)) {
     stop("Package 'ensembldb' is required but not installed.")
@@ -98,44 +99,60 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
   rownames(sample_df) <- sample_df[[sample_col]]
   edb     <- getExportedValue(ensembl_package_name, ensembl_package_name)
 
-  # ---- Build tx2gene (either custom or from Ensembl) ----
+  # ---- Build tx2gene (custom or from Ensembl) ----
   if (!is.null(custom_tx2gene) && file.exists(custom_tx2gene)) {
     message("Using custom tx2gene file: ", custom_tx2gene)
     tx2gene <- data.table::fread(custom_tx2gene, header = TRUE, data.table = FALSE)
-    # Ensure required columns exist
     if (!all(c("tx_id", "gene_id") %in% colnames(tx2gene))) {
       stop("Custom tx2gene must contain columns 'tx_id' and 'gene_id'")
     }
-    # Keep only those two columns (in case there are extra)
     tx2gene <- tx2gene[, c("tx_id", "gene_id")]
-    # Also strip version suffixes to match tximport's default behavior
     tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
   } else {
     tx2gene <- ensembldb::transcripts(edb, columns = c("tx_id", "gene_id"), return.type = "DataFrame")
     tx2gene <- as.data.frame(tx2gene)
-    tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)   # version stripping
+    tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
   }
 
-  gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
-  gene_map <- as.data.frame(gene_map)
-  colnames(gene_map) <- c("ensembl", "symbol")
-
-  org_info <- get_organism_info(edb)
-  org_db   <- org_info$org_db
-  if (requireNamespace(org_db, quietly = TRUE)) {
-    org_obj        <- .load_org_db(org_db)
-    mapped_entrez  <- suppressMessages(AnnotationDbi::mapIds(
-      org_obj,
-      keys     = gene_map$ensembl,
-      column   = "ENTREZID",
-      keytype  = "ENSEMBL",
-      multiVals = "first"
-    ))
-    gene_map$entrezid <- as.character(mapped_entrez)
+  # ---- Build gene_map (custom or from Ensembl) ----
+  if (!is.null(custom_gene_map) && file.exists(custom_gene_map)) {
+    message("Using custom gene annotation file: ", custom_gene_map)
+    gene_map <- data.table::fread(custom_gene_map, header = TRUE, data.table = FALSE)
+    # Expected columns: 'gene_id' (matching the gene_id in tx2gene), 'symbol', and optionally 'entrezid'
+    if (!all(c("gene_id", "symbol") %in% colnames(gene_map))) {
+      stop("Custom gene map must contain columns 'gene_id' and 'symbol'")
+    }
+    # Rename columns to match internal naming: ensembl = gene_id, symbol = symbol, entrezid = entrezid (if present)
+    colnames(gene_map)[colnames(gene_map) == "gene_id"] <- "ensembl"
+    if (!"entrezid" %in% colnames(gene_map)) {
+      gene_map$entrezid <- NA_character_
+    }
+    # Keep only required columns
+    gene_map <- gene_map[, c("ensembl", "symbol", "entrezid")]
+    # Ensure no duplicates (keep first)
+    gene_map <- gene_map[!duplicated(gene_map$ensembl), ]
   } else {
-    gene_map$entrezid <- NA
+    gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
+    gene_map <- as.data.frame(gene_map)
+    colnames(gene_map) <- c("ensembl", "symbol")
+    org_info <- get_organism_info(edb)
+    org_db   <- org_info$org_db
+    if (requireNamespace(org_db, quietly = TRUE)) {
+      org_obj        <- .load_org_db(org_db)
+      mapped_entrez  <- suppressMessages(AnnotationDbi::mapIds(
+        org_obj,
+        keys     = gene_map$ensembl,
+        column   = "ENTREZID",
+        keytype  = "ENSEMBL",
+        multiVals = "first"
+      ))
+      gene_map$entrezid <- as.character(mapped_entrez)
+    } else {
+      gene_map$entrezid <- NA_character_
+    }
   }
 
+  # --- Continue with tximport or matrix import ---
   if (count_type != "matrix") {
     count_file_name <- switch(count_type,
       "salmon"    = "quant.sf",

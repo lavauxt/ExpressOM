@@ -26,7 +26,8 @@
 #' @param go_pvalue_cutoff GO ORA p-value cutoff
 #' @param go_qvalue_cutoff GO ORA q-value cutoff
 #' @param matrix_file Path to raw counts file if count_type = 'matrix'
-#' @param custom_tx2gene Path to a custom transcript-to-gene mapping file (TSV with columns 'tx_id' and 'gene_id')  # <<< NEW
+#' @param custom_tx2gene Path to a custom transcript-to-gene mapping file (TSV with columns 'tx_id' and 'gene_id')
+#' @param custom_gene_map Path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')
 #' @param gsea_metric Metric to rank genes for GSEA ("stat", "signed_pval", or "log2FoldChange")
 #' @param subset_sample Optional string to filter the sample table (e.g., "cell_type == 'T_cells'")
 #' @param remove_sample Optional character vector of sample IDs to exclude entirely
@@ -74,7 +75,8 @@ expressom <- function(count_type        = "salmon",
                       out_dir           = "./results",
                       sample_table      = "./sample_table.csv",
                       matrix_file       = NULL,
-                      custom_tx2gene    = NULL,   # <<< NEW
+                      custom_tx2gene    = NULL,
+                      custom_gene_map   = NULL,
                       level             = "treated",
                       base              = "control",
                       model             = "~ condition",
@@ -116,8 +118,6 @@ expressom <- function(count_type        = "salmon",
   execution_order <- match.arg(execution_order)
 
   # Guard: warn if external predictors requested without WSL on native Windows
-  # (Linux/macOS -- including R already running inside WSL -- need no warning:
-  # tools are simply expected to be on PATH there.)
   if (isTRUE(run_predictors) && .Platform$OS.type == "windows" && !use_wsl) {
     warning(
       "run_predictors = TRUE but use_wsl = FALSE on Windows. ",
@@ -157,7 +157,7 @@ expressom <- function(count_type        = "salmon",
   }
 
   # ==========================================================================
-  # EDA-ONLY MODE: override run_dge/run_isoform if conditions are missing or explicitly requested
+  # EDA-ONLY MODE
   # ==========================================================================
   if (isTRUE(eda_only) || is.null(model) || is.null(level) || is.null(base)) {
     message("DESeq2 model not fully specified or eda_only=TRUE. ",
@@ -192,7 +192,7 @@ expressom <- function(count_type        = "salmon",
     message("Consider adding it to prevent confounding your DGE results (e.g., model = '~ ", batch_col, " + ", main_condition, "').")
   }
 
-  # Always import counts and run EDA (this is needed even in EDA-only mode)
+  # Always import counts and run EDA
   tx_data <- import_counts(
     data_dir             = data_dir,
     sample_table         = sample_table,
@@ -202,10 +202,11 @@ expressom <- function(count_type        = "salmon",
     matrix_file          = matrix_file,
     subset_sample        = subset_sample,
     remove_sample        = remove_sample,
-    custom_tx2gene       = custom_tx2gene      # <<< NEW
+    custom_tx2gene       = custom_tx2gene,
+    custom_gene_map      = custom_gene_map
   )
 
-  # Build the DESeqDataSet (uses dummy model if eda_only, else real model)
+  # Build the DESeqDataSet
   dds <- create_dds_object(
     tx_data,
     level = if (run_dge) level else NULL,
@@ -232,7 +233,7 @@ expressom <- function(count_type        = "salmon",
     return(invisible(NULL))
   }
 
-  # Otherwise continue with the full pipeline...
+  # Otherwise continue...
   pipeline_steps  <- if (execution_order == "dge_first") c("dge", "isoform") else c("isoform", "dge")
   dge_results     <- NULL
   isoform_results <- NULL
@@ -261,7 +262,7 @@ expressom <- function(count_type        = "salmon",
         padj_cutoff    = padj_cutoff
       )
 
-      # Build a symbol-keyed dds/res for RegionReport
+      # Build symbol-keyed dds/res for RegionReport
       message("Converting identifiers for RegionReport...")
       dds_rep   <- res_list$dds
       res_rep   <- res_list$res_shrunken
@@ -350,41 +351,39 @@ expressom <- function(count_type        = "salmon",
         plot_l2fc_heatmap(dds_rep, zscore_genes, main_condition, level, base, plot_dir)
       }
 
-# ----------------------------------------------------------------------
-# Z‑score plots for gene sets (per‑set PDFs)
-# ----------------------------------------------------------------------
-if (!is.null(gene_sets_zscore)) {
-  message("Generating separate Z‑score plots for each gene set...")
-  plot_dir <- file.path(out_dir, "Plots")
-  if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
+      # Z-score plots for gene sets
+      if (!is.null(gene_sets_zscore)) {
+        message("Generating separate Z‑score plots for each gene set...")
+        plot_dir <- file.path(out_dir, "Plots")
+        if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 
-  for (set_name in names(gene_sets_zscore)) {
-    single_set <- list(gene_sets_zscore[[set_name]])
-    names(single_set) <- set_name
+        for (set_name in names(gene_sets_zscore)) {
+          single_set <- list(gene_sets_zscore[[set_name]])
+          names(single_set) <- set_name
 
-    message("   -> Plotting set: ", set_name)
+          message("   -> Plotting set: ", set_name)
 
-    plot_geneset_zscore_avg(
-      dds           = dds_rep,
-      gene_sets     = single_set,
-      condition_col = main_condition,
-      level         = level,
-      base          = base,
-      plot_dir      = plot_dir,
-      set_name      = set_name
-    )
+          plot_geneset_zscore_avg(
+            dds           = dds_rep,
+            gene_sets     = single_set,
+            condition_col = main_condition,
+            level         = level,
+            base          = base,
+            plot_dir      = plot_dir,
+            set_name      = set_name
+          )
 
-    plot_gene_zscore_individual(
-      dds           = dds_rep,
-      gene_sets     = single_set,
-      condition_col = main_condition,
-      level         = level,
-      base          = base,
-      plot_dir      = plot_dir,
-      set_name      = set_name
-    )
-  }
-}
+          plot_gene_zscore_individual(
+            dds           = dds_rep,
+            gene_sets     = single_set,
+            condition_col = main_condition,
+            level         = level,
+            base          = base,
+            plot_dir      = plot_dir,
+            set_name      = set_name
+          )
+        }
+      }
 
       func_results <- safe_run(
         run_functional_analysis(
@@ -497,7 +496,8 @@ if (!is.null(gene_sets_zscore)) {
           matrix_file          = matrix_file,
           subset_sample        = subset_sample,
           remove_sample        = remove_sample,
-          custom_tx2gene       = custom_tx2gene      # <<< NEW
+          custom_tx2gene       = custom_tx2gene,
+          custom_gene_map      = custom_gene_map
         )
         .iso_ckpt_save(isoform_import, "isoform_import.rds")
       } else {
@@ -522,7 +522,7 @@ if (!is.null(gene_sets_zscore)) {
         message("Step C: DTU results loaded from checkpoint. Skipping.")
       }
 
-      # ---- Step C.5: DTU via DEXSeq (optional, complementary engine) -------
+      # ---- Step C.5: DTU via DEXSeq (optional) ----------------------------
       if (isTRUE(run_dexseq)) {
         if (is.null(dexseq_res)) {
           message("Step C.5: Running DEXSeq-based DTU (complementary engine)...")
