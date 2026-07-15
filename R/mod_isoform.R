@@ -37,34 +37,47 @@ convert_pdf_to_png <- function(pdf_file, dpi = 200) {
 #' @param matrix_file Path to raw counts matrix (if count_type = "matrix")
 #' @param subset_sample Optional filter expression
 #' @param remove_sample Optional sample IDs to exclude
+#' @param custom_tx2gene Optional path to a custom tx2gene file (TSV with columns 'tx_id' and 'gene_id')  # <<< NEW
 #' @return List with txi (transcript counts), meta, tx2gene, gene_map
 #' @export
 import_transcript_counts <- function(data_dir, sample_table, ensembl_package_name,
                                       count_type = "salmon", matrix_file = NULL,
-                                      subset_sample = NULL, remove_sample = NULL) {
-  
+                                      subset_sample = NULL, remove_sample = NULL,
+                                      custom_tx2gene = NULL) {  # <<< NEW
+
   if (!file.exists(sample_table)) stop("Sample table not found: ", sample_table)
   sample_df <- data.table::fread(sample_table, header = TRUE, data.table = FALSE)
   sample_col <- if ("Sample" %in% colnames(sample_df)) "Sample" else "sample_id"
-  
+
   if (!is.null(remove_sample)) {
     sample_df <- sample_df[!(sample_df[[sample_col]] %in% remove_sample), , drop = FALSE]
     if (nrow(sample_df) == 0) stop("All samples removed by remove_sample")
   }
-  
+
   if (!is.null(subset_sample)) {
     filter_expr <- rlang::parse_expr(subset_sample)
     subset_indices <- eval(filter_expr, envir = sample_df)
     sample_df <- sample_df[subset_indices, , drop = FALSE]
   }
-  
+
   rownames(sample_df) <- sample_df[[sample_col]]
   edb <- getExportedValue(ensembl_package_name, ensembl_package_name)
-  tx2gene <- ensembldb::transcripts(edb, columns = c("tx_id", "gene_id"), return.type = "DataFrame")
-  tx2gene <- as.data.frame(tx2gene)
-  # --- CRITICAL: strip version suffixes from tx2gene ONCE ---
-  tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
-  
+
+  # ---- Build tx2gene (custom or from Ensembl) ----
+  if (!is.null(custom_tx2gene) && file.exists(custom_tx2gene)) {
+    message("Using custom tx2gene file: ", custom_tx2gene)
+    tx2gene <- data.table::fread(custom_tx2gene, header = TRUE, data.table = FALSE)
+    if (!all(c("tx_id", "gene_id") %in% colnames(tx2gene))) {
+      stop("Custom tx2gene must contain columns 'tx_id' and 'gene_id'")
+    }
+    tx2gene <- tx2gene[, c("tx_id", "gene_id")]
+    tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
+  } else {
+    tx2gene <- ensembldb::transcripts(edb, columns = c("tx_id", "gene_id"), return.type = "DataFrame")
+    tx2gene <- as.data.frame(tx2gene)
+    tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
+  }
+
   gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
   gene_map <- as.data.frame(gene_map)
   colnames(gene_map) <- c("ensembl", "symbol")
@@ -76,7 +89,7 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
                               "rsem" = "quant.genes.results",
                               "stringtie" = "t_data.ctab",
                               stop("Unsupported count_type for tximport: ", count_type))
-    
+
     file_list <- sapply(sample_df[[sample_col]], function(sid) {
       p_nested <- file.path(data_dir, sid, paste0(sid, ".", count_type, ".quant"), count_file_name)
       p_direct <- file.path(data_dir, sid, count_file_name)
@@ -84,23 +97,22 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
       return(p_direct)
     })
     names(file_list) <- sample_df[[sample_col]]
-    
+
     txi <- tximport::tximport(file_list, type = count_type, txOut = TRUE, countsFromAbundance = "lengthScaledTPM")
-    # --- CRITICAL: strip version suffixes from transcript IDs in the count matrix ---
+    # Strip version suffixes from transcript IDs in the count matrix
     rownames(txi$counts) <- sub("\\..*$", "", rownames(txi$counts))
     meta <- sample_df[colnames(txi$counts), , drop = FALSE]
     return(list(txi = txi, meta = meta, tx2gene = tx2gene, gene_map = gene_map, type = "tximport"))
-    
+
   } else {
     if (is.null(matrix_file)) stop("matrix_file required for count_type='matrix'")
     counts_df <- data.table::fread(matrix_file, data.table = FALSE)
-    rownames(counts_df) <- counts_df[, 1]   
+    rownames(counts_df) <- counts_df[, 1]
     counts_df <- counts_df[, -1, drop = FALSE]
     valid_samples <- intersect(colnames(counts_df), rownames(sample_df))
     count_mat <- as.matrix(counts_df[, valid_samples, drop = FALSE])
     mode(count_mat) <- "numeric"
     count_mat[is.na(count_mat)] <- 0
-    # --- CRITICAL: strip version suffixes from matrix row names ---
     rownames(count_mat) <- sub("\\..*$", "", rownames(count_mat))
     meta <- sample_df[valid_samples, , drop = FALSE]
     return(list(counts = count_mat, meta = meta, tx2gene = tx2gene, gene_map = gene_map, type = "matrix"))

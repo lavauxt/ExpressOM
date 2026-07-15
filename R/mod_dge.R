@@ -62,10 +62,12 @@
 #' @param matrix_file Path to raw counts file if count_type is "matrix".
 #' @param subset_sample Optional string to filter the sample table.
 #' @param remove_sample Optional character vector of sample IDs to exclude
+#' @param custom_tx2gene Optional path to a custom tx2gene file (TSV with columns 'tx_id' and 'gene_id')  # <<< NEW
 #' @return A list containing txi (or counts), meta, edb, gene_map, and type.
 #' @export
 import_counts <- function(data_dir, sample_table, ensembl_package_name, count_type = "salmon",
-                          out_dir, matrix_file = NULL, subset_sample = NULL, remove_sample = NULL) {
+                          out_dir, matrix_file = NULL, subset_sample = NULL, remove_sample = NULL,
+                          custom_tx2gene = NULL) {   # <<< NEW
 
   if (!requireNamespace("ensembldb", quietly = TRUE)) {
     stop("Package 'ensembldb' is required but not installed.")
@@ -95,8 +97,25 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
 
   rownames(sample_df) <- sample_df[[sample_col]]
   edb     <- getExportedValue(ensembl_package_name, ensembl_package_name)
-  tx2gene <- ensembldb::transcripts(edb, columns = c("tx_id", "gene_id"), return.type = "DataFrame")
-  tx2gene <- as.data.frame(tx2gene)
+
+  # ---- Build tx2gene (either custom or from Ensembl) ----
+  if (!is.null(custom_tx2gene) && file.exists(custom_tx2gene)) {
+    message("Using custom tx2gene file: ", custom_tx2gene)
+    tx2gene <- data.table::fread(custom_tx2gene, header = TRUE, data.table = FALSE)
+    # Ensure required columns exist
+    if (!all(c("tx_id", "gene_id") %in% colnames(tx2gene))) {
+      stop("Custom tx2gene must contain columns 'tx_id' and 'gene_id'")
+    }
+    # Keep only those two columns (in case there are extra)
+    tx2gene <- tx2gene[, c("tx_id", "gene_id")]
+    # Also strip version suffixes to match tximport's default behavior
+    tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
+  } else {
+    tx2gene <- ensembldb::transcripts(edb, columns = c("tx_id", "gene_id"), return.type = "DataFrame")
+    tx2gene <- as.data.frame(tx2gene)
+    tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)   # version stripping
+  }
+
   gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
   gene_map <- as.data.frame(gene_map)
   colnames(gene_map) <- c("ensembl", "symbol")
@@ -121,7 +140,7 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     count_file_name <- switch(count_type,
       "salmon"    = "quant.sf",
       "kallisto"  = "abundance.tsv",
-      "rsem"      = "quant.genes.results",  # gene-level; use isoforms.results for transcripts
+      "rsem"      = "quant.genes.results",
       "stringtie" = "t_data.ctab",
       stop("Unsupported count_type for tximport: ", count_type)
     )
@@ -159,7 +178,7 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
 
     counts_df <- data.table::fread(matrix_file, data.table = FALSE)
     rownames(counts_df) <- counts_df[, 1]
-    counts_df <- counts_df[, -1, drop = FALSE]   # BUG FIX: remove the gene-ID column
+    counts_df <- counts_df[, -1, drop = FALSE]
 
     valid_samples <- intersect(colnames(counts_df), rownames(sample_df))
     if (length(valid_samples) == 0) stop("No matching sample names between matrix and sample table.")

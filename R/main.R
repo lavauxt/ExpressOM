@@ -26,6 +26,7 @@
 #' @param go_pvalue_cutoff GO ORA p-value cutoff
 #' @param go_qvalue_cutoff GO ORA q-value cutoff
 #' @param matrix_file Path to raw counts file if count_type = 'matrix'
+#' @param custom_tx2gene Path to a custom transcript-to-gene mapping file (TSV with columns 'tx_id' and 'gene_id')  # <<< NEW
 #' @param gsea_metric Metric to rank genes for GSEA ("stat", "signed_pval", or "log2FoldChange")
 #' @param subset_sample Optional string to filter the sample table (e.g., "cell_type == 'T_cells'")
 #' @param remove_sample Optional character vector of sample IDs to exclude entirely
@@ -73,6 +74,7 @@ expressom <- function(count_type        = "salmon",
                       out_dir           = "./results",
                       sample_table      = "./sample_table.csv",
                       matrix_file       = NULL,
+                      custom_tx2gene    = NULL,   # <<< NEW
                       level             = "treated",
                       base              = "control",
                       model             = "~ condition",
@@ -128,12 +130,6 @@ expressom <- function(count_type        = "salmon",
   options(nwarnings = 10000)
   on.exit({
     options(nwarnings = old_warn)
-    # BUG FIX ("log dir is empty"): this used to write to
-    # out_dir/DE_raw_results/Log, a location the README never mentions and
-    # DGE's own per-comparison logs did not consistently use either. The
-    # README documents a single top-level out_dir/Log for exactly this
-    # content (session info, warnings) -- write there instead so it's where
-    # users actually look.
     log_dir <- file.path(out_dir, "Log")
     dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
     if (dir.exists(log_dir)) {
@@ -163,19 +159,12 @@ expressom <- function(count_type        = "salmon",
   # ==========================================================================
   # EDA-ONLY MODE: override run_dge/run_isoform if conditions are missing or explicitly requested
   # ==========================================================================
-  # BUG FIX (ordering): this override used to run *after* the early predictor/
-  # WSL environment check below, so eda_only = TRUE combined with
-  # run_isoform = TRUE, run_predictors = TRUE triggered a pointless WSL probe
-  # (and its log write) for an isoform analysis that was about to be skipped
-  # entirely. Moved before that check so run_isoform reflects its final value
-  # first.
   if (isTRUE(eda_only) || is.null(model) || is.null(level) || is.null(base)) {
     message("DESeq2 model not fully specified or eda_only=TRUE. ",
             "Running only data import and exploratory analysis (EDA).")
     run_dge     <- FALSE
     run_isoform <- FALSE
     model_eda   <- "~1"
-    # Determine main condition for EDA: use group_col if provided, else extract from original model if possible
     if (!is.null(group_col) && group_col %in% colnames(read.csv(sample_table, nrows=1))) {
       main_condition <- group_col
     } else if (!is.null(model) && model != "~1") {
@@ -184,15 +173,11 @@ expressom <- function(count_type        = "salmon",
       main_condition <- NULL
     }
   } else {
-    model_eda <- model  # not used in normal path
+    model_eda <- model
     main_condition <- tail(all.vars(as.formula(model)), 1)
   }
 
-  # Early predictor-environment check (Windows+WSL or native Linux/macOS).
-  # log_dir points at the same unified out_dir/Log/Isoform location that
-  # run_isoform_switch() itself uses further down, so both checks (this
-  # early one and the one inside run_isoform_switch()) end up in one place
-  # instead of two.
+  # Early predictor-environment check
   if (run_isoform && isTRUE(run_predictors)) {
     debug_wsl(distro = wsl_distro, out_dir = out_dir,
               log_dir = file.path(out_dir, "Log", "Isoform"),
@@ -216,7 +201,8 @@ expressom <- function(count_type        = "salmon",
     out_dir              = out_dir,
     matrix_file          = matrix_file,
     subset_sample        = subset_sample,
-    remove_sample        = remove_sample
+    remove_sample        = remove_sample,
+    custom_tx2gene       = custom_tx2gene      # <<< NEW
   )
 
   # Build the DESeqDataSet (uses dummy model if eda_only, else real model)
@@ -259,10 +245,6 @@ expressom <- function(count_type        = "salmon",
     if (step == "dge" && run_dge) {
       message("\n=== Running Gene-Level DGE Analysis ===")
 
-      # (Note: tx_data already imported, but we may need to re-import if subset changed? No, it's the same.)
-      # The dds object above was created with dummy model if eda_only; we need to rebuild with real model.
-      # However, run_dge will not be triggered if eda_only was TRUE, so we are safe.
-      # For completeness, recreate dds with real model inside the block.
       dds <- create_dds_object(tx_data, level, base, model, replicate_col)
 
       res_list <- run_deseq2_analysis(dds, model, level, base, shrink_method, out_dir,
@@ -279,7 +261,7 @@ expressom <- function(count_type        = "salmon",
         padj_cutoff    = padj_cutoff
       )
 
-      # Build a symbol-keyed dds/res for RegionReport (which needs stable rownames)
+      # Build a symbol-keyed dds/res for RegionReport
       message("Converting identifiers for RegionReport...")
       dds_rep   <- res_list$dds
       res_rep   <- res_list$res_shrunken
@@ -312,7 +294,6 @@ expressom <- function(count_type        = "salmon",
       report_dir <- file.path(out_dir, "RegionReport")
       if (!dir.exists(report_dir)) dir.create(report_dir, recursive = TRUE)
 
-      # Relative paths from the report output directory to the Plots directory
       plot_dir_rel  <- "../Plots"
       pca_file      <- file.path(plot_dir_rel, paste0("PCA_",              level, "_vs_", base, ".pdf"))
       pca_corr_file <- file.path(plot_dir_rel, paste0("PCA_BatchCorrected_", level, "_vs_", base, ".pdf"))
@@ -378,13 +359,11 @@ if (!is.null(gene_sets_zscore)) {
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 
   for (set_name in names(gene_sets_zscore)) {
-    # Build a single‑set list to pass to the plotting functions
     single_set <- list(gene_sets_zscore[[set_name]])
     names(single_set) <- set_name
 
     message("   -> Plotting set: ", set_name)
 
-    # Average Z‑score (module score) per set
     plot_geneset_zscore_avg(
       dds           = dds_rep,
       gene_sets     = single_set,
@@ -395,7 +374,6 @@ if (!is.null(gene_sets_zscore)) {
       set_name      = set_name
     )
 
-    # Individual gene Z‑score bar plots (one facet per gene)
     plot_gene_zscore_individual(
       dds           = dds_rep,
       gene_sets     = single_set,
@@ -454,12 +432,10 @@ if (!is.null(gene_sets_zscore)) {
     if (step == "isoform" && run_isoform) {
       message("\n=== Running Isoform-Level Analysis ===")
 
-      # ---- Per-step RDS checkpoint directory --------------------------------
       iso_dir      <- file.path(out_dir, "IsoformSwitch")
       iso_save_dir <- file.path(iso_dir, "saved")
       dir.create(iso_save_dir, recursive = TRUE, showWarnings = FALSE)
 
-      # Helpers: save immediately after each step completes
       .iso_ckpt_exists <- function(nm) file.exists(file.path(iso_save_dir, nm))
       .iso_ckpt_save   <- function(obj, nm) {
         saveRDS(obj, file.path(iso_save_dir, nm))
@@ -476,7 +452,6 @@ if (!is.null(gene_sets_zscore)) {
       dexseq_res     <- NULL
       isoform_import <- NULL
 
-      # ---- Load from explicit resume directory first -----------------------
       if (!is.null(resume_isoform_from) && dir.exists(resume_isoform_from)) {
         message("Resuming isoform analysis from: ", resume_isoform_from)
         loaded         <- load_isoform_results(resume_isoform_from)
@@ -490,7 +465,6 @@ if (!is.null(gene_sets_zscore)) {
           message("Resume directory incomplete. Will run missing steps.")
       }
 
-      # ---- Also check iso_save_dir per-step checkpoints --------------------
       if (is.null(isoform_import) && .iso_ckpt_exists("isoform_import.rds"))
         isoform_import <- .iso_ckpt_load("isoform_import.rds")
       if (is.null(dte_res) && .iso_ckpt_exists("dte_results.rds"))
@@ -500,7 +474,6 @@ if (!is.null(gene_sets_zscore)) {
       if (is.null(dexseq_res) && .iso_ckpt_exists("dexseq_results.rds"))
         dexseq_res <- .iso_ckpt_load("dexseq_results.rds")
 
-      # ---- Ensure reference files are available (needed for switch step) ---
       if (is.null(isoform_fasta) || is.null(isoform_gff)) {
         message("   -> Auto-fetching Ensembl FASTA and GTF references...")
         ref_dir       <- safe_dir(file.path(data_dir, "reference"))
@@ -523,7 +496,8 @@ if (!is.null(gene_sets_zscore)) {
           count_type           = count_type,
           matrix_file          = matrix_file,
           subset_sample        = subset_sample,
-          remove_sample        = remove_sample
+          remove_sample        = remove_sample,
+          custom_tx2gene       = custom_tx2gene      # <<< NEW
         )
         .iso_ckpt_save(isoform_import, "isoform_import.rds")
       } else {
@@ -549,11 +523,6 @@ if (!is.null(gene_sets_zscore)) {
       }
 
       # ---- Step C.5: DTU via DEXSeq (optional, complementary engine) -------
-      # Treats each transcript as a DEXSeq exonic bin (Soneson/Love/Robinson
-      # "Swimming downstream" workflow). Off by default since it duplicates
-      # the DRIMSeq-based test in Step C at additional runtime cost; enable
-      # via run_dexseq = TRUE to cross-validate DTU calls and unlock the
-      # DEXSeq-style per-gene transcript-usage plots in the HTML report.
       if (isTRUE(run_dexseq)) {
         if (is.null(dexseq_res)) {
           message("Step C.5: Running DEXSeq-based DTU (complementary engine)...")
@@ -567,8 +536,7 @@ if (!is.null(gene_sets_zscore)) {
         }
       }
 
-      # ---- Step D: IsoformSwitchAnalyzeR (checkpoints handled internally) --
-      # save_dir = iso_save_dir so step1/step2/step3/step3.5 checkpoints land there
+      # ---- Step D: IsoformSwitchAnalyzeR -----------------------------------
       switch_res <- run_isoform_switch(
         dte_results    = dte_res,
         dtu_results    = dtu_res,
@@ -589,9 +557,6 @@ if (!is.null(gene_sets_zscore)) {
       )
 
       # ---- DTE/DTU/DEXSeq/Switch report -------------------------------------
-      # Generated last so the report can embed the isoform switch summary
-      # plots, sashimi-style junction plots, and exon-usage comparisons that
-      # depend on switch_res (and, if computed, the DEXSeq results).
       if (!is.null(dte_res) && !is.null(dtu_res) && !is.null(isoform_import)) {
         generate_dte_dtu_report(
           dte_results         = dte_res,
@@ -609,7 +574,7 @@ if (!is.null(gene_sets_zscore)) {
         )
       }
 
-      # Final copies to iso_dir top level for backward compatibility
+      # Final copies
       if (!dir.exists(iso_dir)) dir.create(iso_dir, recursive = TRUE)
       saveRDS(dte_res,    file.path(iso_dir, "dte_results.rds"))
       saveRDS(dtu_res,    file.path(iso_dir, "dtu_results.rds"))
@@ -649,18 +614,8 @@ if (!is.null(gene_sets_zscore)) {
   invisible(NULL)
 }
 
-# BUG FIX: README.md's every usage example (Quick Start, Windows notes, EDA-
-# only mode, full pipeline, etc.) calls `run_bulk_pipeline(...)`, but the
-# actual exported function was always named `expressom()` -- there was no
-# `run_bulk_pipeline` anywhere in the package. Every example in the README,
-# copy-pasted verbatim, failed immediately with "could not find function
-# run_bulk_pipeline". Adding this alias makes the documented name work
-# without having to rename `expressom()` itself (which may already be in use
-# in existing scripts/pipelines).
+# Alias for README compatibility
 #' Run the full ExpressOM bulk RNA-seq pipeline
-#'
-#' Alias for \code{\link{expressom}}, matching the function name used
-#' throughout README.md.
 #' @rdname expressom
 #' @export
 run_bulk_pipeline <- expressom
