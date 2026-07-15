@@ -2,6 +2,63 @@
 # mod_isoform.R - DTE, DTU, and IsoformSwitchAnalyzeR integration
 # ==============================================================================
 
+# ---- Helper: Fill missing Entrez IDs using bitr (copied from mod_dge.R) ----
+#' @keywords internal
+.fill_entrez_with_bitr <- function(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol") {
+  if (is.null(org_obj)) return(gene_map)
+  if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
+    message("  clusterProfiler not installed; skipping advanced Entrez mapping.")
+    return(gene_map)
+  }
+
+  idx_na <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
+  if (!any(idx_na)) return(gene_map)
+
+  message("  Attempting to fill missing Entrez IDs using clusterProfiler::bitr...")
+
+  # 1) Try mapping by Ensembl ID
+  ens_ids <- gene_map[[id_col]][idx_na]
+  ens_like <- grepl("^ENS", ens_ids)
+  if (any(ens_like)) {
+    ens_to_map <- unique(ens_ids[ens_like])
+    map_df <- tryCatch({
+      clusterProfiler::bitr(ens_to_map, fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org_obj)
+    }, error = function(e) NULL)
+    if (!is.null(map_df) && nrow(map_df) > 0) {
+      for (i in which(idx_na)) {
+        if (gene_map[[id_col]][i] %in% map_df$ENSEMBL) {
+          gene_map$entrezid[i] <- map_df$ENTREZID[map_df$ENSEMBL == gene_map[[id_col]][i]][1]
+        }
+      }
+      message("    Mapped ", nrow(map_df), " Ensembl IDs to Entrez.")
+    }
+  }
+
+  # 2) For remaining NAs, try mapping by gene symbol
+  idx_na2 <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
+  if (any(idx_na2)) {
+    syms <- gene_map[[symbol_col]][idx_na2]
+    syms <- syms[!is.na(syms) & syms != "" & syms != gene_map[[id_col]][idx_na2]]
+    syms <- unique(syms)
+    if (length(syms) > 0) {
+      map_df <- tryCatch({
+        clusterProfiler::bitr(syms, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org_obj)
+      }, error = function(e) NULL)
+      if (!is.null(map_df) && nrow(map_df) > 0) {
+        for (i in which(idx_na2)) {
+          sym_i <- gene_map[[symbol_col]][i]
+          if (sym_i %in% map_df$SYMBOL) {
+            gene_map$entrezid[i] <- map_df$ENTREZID[map_df$SYMBOL == sym_i][1]
+          }
+        }
+        message("    Mapped ", nrow(map_df), " symbols to Entrez.")
+      }
+    }
+  }
+
+  return(gene_map)
+}
+
 convert_pdf_to_png <- function(pdf_file, dpi = 200) {
 
   if (!file.exists(pdf_file)) {
@@ -38,7 +95,7 @@ convert_pdf_to_png <- function(pdf_file, dpi = 200) {
 #' @param subset_sample Optional filter expression
 #' @param remove_sample Optional sample IDs to exclude
 #' @param custom_tx2gene Optional path to a custom tx2gene file (TSV with columns 'tx_id' and 'gene_id')
-#' @param custom_gene_map Optional path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')  # <<< NEW
+#' @param custom_gene_map Optional path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')
 #' @return List with txi (transcript counts), meta, tx2gene, gene_map
 #' @export
 import_transcript_counts <- function(data_dir, sample_table, ensembl_package_name,
@@ -73,40 +130,59 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
     }
     tx2gene <- tx2gene[, c("tx_id", "gene_id")]
     tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
+    tx2gene$gene_id <- sub("\\..*$", "", tx2gene$gene_id)
   } else {
     tx2gene <- ensembldb::transcripts(edb, columns = c("tx_id", "gene_id"), return.type = "DataFrame")
     tx2gene <- as.data.frame(tx2gene)
     tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
+    tx2gene$gene_id <- sub("\\..*$", "", tx2gene$gene_id)
   }
 
   # ---- Build gene_map (custom or from Ensembl) ----
+  org_info <- get_organism_info(edb)
+  org_db   <- org_info$org_db
+  org_obj  <- if (requireNamespace(org_db, quietly = TRUE)) .load_org_db(org_db) else NULL
+
   if (!is.null(custom_gene_map) && file.exists(custom_gene_map)) {
     message("Using custom gene annotation file: ", custom_gene_map)
     gene_map <- data.table::fread(custom_gene_map, header = TRUE, data.table = FALSE)
-    if (!all(c("gene_id", "symbol") %in% colnames(gene_map))) {
-      stop("Custom gene map must contain columns 'gene_id' and 'symbol'")
+    if (!("gene_id" %in% colnames(gene_map)) && "ensembl" %in% colnames(gene_map)) {
+      colnames(gene_map)[colnames(gene_map) == "ensembl"] <- "gene_id"
     }
+    if (!all(c("gene_id", "symbol") %in% colnames(gene_map))) {
+      stop("Custom gene map must contain columns 'gene_id' (or 'ensembl') and 'symbol'")
+    }
+    gene_map$gene_id <- sub("\\..*$", "", gene_map$gene_id)
     colnames(gene_map)[colnames(gene_map) == "gene_id"] <- "ensembl"
     if (!"entrezid" %in% colnames(gene_map)) {
       gene_map$entrezid <- NA_character_
     }
     gene_map <- gene_map[, c("ensembl", "symbol", "entrezid")]
     gene_map <- gene_map[!duplicated(gene_map$ensembl), ]
+    gene_map$symbol[is.na(gene_map$symbol) | gene_map$symbol == ""] <- gene_map$ensembl[is.na(gene_map$symbol) | gene_map$symbol == ""]
+
+    # ---- ENHANCED FALLBACK: fill missing Entrez using bitr ----
+    if (!is.null(org_obj)) {
+      gene_map <- .fill_entrez_with_bitr(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol")
+    }
+    
+    # ---- FINAL CHECK: report Entrez coverage ----
+    entrez_present <- sum(!is.na(gene_map$entrezid) & gene_map$entrezid != "")
+    message("  Gene map loaded: ", nrow(gene_map), " genes, ", entrez_present, " with Entrez IDs")
+    
   } else {
     gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
     gene_map <- as.data.frame(gene_map)
     colnames(gene_map) <- c("ensembl", "symbol")
-    org_info <- get_organism_info(edb)
-    org_db   <- org_info$org_db
-    if (requireNamespace(org_db, quietly = TRUE)) {
-      org_obj        <- .load_org_db(org_db)
-      mapped_entrez  <- suppressMessages(AnnotationDbi::mapIds(
-        org_obj,
-        keys     = gene_map$ensembl,
-        column   = "ENTREZID",
-        keytype  = "ENSEMBL",
-        multiVals = "first"
-      ))
+    gene_map$ensembl <- sub("\\..*$", "", gene_map$ensembl)
+    if (!is.null(org_obj)) {
+      mapped_entrez <- suppressMessages(
+        AnnotationDbi::mapIds(org_obj,
+                              keys = gene_map$ensembl,
+                              column = "ENTREZID",
+                              keytype = "ENSEMBL",
+                              multiVals = "first")
+      )
       gene_map$entrezid <- as.character(mapped_entrez)
     } else {
       gene_map$entrezid <- NA_character_
@@ -181,7 +257,11 @@ run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05) {
   res_df$transcript_id <- rownames(res_df)
   # Direct merge using already version‑free tx2gene (no stripping needed)
   res_df <- merge(res_df, isoform_obj$tx2gene, by.x = "transcript_id", by.y = "tx_id", all.x = TRUE)
+  
+  # --- Add gene symbol and Entrez ID ---
   res_df$gene_symbol <- isoform_obj$gene_map$symbol[match(res_df$gene_id, isoform_obj$gene_map$ensembl)]
+  res_df$entrezid <- isoform_obj$gene_map$entrezid[match(res_df$gene_id, isoform_obj$gene_map$ensembl)]
+  
   res_df$signif <- !is.na(res_df$padj) & res_df$padj < padj_cutoff &
                    !is.na(res_df$log2FoldChange) & abs(res_df$log2FoldChange) > 1
   return(res_df)
@@ -233,7 +313,7 @@ run_dtu <- function(
 
   sample_data <- isoform_obj$meta
 
-  # --- NEW: Keep only samples belonging to the two conditions of interest ---
+  # --- Keep only samples belonging to the two conditions of interest ---
   keep_samples <- sample_data[[condition]] %in% c(base, level)
   if (sum(keep_samples) < 2) {
     stop("Fewer than 2 samples available for comparison. Need at least one sample in each condition.")
@@ -409,6 +489,10 @@ run_dtu <- function(
     stop("No p-value column found in results.")
   }
   dtu_results$adj_pvalue <- p.adjust(dtu_results[[pcol]], method = "BH")
+  
+  # --- Add gene symbol and Entrez ID to results ---
+  dtu_results$gene_symbol <- isoform_obj$gene_map$symbol[match(dtu_results$gene_id, isoform_obj$gene_map$ensembl)]
+  dtu_results$entrezid <- isoform_obj$gene_map$entrezid[match(dtu_results$gene_id, isoform_obj$gene_map$ensembl)]
 
   return(list(dtu_results = dtu_results))
 }

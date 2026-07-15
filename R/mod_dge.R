@@ -1,3 +1,7 @@
+# ==============================================================================
+# mod_dge.R - Gene-level DGE functions with enhanced Entrez mapping
+# ==============================================================================
+
 #' Write structured DGE parameters log
 #' @keywords internal
 .write_dge_log <- function(out_dir, comp_name, model, test, reduced,
@@ -52,6 +56,67 @@
   invisible(params)
 }
 
+# ---- Helper: Fill missing Entrez IDs using bitr ----
+#' @keywords internal
+.fill_entrez_with_bitr <- function(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol") {
+  if (is.null(org_obj)) return(gene_map)
+  if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
+    message("  clusterProfiler not installed; skipping advanced Entrez mapping.")
+    return(gene_map)
+  }
+
+  # Identify rows with missing Entrez
+  idx_na <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
+  if (!any(idx_na)) return(gene_map)
+
+  message("  Attempting to fill missing Entrez IDs using clusterProfiler::bitr...")
+
+  # 1) Try mapping by Ensembl ID (if IDs look like Ensembl)
+  ens_ids <- gene_map[[id_col]][idx_na]
+  ens_like <- grepl("^ENS", ens_ids)
+  if (any(ens_like)) {
+    ens_to_map <- unique(ens_ids[ens_like])
+    map_df <- tryCatch({
+      clusterProfiler::bitr(ens_to_map, fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org_obj)
+    }, error = function(e) NULL)
+    if (!is.null(map_df) && nrow(map_df) > 0) {
+      # Map back to gene_map
+      for (i in which(idx_na)) {
+        if (gene_map[[id_col]][i] %in% map_df$ENSEMBL) {
+          gene_map$entrezid[i] <- map_df$ENTREZID[map_df$ENSEMBL == gene_map[[id_col]][i]][1]
+        }
+      }
+      message("    Mapped ", nrow(map_df), " Ensembl IDs to Entrez.")
+    }
+  }
+
+  # 2) For remaining NAs, try mapping by gene symbol (if symbol is available)
+  idx_na2 <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
+  if (any(idx_na2)) {
+    syms <- gene_map[[symbol_col]][idx_na2]
+    # Exclude symbols that are NA, empty, or identical to the ID (likely custom IDs)
+    syms <- syms[!is.na(syms) & syms != "" & syms != gene_map[[id_col]][idx_na2]]
+    syms <- unique(syms)
+    if (length(syms) > 0) {
+      map_df <- tryCatch({
+        clusterProfiler::bitr(syms, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org_obj)
+      }, error = function(e) NULL)
+      if (!is.null(map_df) && nrow(map_df) > 0) {
+        for (i in which(idx_na2)) {
+          sym_i <- gene_map[[symbol_col]][i]
+          if (sym_i %in% map_df$SYMBOL) {
+            gene_map$entrezid[i] <- map_df$ENTREZID[map_df$SYMBOL == sym_i][1]
+          }
+        }
+        message("    Mapped ", nrow(map_df), " symbols to Entrez.")
+      }
+    }
+  }
+
+  # Return updated gene_map
+  gene_map
+}
+
 #' Import RNA-seq Counts and Prepare Metadata
 #'
 #' @param data_dir Folder where the input data is stored.
@@ -63,7 +128,7 @@
 #' @param subset_sample Optional string to filter the sample table.
 #' @param remove_sample Optional character vector of sample IDs to exclude
 #' @param custom_tx2gene Optional path to a custom tx2gene file (TSV with columns 'tx_id' and 'gene_id')
-#' @param custom_gene_map Optional path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')  # <<< NEW
+#' @param custom_gene_map Optional path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')
 #' @return A list containing txi (or counts), meta, edb, gene_map, and type.
 #' @export
 import_counts <- function(data_dir, sample_table, ensembl_package_name, count_type = "salmon",
@@ -108,44 +173,65 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     }
     tx2gene <- tx2gene[, c("tx_id", "gene_id")]
     tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
+    tx2gene$gene_id <- sub("\\..*$", "", tx2gene$gene_id)
   } else {
     tx2gene <- ensembldb::transcripts(edb, columns = c("tx_id", "gene_id"), return.type = "DataFrame")
     tx2gene <- as.data.frame(tx2gene)
     tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
+    tx2gene$gene_id <- sub("\\..*$", "", tx2gene$gene_id)
   }
 
   # ---- Build gene_map (custom or from Ensembl) ----
+  org_info <- get_organism_info(edb)
+  org_db   <- org_info$org_db
+  org_obj  <- if (requireNamespace(org_db, quietly = TRUE)) .load_org_db(org_db) else NULL
+
   if (!is.null(custom_gene_map) && file.exists(custom_gene_map)) {
     message("Using custom gene annotation file: ", custom_gene_map)
     gene_map <- data.table::fread(custom_gene_map, header = TRUE, data.table = FALSE)
-    # Expected columns: 'gene_id' (matching the gene_id in tx2gene), 'symbol', and optionally 'entrezid'
-    if (!all(c("gene_id", "symbol") %in% colnames(gene_map))) {
-      stop("Custom gene map must contain columns 'gene_id' and 'symbol'")
+    # Accept either 'gene_id' or 'ensembl' as ID column
+    if (!("gene_id" %in% colnames(gene_map)) && "ensembl" %in% colnames(gene_map)) {
+      colnames(gene_map)[colnames(gene_map) == "ensembl"] <- "gene_id"
     }
-    # Rename columns to match internal naming: ensembl = gene_id, symbol = symbol, entrezid = entrezid (if present)
+    if (!all(c("gene_id", "symbol") %in% colnames(gene_map))) {
+      stop("Custom gene map must contain columns 'gene_id' (or 'ensembl') and 'symbol'")
+    }
+    # Strip version and rename
+    gene_map$gene_id <- sub("\\..*$", "", gene_map$gene_id)
     colnames(gene_map)[colnames(gene_map) == "gene_id"] <- "ensembl"
     if (!"entrezid" %in% colnames(gene_map)) {
       gene_map$entrezid <- NA_character_
     }
     # Keep only required columns
     gene_map <- gene_map[, c("ensembl", "symbol", "entrezid")]
-    # Ensure no duplicates (keep first)
+    # Remove duplicates
     gene_map <- gene_map[!duplicated(gene_map$ensembl), ]
+    # Fill missing symbol with ensembl
+    gene_map$symbol[is.na(gene_map$symbol) | gene_map$symbol == ""] <- gene_map$ensembl[is.na(gene_map$symbol) | gene_map$symbol == ""]
+
+    # ---- ENHANCED FALLBACK: fill missing Entrez using bitr ----
+    if (!is.null(org_obj)) {
+      gene_map <- .fill_entrez_with_bitr(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol")
+    }
+    
+    # ---- FINAL CHECK: report Entrez coverage ----
+    entrez_present <- sum(!is.na(gene_map$entrezid) & gene_map$entrezid != "")
+    message("  Gene map loaded: ", nrow(gene_map), " genes, ", entrez_present, " with Entrez IDs")
+    
   } else {
+    # No custom gene map: build from Ensembl
     gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
     gene_map <- as.data.frame(gene_map)
     colnames(gene_map) <- c("ensembl", "symbol")
-    org_info <- get_organism_info(edb)
-    org_db   <- org_info$org_db
-    if (requireNamespace(org_db, quietly = TRUE)) {
-      org_obj        <- .load_org_db(org_db)
-      mapped_entrez  <- suppressMessages(AnnotationDbi::mapIds(
-        org_obj,
-        keys     = gene_map$ensembl,
-        column   = "ENTREZID",
-        keytype  = "ENSEMBL",
-        multiVals = "first"
-      ))
+    gene_map$ensembl <- sub("\\..*$", "", gene_map$ensembl)
+    if (!is.null(org_obj)) {
+      mapped_entrez <- suppressMessages(
+        AnnotationDbi::mapIds(org_obj,
+                              keys = gene_map$ensembl,
+                              column = "ENTREZID",
+                              keytype = "ENSEMBL",
+                              multiVals = "first")
+      )
       gene_map$entrezid <- as.character(mapped_entrez)
     } else {
       gene_map$entrezid <- NA_character_
@@ -293,8 +379,6 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
 
   if (test == "LRT") {
     if (is.null(reduced)) stop("You must provide a reduced model for LRT.")
-    # LRT statistics are chi-square (not directional); lfcShrink only supports
-    # 'ashr' when a pre-computed `res` object is supplied rather than a coef index.
     if (shrink_method != "ashr") {
       message("NOTE: LRT is only compatible with shrink_method = 'ashr'. Overriding to 'ashr'.")
       shrink_method <- "ashr"
@@ -307,8 +391,6 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
   main_condition <- tail(all.vars(as.formula(model)), 1)
 
   if (test == "LRT") {
-    # LRT results() with no contrast returns the last coefficient by default.
-    # lfcShrink with type="ashr" accepts the pre-computed res object directly.
     res_unshrunken <- DESeq2::results(dds, alpha = padj_cutoff)
     res_shrunken   <- suppressMessages(DESeq2::lfcShrink(dds, res = res_unshrunken, type = "ashr"))
     res_shrunken$stat <- res_unshrunken$stat
@@ -329,11 +411,6 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
   base_dir <- file.path(out_dir, "DE_raw_results")
   if (!dir.exists(base_dir)) dir.create(base_dir, recursive = TRUE)
 
-  # BUG FIX ("log dir is empty"): pass the true top-level out_dir here, not
-  # base_dir. .write_dge_log() appends "Log/DGE" itself; passing base_dir
-  # (out_dir/DE_raw_results) used to nest the log two levels deep at
-  # out_dir/DE_raw_results/Log -- a location the README never documents and
-  # that a user browsing to the documented out_dir/Log would never find.
   .write_dge_log(out_dir, comp_name, model, test, reduced, level, base,
                  shrink_method, padj_cutoff, n_genes_input, n_genes_after_filter,
                  sig_up, sig_down)
@@ -357,38 +434,89 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
   fc_dir <- file.path(out_dir, "DE_raw_results")
   if (!dir.exists(fc_dir)) dir.create(fc_dir, recursive = TRUE)
 
-  res_tbl         <- as.data.frame(res_shrunken)
-  res_tbl$ensembl <- rownames(res_tbl)
-  res_tbl         <- merge(res_tbl, gene_map, by = "ensembl", all.x = TRUE)
-  res_tbl$gene    <- ifelse(is.na(res_tbl$symbol) | res_tbl$symbol == "", res_tbl$ensembl, res_tbl$symbol)
+  # --- MAIN RESULTS TABLE ---
+  res_tbl <- as.data.frame(res_shrunken)
+  # Strip version suffixes from Ensembl IDs BEFORE merging
+  res_tbl$ensembl <- sub("\\..*$", "", rownames(res_tbl))
+  res_tbl <- merge(res_tbl, gene_map, by = "ensembl", all.x = TRUE)
+  
+  # --- RECOVER ENTREZ IDs FROM GENE MAP (fallback for any that were missed) ---
+  if (any(is.na(res_tbl$entrezid) | res_tbl$entrezid == "")) {
+    message("  Recovering missing Entrez IDs from gene_map...")
+    
+    # Clean gene_map for matching
+    gene_map_clean <- gene_map[!is.na(gene_map$entrezid) & gene_map$entrezid != "", ]
+    gene_map_clean$ensembl_clean <- sub("\\..*$", "", gene_map_clean$ensembl)
+    
+    # First pass: match by gene symbol
+    missing_idx <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
+    if (any(missing_idx)) {
+      for (i in which(missing_idx)) {
+        sym <- res_tbl$symbol[i]
+        if (!is.na(sym) && sym != "" && sym != res_tbl$ensembl[i]) {
+          match_idx <- which(gene_map_clean$symbol == sym)
+          if (length(match_idx) > 0) {
+            res_tbl$entrezid[i] <- gene_map_clean$entrezid[match_idx[1]]
+          }
+        }
+      }
+    }
+    
+    # Second pass: match by Ensembl ID (version-stripped)
+    missing_idx <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
+    if (any(missing_idx)) {
+      for (i in which(missing_idx)) {
+        ens <- res_tbl$ensembl[i]
+        if (!is.na(ens) && ens != "") {
+          match_idx <- which(gene_map_clean$ensembl_clean == ens)
+          if (length(match_idx) > 0) {
+            res_tbl$entrezid[i] <- gene_map_clean$entrezid[match_idx[1]]
+          }
+        }
+      }
+    }
+    
+    recovered <- sum(!is.na(res_tbl$entrezid) & res_tbl$entrezid != "")
+    total <- nrow(res_tbl)
+    message("    Recovered ", recovered, "/", total, " Entrez IDs")
+  }
 
-  counts_df         <- as.data.frame(DESeq2::counts(dds, normalized = TRUE))
-  counts_df$ensembl <- rownames(counts_df)
-  counts_df         <- merge(counts_df, gene_map, by = "ensembl", all.x = TRUE)
-  counts_df$gene    <- ifelse(is.na(counts_df$symbol) | counts_df$symbol == "", counts_df$ensembl, counts_df$symbol)
+  # Set gene column for display
+  res_tbl$gene <- ifelse(is.na(res_tbl$symbol) | res_tbl$symbol == "", res_tbl$ensembl, res_tbl$symbol)
+
+  # --- NORMALIZED COUNTS ---
+  counts_df <- as.data.frame(DESeq2::counts(dds, normalized = TRUE))
+  counts_df$ensembl <- sub("\\..*$", "", rownames(counts_df))
+  counts_df <- merge(counts_df, gene_map, by = "ensembl", all.x = TRUE)
+  counts_df$gene <- ifelse(is.na(counts_df$symbol) | counts_df$symbol == "", counts_df$ensembl, counts_df$symbol)
+  
   tryCatch(
     utils::write.table(counts_df, file.path(fc_dir, paste0("DESeq_Normalized_Counts_", level, "_vs_", base, ".txt")),
                        sep = "\t", quote = FALSE, row.names = FALSE),
     error = function(e) warning("Could not write normalized counts: ", e$message)
   )
 
-  raw_counts         <- as.data.frame(DESeq2::counts(dds, normalized = FALSE))
-  raw_counts$ensembl <- rownames(raw_counts)
-  raw_counts         <- merge(raw_counts, gene_map, by = "ensembl", all.x = TRUE)
-  raw_counts$gene    <- ifelse(is.na(raw_counts$symbol) | raw_counts$symbol == "", raw_counts$ensembl, raw_counts$symbol)
+  # --- RAW COUNTS ---
+  raw_counts <- as.data.frame(DESeq2::counts(dds, normalized = FALSE))
+  raw_counts$ensembl <- sub("\\..*$", "", rownames(raw_counts))
+  raw_counts <- merge(raw_counts, gene_map, by = "ensembl", all.x = TRUE)
+  raw_counts$gene <- ifelse(is.na(raw_counts$symbol) | raw_counts$symbol == "", raw_counts$ensembl, raw_counts$symbol)
+  
   tryCatch(
     utils::write.table(raw_counts, file.path(fc_dir, paste0("DESeq_Raw_Counts_", level, "_vs_", base, ".txt")),
                        sep = "\t", quote = FALSE, row.names = FALSE),
     error = function(e) warning("Could not write raw counts: ", e$message)
   )
 
-  # BUG FIX: use intersect so missing columns (e.g. 'stat') don't cause an error
+  # --- FILTER RESULTS TABLE ---
   desired_cols <- c("gene", "ensembl", "entrezid", "baseMean", "log2FoldChange", "lfcSE", "pvalue", "padj", "stat")
   res_cols <- intersect(desired_cols, colnames(res_tbl))
-  res_tbl  <- res_tbl[, res_cols, drop = FALSE]
+  res_tbl <- res_tbl[, res_cols, drop = FALSE]
 
+  # --- SIGNIFICANT RESULTS ---
   sig_res <- res_tbl[!is.na(res_tbl$padj) & res_tbl$padj < padj_cutoff, ]
 
+  # --- WRITE FILES ---
   utils::write.table(res_tbl, file.path(fc_dir, paste0("DEgenes_raw_", level, "_vs_", base, ".txt")),
                      sep = "\t", quote = FALSE, row.names = FALSE)
 
