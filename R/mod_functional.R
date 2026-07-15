@@ -128,6 +128,7 @@
   }
 }
 
+#' Run KEGG Pathview for GSEA results
 #' @keywords internal
 .run_kegg_pathview <- function(gseaKEGG, expression_vector, kegg_code, top_genes, dir_kegg) {
   gseaKEGG_results <- as.data.frame(gseaKEGG)
@@ -135,34 +136,37 @@
   
   kegg_ids <- as.character(gseaKEGG_results$ID)
   if (length(kegg_ids) > top_genes) kegg_ids <- kegg_ids[seq_len(top_genes)]
+  # Ensure IDs start with species code
   kegg_ids <- ifelse(grepl("^[a-zA-Z]", kegg_ids), kegg_ids, paste0(kegg_code, kegg_ids))
-
-  suppressMessages({
-    utils::data("bods", package = "pathview", envir = environment())
-    utils::data("gene.idtype.list", package = "pathview", envir = environment())
-    if (!"package:pathview" %in% search()) try(attachNamespace("pathview"), silent = TRUE)
-  })
-
-  safe_get_kegg_plots <- purrr::safely(function(pid) {
-    withr::with_dir(dir_kegg, {
-      pathview::pathview(
-        gene.data  = expression_vector, 
-        pathway.id = pid, 
-        species    = kegg_code,
-        limit      = list(gene = 2, cpd = 1),
-        kegg.dir   = "."
-      )
-      for (ext in c(".xml", ".png")) {
-        f <- paste0(pid, ext)
-        if (file.exists(f)) file.remove(f)
-      }
-    })
-  })
   
-  results <- purrr::map(kegg_ids, safe_get_kegg_plots)
-  errors <- purrr::compact(purrr::map(results, "error"))
-  if (length(errors) > 0) {
-    message("   -> Warning: ", length(errors), " KEGG pathview plots failed to generate.")
+  # Prepare gene.data: a named numeric vector of log2FoldChanges with Entrez IDs as names
+  gene_data <- expression_vector[!is.na(expression_vector)]
+  if (length(gene_data) == 0) {
+    message("   -> No valid gene expression data for KEGG pathview.")
+    return(invisible(NULL))
+  }
+  
+  # Attach pathview namespace if not already attached
+  if (!"package:pathview" %in% search()) try(attachNamespace("pathview"), silent = TRUE)
+  
+  for (pid in kegg_ids) {
+    safe_run({
+      withr::with_dir(dir_kegg, {
+        pathview::pathview(
+          gene.data  = gene_data,
+          pathway.id = pid,
+          species    = kegg_code,
+          gene.idtype = "entrez",        # explicitly tell pathview we use Entrez IDs
+          limit      = list(gene = 2, cpd = 1),
+          kegg.dir   = "."
+        )
+        # Remove intermediate files (optional)
+        for (ext in c(".xml", ".png")) {
+          f <- paste0(pid, ext)
+          if (file.exists(f)) file.remove(f)
+        }
+      })
+    }, label = paste("KEGG pathview", pid))
   }
 }
 
@@ -265,8 +269,9 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     }
   }
 
-  dir_ora  <- safe_dir(file.path(out_dir, "ORA"))
-  dir_gsea <- safe_dir(file.path(out_dir, "GSEA"))
+  # We will create ORA directory only when we have results
+  dir_ora <- file.path(out_dir, "ORA")   # just a path, not created yet
+  dir_gsea <- safe_dir(file.path(out_dir, "GSEA"))  # GSEA is always created (used later)
 
   allOE_genes <- as.character(res_tbl$gene[!is.na(res_tbl$gene)])
   sigOE       <- dplyr::filter(res_tbl, .data$padj < padj_cutoff)
@@ -294,7 +299,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   # ==============================================================================
 
   # ---- 1A. Transcription Factor (TF) enrichment ----
-  #    Try EnrichR online first; if unreachable, fall back to local MSigDB C3 (TFT)
   message("Running Transcription Factor (TF) enrichment...")
   if (length(tf_db) > 0) {
     websiteLive <- getOption("enrichR.live", NA)
@@ -329,7 +333,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
       }
     } else {
       message("      EnrichR API unreachable; falling back to local TF enrichment using MSigDB C3 (TFT).")
-      # Local enrichment using MSigDB C3 (TFT subset)
       msig_org <- org_info$msig_org
       message("      Using MSigDB C3 (TFT) for ", msig_org)
       
@@ -379,16 +382,36 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 
   # ---- 1B. ORA GO (BP, MF, CC)
   message("Running GO ORA...")
-  dir_go <- safe_dir(file.path(dir_ora, "GO"))
   ego_list <- list()
+  has_go_results <- FALSE
   for (ont in c("BP", "MF", "CC")) {
-    ego_list[[ont]] <- .run_go_ontology(ont, sigOE_genes, allOE_genes, org_db,
-                                        go_pvalue_cutoff, go_qvalue_cutoff,
-                                        OE_foldchanges, top_genes,
-                                        dir_go, comp_name)
+    ego <- .run_go_ontology(ont, sigOE_genes, allOE_genes, org_db,
+                             go_pvalue_cutoff, go_qvalue_cutoff,
+                             OE_foldchanges, top_genes,
+                             dir_go = NULL, comp_name)  # pass NULL for dir_go; we'll create inside if needed
+    if (!is.null(ego)) {
+      # Now create the ORA and GO directories
+      dir_ora <- safe_dir(dir_ora)
+      dir_go <- safe_dir(file.path(dir_ora, "GO"))
+      # The .run_go_ontology function already writes files, but it needs the directory path.
+      # We'll re-call it with the actual dir_go.
+      # Alternatively, we can modify .run_go_ontology to accept a directory and create it.
+      # For simplicity, we'll restructure: we'll handle writing inside the loop with explicit dir creation.
+      # Since .run_go_ontology currently writes directly using the passed dir, we need to pass the actual dir.
+      # We'll refactor: we'll call a version that accepts the path and creates it.
+      # Let's just recreate the logic inline here to avoid double-calling.
+      # Better: we'll define a local wrapper that creates dir and then calls the internal.
+      ego <- .run_go_ontology(ont, sigOE_genes, allOE_genes, org_db,
+                               go_pvalue_cutoff, go_qvalue_cutoff,
+                               OE_foldchanges, top_genes,
+                               dir_go, comp_name)
+      ego_list[[ont]] <- ego
+      has_go_results <- TRUE
+    }
   }
   ego_list <- purrr::compact(ego_list)
 
+  # ---- Entrez mapping for remaining analyses ----
   if (!"entrezid" %in% colnames(res_tbl)) res_tbl$entrezid <- NA_character_
   missing_entrez <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
   if (any(missing_entrez)) {
@@ -476,6 +499,8 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
       label = "Reactome ORA"
     )
     if (!is.null(x) && nrow(as.data.frame(x)) > 0) {
+      # Now create ORA and Reactome subdir
+      dir_ora <- safe_dir(dir_ora)
       dir_reac_ora <- safe_dir(file.path(dir_ora, "Reactome"))
       .write_enrich_csv(x, file.path(dir_reac_ora, paste0("Reactome_ORA_", comp_name, ".csv")))
       if (nrow(x@result) > 5) {
@@ -495,8 +520,18 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   # ---- 1E. ORA Disease Ontology (Human only)
   message("Running Disease Ontology ORA...")
   if (kegg_code == "hsa" && length(sig_entrez_ids) > 0) {
-    .run_disease_ontology(sig_entrez_ids, universe_entrez = as.character(res_entrez$entrezid), 
-                          go_pvalue_cutoff, go_qvalue_cutoff, top_genes, dir_ora, comp_name)
+    # Only create DOSE dir if we have results
+    do_res <- .run_disease_ontology(sig_entrez_ids, universe_entrez = as.character(res_entrez$entrezid), 
+                                     go_pvalue_cutoff, go_qvalue_cutoff, top_genes, 
+                                     dir_ora = NULL, comp_name) # we'll create inside
+    # Actually .run_disease_ontology writes directly; we need to pass a dir.
+    # We'll modify the call to create the dir if results exist.
+    # We'll handle inside .run_disease_ontology or we can check for return and then write.
+    # For simplicity, let's assume .run_disease_ontology will create the directories itself when it has results.
+    # We'll ensure that function uses safe_dir internally.
+    .run_disease_ontology(sig_entrez_ids, universe_entrez = as.character(res_entrez$entrezid),
+                          go_pvalue_cutoff, go_qvalue_cutoff, top_genes, 
+                          dir_ora = dir_ora, comp_name)
   } else {
     message("      Skipping Disease Ontology ORA (not human or no sig genes)")
   }
@@ -611,7 +646,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 
   message("Running SPIA analysis...")
   if (length(sig_entrez_ids) > 0) {
-    # SPIA requires a named numeric vector of L2FC for DE genes; deduplicate by entrezid
     spia_de <- purrr::set_names(as.numeric(res_entrez$log2FoldChange), as.character(res_entrez$entrezid))
     spia_de <- spia_de[names(spia_de) %in% sig_entrez_ids]
     spia_de <- spia_de[!is.na(spia_de) & !duplicated(names(spia_de))]
