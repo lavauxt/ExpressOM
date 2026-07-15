@@ -1,5 +1,100 @@
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+#' Safely strip Ensembl-style version suffixes from an identifier vector
+#'
+#' Unlike \code{sub("\\..*$", "", x)}, which truncates at the FIRST dot and
+#' therefore destroys any non-Ensembl identifier that legitimately contains a
+#' dot (e.g. StringTie loci like "MSTRG.116" or transcripts like "MSTRG.6.1",
+#' both of which would otherwise collapse to the bare string "MSTRG"), this
+#' only strips a trailing ".<digits>" version suffix when the identifier
+#' actually looks like an Ensembl gene/transcript ID (ENSG/ENST, or their
+#' species-prefixed variants like ENSMUSG/ENSMUST). Every other identifier
+#' (MSTRG IDs, gene symbols, custom IDs) is returned unchanged.
+#'
+#' @param x Character vector of identifiers
+#' @return Character vector, same length as \code{x}
+#' @keywords internal
+#' @export
+strip_ensembl_version <- function(x) {
+  is_versioned_ensembl <- grepl("^ENS[A-Z]*[GT][0-9]+\\.[0-9]+$", x)
+  x[is_versioned_ensembl] <- sub("\\.[0-9]+$", "", x[is_versioned_ensembl])
+  x
+}
+
+#' Fill missing Entrez IDs in a gene_map using clusterProfiler::bitr
+#'
+#' Shared by both the DGE (\code{import_counts()}) and isoform
+#' (\code{import_transcript_counts()}) import paths. Previously this was
+#' defined as two separately-maintained, drifting copies (one in mod_dge.R,
+#' one in mod_isoform.R marked "copied from mod_dge.R") -- consolidated here
+#' as the single source of truth.
+#'
+#' @param gene_map Data frame with at least \code{id_col}, \code{symbol_col},
+#'   and \code{entrezid} columns
+#' @param org_obj Loaded OrgDb object (e.g. org.Hs.eg.db), or NULL to skip
+#' @param id_col Name of the ID column to try mapping from Ensembl (default "ensembl")
+#' @param symbol_col Name of the gene symbol column (default "symbol")
+#' @return \code{gene_map} with as many \code{entrezid} NAs filled in as possible
+#' @keywords internal
+.fill_entrez_with_bitr <- function(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol") {
+  if (is.null(org_obj)) return(gene_map)
+  if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
+    message("  clusterProfiler not installed; skipping advanced Entrez mapping.")
+    return(gene_map)
+  }
+
+  # Identify rows with missing Entrez
+  idx_na <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
+  if (!any(idx_na)) return(gene_map)
+
+  message("  Attempting to fill missing Entrez IDs using clusterProfiler::bitr...")
+
+  # 1) Try mapping by Ensembl ID (if IDs look like Ensembl)
+  ens_ids <- gene_map[[id_col]][idx_na]
+  ens_like <- grepl("^ENS", ens_ids)
+  if (any(ens_like)) {
+    ens_to_map <- unique(ens_ids[ens_like])
+    map_df <- tryCatch({
+      clusterProfiler::bitr(ens_to_map, fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org_obj)
+    }, error = function(e) NULL)
+    if (!is.null(map_df) && nrow(map_df) > 0) {
+      # Map back to gene_map
+      for (i in which(idx_na)) {
+        if (gene_map[[id_col]][i] %in% map_df$ENSEMBL) {
+          gene_map$entrezid[i] <- map_df$ENTREZID[map_df$ENSEMBL == gene_map[[id_col]][i]][1]
+        }
+      }
+      message("    Mapped ", nrow(map_df), " Ensembl IDs to Entrez.")
+    }
+  }
+
+  # 2) For remaining NAs, try mapping by gene symbol (if symbol is available)
+  idx_na2 <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
+  if (any(idx_na2)) {
+    syms <- gene_map[[symbol_col]][idx_na2]
+    # Exclude symbols that are NA, empty, or identical to the ID (likely custom IDs)
+    syms <- syms[!is.na(syms) & syms != "" & syms != gene_map[[id_col]][idx_na2]]
+    syms <- unique(syms)
+    if (length(syms) > 0) {
+      map_df <- tryCatch({
+        clusterProfiler::bitr(syms, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org_obj)
+      }, error = function(e) NULL)
+      if (!is.null(map_df) && nrow(map_df) > 0) {
+        for (i in which(idx_na2)) {
+          sym_i <- gene_map[[symbol_col]][i]
+          if (sym_i %in% map_df$SYMBOL) {
+            gene_map$entrezid[i] <- map_df$ENTREZID[map_df$SYMBOL == sym_i][1]
+          }
+        }
+        message("    Mapped ", nrow(map_df), " symbols to Entrez.")
+      }
+    }
+  }
+
+  # Return updated gene_map
+  gene_map
+}
+
 #' Safely create a directory
 #' @keywords internal
 safe_dir <- function(path) {

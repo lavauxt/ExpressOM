@@ -21,19 +21,6 @@
 
 # ---- Shared persistent-environment-variable file -----------------------------
 #
-# BUG FIX (Windows/WSL tools "not working"): install_isoform_databases() and
-# install_signalp_from_windows() used to persist CPAT_DATA / SIGNALP_DIR by
-# appending `export ... >> ~/.bashrc`. That line is only ever read back by an
-# *interactive* bash shell. Every actual tool invocation in this file runs a
-# script non-interactively via `bash <script>` / `wsl -d <distro> bash
-# <script>`, which never sources ~/.bashrc (and stock Ubuntu's default
-# ~/.bashrc explicitly `return`s immediately for non-interactive shells, so it
-# wouldn't help even if sourced). The result: any custom CPAT_DATA/SIGNALP_DIR
-# location silently never reached the tools at prediction time. All install
-# helpers now write to this single dedicated file instead, and
-# .wsl_exec_script() sources it (guarded, so it's a harmless no-op if the file
-# doesn't exist yet) before every command.
-# @keywords internal
 .ISOFORM_ENV_FILE <- "$HOME/.isoform_tools_env.sh"
 
 #' Persist an environment variable for later predictor runs
@@ -512,13 +499,6 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
   results$pfam_db_found <- !is.null(pfam_path)
   if (verbose) message("  ", if (results$pfam_db_found) "\u2713" else "\u2717", " Pfam-A.hmm")
 
-  # BUG FIX: a Pfam-A.hmm file can exist yet still make hmmscan fail outright
-  # if it was never `hmmpress`-indexed (hmmscan requires the companion
-  # .h3f/.h3i/.h3m/.h3p binary index files). install_isoform_databases() used
-  # to check for hmmpress on the bare WSL PATH -- but hmmpress is installed
-  # *inside* the isoform_tools conda env, so that check always failed and
-  # silently skipped indexing. Surface the actual index status here so it is
-  # visible before a real analysis run hits it.
   results$pfam_db_indexed <- FALSE
   if (results$pfam_db_found) {
     idx_check <- .wsl_exec_script(
@@ -589,13 +569,6 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   })
   wsl_windows_path <- trimws(wsl_windows_path[nzchar(trimws(wsl_windows_path))])[1]
 
-  # BUG FIX: every step below now goes through .wsl_exec_script(), which
-  # writes the command to a temp script file rather than interpolating raw
-  # paths into a single system() string. The old code built commands like
-  # `paste('wsl -d', distro, '-- sudo cp -r', wsl_windows_path, install_path)`
-  # with no shell-quoting at all -- any space in windows_signalp_dir (e.g. a
-  # path under "Program Files") silently split into multiple arguments and
-  # broke the copy.
   message("Copying SignalP from Windows (", wsl_windows_path, ") to WSL (", install_path, ")...")
   mkdir_status <- .wsl_exec_script(sprintf("sudo mkdir -p %s", shQuote(install_path, type = "sh")),
                                    wsl_distro = distro, use_wsl = TRUE)
@@ -625,18 +598,10 @@ install_signalp_from_windows <- function(windows_signalp_dir,
             ", ln=", ln_status, "). signalp may not be directly callable as `signalp`; check ", bin_path)
   }
 
-  # BUG FIX: the old code checked dir.exists(data_dir) on the *R host*
-  # filesystem, but data_dir ("/usr/local/signalp/data") is a WSL-internal
-  # path -- on a native Windows R session that check always returned FALSE,
-  # so SIGNALP_DIR was silently never recorded even after a successful copy.
-  # The existence check must run inside WSL instead.
   data_dir <- file.path(install_path, "data")
   data_dir_exists <- .wsl_exec_script(sprintf("[ -d %s ]", shQuote(data_dir, type = "sh")),
                                       wsl_distro = distro, use_wsl = TRUE)
   if (isTRUE(data_dir_exists == 0L)) {
-    # BUG FIX: persist via the shared env file (sourced by .wsl_exec_script
-    # on every run), not ~/.bashrc, which non-interactive script runs never
-    # source (see .ISOFORM_ENV_FILE note).
     .wsl_write_env_var("SIGNALP_DIR", data_dir, wsl_distro = distro, use_wsl = TRUE)
   } else {
     message("  ! No 'data' subdirectory found under ", install_path,
@@ -706,14 +671,6 @@ install_wsl_isoform_tools <- function(distro              = "Ubuntu",
       message("mamba already installed (", mamba_check[1], ").")
     }
 
-    # BUG FIX: resolve the *actual* conda.sh location once, instead of every
-    # subsequent step hardcoding $HOME/mambaforge/etc/profile.d/conda.sh. If
-    # mamba was already present (e.g. via a pre-existing miniconda/anaconda/
-    # miniforge install rather than one just bootstrapped above), that
-    # hardcoded path doesn't exist, "source ... 2>/dev/null" fails silently,
-    # and every later "conda activate isoform_tools" is a silent no-op --
-    # packages then install into the wrong (base, or no) environment with no
-    # error message, and predictors "mysteriously" can't find them later.
     conda_sh_path <- .find_conda_sh(wsl_distro = distro, use_wsl = TRUE)
     if (is.null(conda_sh_path)) {
       message("  ! Could not locate conda.sh after mamba install/detection -- falling back to ",
@@ -745,18 +702,6 @@ install_wsl_isoform_tools <- function(distro              = "Ubuntu",
       message("Environment 'isoform_tools' already exists.")
     }
 
-    # BUG FIX: SignalP cannot be installed via bioconda or apt under any
-    # circumstance -- its academic license explicitly prohibits
-    # redistribution through package managers (confirmed: there is no
-    # bioconda "signalp" recipe; conda-forge/bioconda maintainers have
-    # repeatedly noted SignalP/TMHMM are excluded from Bioconda for this
-    # reason). The previous code attempted
-    # `mamba install -y -c bioconda signalp` unconditionally when no
-    # windows_signalp_dir was given, which always failed and only surfaced a
-    # generic "install failed" warning -- exactly the kind of silent,
-    # unexplained SignalP failure this audit was asked to track down.
-    # SignalP must always come from install_signalp_from_windows() or a
-    # manual download under license.
     install_cmds <- c("mamba install -y -c bioconda cpat",
                       "mamba install -y -c bioconda hmmer")
 
@@ -791,15 +736,6 @@ install_wsl_isoform_tools <- function(distro              = "Ubuntu",
     }
     if (!apt_ok) message("  ! One or more base package installs failed -- CPAT/hmmscan may not work until resolved.")
 
-    # BUG FIX: the InterProScan URL below used to be
-    # `ftp://ftp.ebi.ac.uk/pub/software/unix/iprscan/5/` -- a *directory
-    # listing*, not a tarball. That "download" silently produced an HTML/FTP
-    # listing instead of a .tar.gz, which `tar -xzf` then failed to extract
-    # (also uncaught, since no exit-status check existed here at all), so
-    # the whole InterProScan install always failed with no visible cause.
-    # The version-specific tarball name changes with every release, so
-    # instead of hardcoding one, we resolve the current release dynamically
-    # from InterProScan's GitHub releases page.
     message("Resolving latest InterProScan release...")
     iprscan_url <- .run_intern(paste(
       "curl -fsSL https://api.github.com/repos/ebi-pf-team/interproscan/releases/latest",
@@ -843,9 +779,6 @@ install_wsl_isoform_tools <- function(distro              = "Ubuntu",
       }
     }
 
-    # BUG FIX: `sudo apt install -y signalp` can never succeed -- SignalP is
-    # not, and cannot legally be, an apt package (see note above). Removed;
-    # always point to install_signalp_from_windows() instead.
     if (!is.null(windows_signalp_dir)) {
       message("Installing SignalP from Windows directory...")
       install_signalp_from_windows(windows_signalp_dir, distro)
@@ -890,13 +823,7 @@ install_isoform_databases <- function(distro        = "Ubuntu",
                                        log_dir       = NULL) {
   via_wsl <- use_wsl && .Platform$OS.type == "windows"
 
-  # BUG FIX: hmmer (which provides hmmpress/hmmscan) is installed by
-  # install_wsl_isoform_tools() *inside* the isoform_tools conda environment,
-  # not on the bare distro PATH. Every check below must therefore go through
-  # .wsl_exec_script() with the conda environment activated -- a plain
-  # `system("wsl -d <distro> -- which hmmpress")` (the old approach) always
-  # reports "not found" and silently skips indexing, even on a fully correct
-  # install. This was the direct cause of hmmscan failing at prediction time.
+
   conda_sh <- .find_conda_sh(wsl_distro = distro, use_wsl = via_wsl)
   if (is.null(conda_sh))
     message("  (no conda.sh found -- checks below will use the bare PATH; ",
@@ -932,11 +859,6 @@ install_isoform_databases <- function(distro        = "Ubuntu",
   if (!isTRUE(mkdir_status == 0L))
     message("  ! Could not create ", cpat_data_dir, " (exit code ", mkdir_status, ") -- check permissions.")
 
-  # BUG FIX: the previous URLs pointed at raw.githubusercontent.com/maqinli/
-  # CPAT_data, a repository that does not exist (verified: returns HTTP 404
-  # for every file) -- every CPAT database download was silently failing.
-  # These are the real, official prebuilt hexamer tables / logit models,
-  # published by the CPAT authors themselves on SourceForge.
   cpat_urls <- c(
     "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_Hexamer.tsv/download",
     "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_Hexamer.tsv/download",

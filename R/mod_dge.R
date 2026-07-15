@@ -56,67 +56,6 @@
   invisible(params)
 }
 
-# ---- Helper: Fill missing Entrez IDs using bitr ----
-#' @keywords internal
-.fill_entrez_with_bitr <- function(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol") {
-  if (is.null(org_obj)) return(gene_map)
-  if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
-    message("  clusterProfiler not installed; skipping advanced Entrez mapping.")
-    return(gene_map)
-  }
-
-  # Identify rows with missing Entrez
-  idx_na <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
-  if (!any(idx_na)) return(gene_map)
-
-  message("  Attempting to fill missing Entrez IDs using clusterProfiler::bitr...")
-
-  # 1) Try mapping by Ensembl ID (if IDs look like Ensembl)
-  ens_ids <- gene_map[[id_col]][idx_na]
-  ens_like <- grepl("^ENS", ens_ids)
-  if (any(ens_like)) {
-    ens_to_map <- unique(ens_ids[ens_like])
-    map_df <- tryCatch({
-      clusterProfiler::bitr(ens_to_map, fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org_obj)
-    }, error = function(e) NULL)
-    if (!is.null(map_df) && nrow(map_df) > 0) {
-      # Map back to gene_map
-      for (i in which(idx_na)) {
-        if (gene_map[[id_col]][i] %in% map_df$ENSEMBL) {
-          gene_map$entrezid[i] <- map_df$ENTREZID[map_df$ENSEMBL == gene_map[[id_col]][i]][1]
-        }
-      }
-      message("    Mapped ", nrow(map_df), " Ensembl IDs to Entrez.")
-    }
-  }
-
-  # 2) For remaining NAs, try mapping by gene symbol (if symbol is available)
-  idx_na2 <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
-  if (any(idx_na2)) {
-    syms <- gene_map[[symbol_col]][idx_na2]
-    # Exclude symbols that are NA, empty, or identical to the ID (likely custom IDs)
-    syms <- syms[!is.na(syms) & syms != "" & syms != gene_map[[id_col]][idx_na2]]
-    syms <- unique(syms)
-    if (length(syms) > 0) {
-      map_df <- tryCatch({
-        clusterProfiler::bitr(syms, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org_obj)
-      }, error = function(e) NULL)
-      if (!is.null(map_df) && nrow(map_df) > 0) {
-        for (i in which(idx_na2)) {
-          sym_i <- gene_map[[symbol_col]][i]
-          if (sym_i %in% map_df$SYMBOL) {
-            gene_map$entrezid[i] <- map_df$ENTREZID[map_df$SYMBOL == sym_i][1]
-          }
-        }
-        message("    Mapped ", nrow(map_df), " symbols to Entrez.")
-      }
-    }
-  }
-
-  # Return updated gene_map
-  gene_map
-}
-
 #' Import RNA-seq Counts and Prepare Metadata
 #'
 #' @param data_dir Folder where the input data is stored.
@@ -172,13 +111,13 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
       stop("Custom tx2gene must contain columns 'tx_id' and 'gene_id'")
     }
     tx2gene <- tx2gene[, c("tx_id", "gene_id")]
-    tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
-    tx2gene$gene_id <- sub("\\..*$", "", tx2gene$gene_id)
+    tx2gene$tx_id <- strip_ensembl_version(tx2gene$tx_id)
+    tx2gene$gene_id <- strip_ensembl_version(tx2gene$gene_id)
   } else {
     tx2gene <- ensembldb::transcripts(edb, columns = c("tx_id", "gene_id"), return.type = "DataFrame")
     tx2gene <- as.data.frame(tx2gene)
-    tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
-    tx2gene$gene_id <- sub("\\..*$", "", tx2gene$gene_id)
+    tx2gene$tx_id <- strip_ensembl_version(tx2gene$tx_id)
+    tx2gene$gene_id <- strip_ensembl_version(tx2gene$gene_id)
   }
 
   # ---- Build gene_map (custom or from Ensembl) ----
@@ -197,7 +136,7 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
       stop("Custom gene map must contain columns 'gene_id' (or 'ensembl') and 'symbol'")
     }
     # Strip version and rename
-    gene_map$gene_id <- sub("\\..*$", "", gene_map$gene_id)
+    gene_map$gene_id <- strip_ensembl_version(gene_map$gene_id)
     colnames(gene_map)[colnames(gene_map) == "gene_id"] <- "ensembl"
     if (!"entrezid" %in% colnames(gene_map)) {
       gene_map$entrezid <- NA_character_
@@ -223,7 +162,7 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
     gene_map <- as.data.frame(gene_map)
     colnames(gene_map) <- c("ensembl", "symbol")
-    gene_map$ensembl <- sub("\\..*$", "", gene_map$ensembl)
+    gene_map$ensembl <- strip_ensembl_version(gene_map$ensembl)
     if (!is.null(org_obj)) {
       mapped_entrez <- suppressMessages(
         AnnotationDbi::mapIds(org_obj,
@@ -436,8 +375,9 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
 
   # --- MAIN RESULTS TABLE ---
   res_tbl <- as.data.frame(res_shrunken)
-  # Strip version suffixes from Ensembl IDs BEFORE merging
-  res_tbl$ensembl <- sub("\\..*$", "", rownames(res_tbl))
+  # Strip version suffixes from Ensembl IDs BEFORE merging (MSTRG/other custom
+  # IDs containing dots are left untouched, see strip_ensembl_version())
+  res_tbl$ensembl <- strip_ensembl_version(rownames(res_tbl))
   res_tbl <- merge(res_tbl, gene_map, by = "ensembl", all.x = TRUE)
   
   # --- RECOVER ENTREZ IDs FROM GENE MAP (fallback for any that were missed) ---
@@ -446,9 +386,11 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
     
     # Clean gene_map for matching
     gene_map_clean <- gene_map[!is.na(gene_map$entrezid) & gene_map$entrezid != "", ]
-    gene_map_clean$ensembl_clean <- sub("\\..*$", "", gene_map_clean$ensembl)
+    gene_map_clean$ensembl_clean <- strip_ensembl_version(gene_map_clean$ensembl)
     
-    # First pass: match by gene symbol
+    # First pass: match by gene symbol already resolved on res_tbl (i.e. the
+    # primary merge succeeded on "ensembl" but entrezid itself was blank in
+    # gene_map for that row)
     missing_idx <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
     if (any(missing_idx)) {
       for (i in which(missing_idx)) {
@@ -462,7 +404,8 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
       }
     }
     
-    # Second pass: match by Ensembl ID (version-stripped)
+    # Second pass: match by Ensembl ID (version-stripped). Mostly redundant
+    # with the primary merge, kept as a safety net.
     missing_idx <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
     if (any(missing_idx)) {
       for (i in which(missing_idx)) {
@@ -471,6 +414,31 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
           match_idx <- which(gene_map_clean$ensembl_clean == ens)
           if (length(match_idx) > 0) {
             res_tbl$entrezid[i] <- gene_map_clean$entrezid[match_idx[1]]
+          }
+        }
+      }
+    }
+
+    # Third pass (the one that was MISSING): res_tbl$ensembl may itself be a
+    # bare gene SYMBOL rather than a gene_id, because a custom_tx2gene file
+    # can use gene symbols as its aggregation key (e.g. tximport's tx2gene
+    # maps "ENST00000832824" -> "DDX11L16" directly, instead of an
+    # ENSG/MSTRG id). In that case the two passes above never fire because
+    # res_tbl$symbol is still NA (the primary "by = ensembl" merge found no
+    # match at all) and res_tbl$ensembl doesn't look like an Ensembl ID
+    # either. Try matching res_tbl$ensembl against gene_map's symbol column.
+    missing_idx <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
+    if (any(missing_idx)) {
+      gene_map_by_symbol <- gene_map_clean[!duplicated(gene_map_clean$symbol), ]
+      for (i in which(missing_idx)) {
+        ens <- res_tbl$ensembl[i]
+        if (!is.na(ens) && ens != "") {
+          match_idx <- which(gene_map_by_symbol$symbol == ens)
+          if (length(match_idx) > 0) {
+            res_tbl$entrezid[i] <- gene_map_by_symbol$entrezid[match_idx[1]]
+            if (is.na(res_tbl$symbol[i]) || res_tbl$symbol[i] == "") {
+              res_tbl$symbol[i] <- ens
+            }
           }
         }
       }
@@ -486,7 +454,7 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
 
   # --- NORMALIZED COUNTS ---
   counts_df <- as.data.frame(DESeq2::counts(dds, normalized = TRUE))
-  counts_df$ensembl <- sub("\\..*$", "", rownames(counts_df))
+  counts_df$ensembl <- strip_ensembl_version(rownames(counts_df))
   counts_df <- merge(counts_df, gene_map, by = "ensembl", all.x = TRUE)
   counts_df$gene <- ifelse(is.na(counts_df$symbol) | counts_df$symbol == "", counts_df$ensembl, counts_df$symbol)
   
@@ -498,7 +466,7 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
 
   # --- RAW COUNTS ---
   raw_counts <- as.data.frame(DESeq2::counts(dds, normalized = FALSE))
-  raw_counts$ensembl <- sub("\\..*$", "", rownames(raw_counts))
+  raw_counts$ensembl <- strip_ensembl_version(rownames(raw_counts))
   raw_counts <- merge(raw_counts, gene_map, by = "ensembl", all.x = TRUE)
   raw_counts$gene <- ifelse(is.na(raw_counts$symbol) | raw_counts$symbol == "", raw_counts$ensembl, raw_counts$symbol)
   

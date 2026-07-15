@@ -1,63 +1,9 @@
 # ==============================================================================
 # mod_isoform.R - DTE, DTU, and IsoformSwitchAnalyzeR integration
 # ==============================================================================
-
-# ---- Helper: Fill missing Entrez IDs using bitr (copied from mod_dge.R) ----
-#' @keywords internal
-.fill_entrez_with_bitr <- function(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol") {
-  if (is.null(org_obj)) return(gene_map)
-  if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
-    message("  clusterProfiler not installed; skipping advanced Entrez mapping.")
-    return(gene_map)
-  }
-
-  idx_na <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
-  if (!any(idx_na)) return(gene_map)
-
-  message("  Attempting to fill missing Entrez IDs using clusterProfiler::bitr...")
-
-  # 1) Try mapping by Ensembl ID
-  ens_ids <- gene_map[[id_col]][idx_na]
-  ens_like <- grepl("^ENS", ens_ids)
-  if (any(ens_like)) {
-    ens_to_map <- unique(ens_ids[ens_like])
-    map_df <- tryCatch({
-      clusterProfiler::bitr(ens_to_map, fromType = "ENSEMBL", toType = "ENTREZID", OrgDb = org_obj)
-    }, error = function(e) NULL)
-    if (!is.null(map_df) && nrow(map_df) > 0) {
-      for (i in which(idx_na)) {
-        if (gene_map[[id_col]][i] %in% map_df$ENSEMBL) {
-          gene_map$entrezid[i] <- map_df$ENTREZID[map_df$ENSEMBL == gene_map[[id_col]][i]][1]
-        }
-      }
-      message("    Mapped ", nrow(map_df), " Ensembl IDs to Entrez.")
-    }
-  }
-
-  # 2) For remaining NAs, try mapping by gene symbol
-  idx_na2 <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
-  if (any(idx_na2)) {
-    syms <- gene_map[[symbol_col]][idx_na2]
-    syms <- syms[!is.na(syms) & syms != "" & syms != gene_map[[id_col]][idx_na2]]
-    syms <- unique(syms)
-    if (length(syms) > 0) {
-      map_df <- tryCatch({
-        clusterProfiler::bitr(syms, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org_obj)
-      }, error = function(e) NULL)
-      if (!is.null(map_df) && nrow(map_df) > 0) {
-        for (i in which(idx_na2)) {
-          sym_i <- gene_map[[symbol_col]][i]
-          if (sym_i %in% map_df$SYMBOL) {
-            gene_map$entrezid[i] <- map_df$ENTREZID[map_df$SYMBOL == sym_i][1]
-          }
-        }
-        message("    Mapped ", nrow(map_df), " symbols to Entrez.")
-      }
-    }
-  }
-
-  return(gene_map)
-}
+# NOTE: .fill_entrez_with_bitr() previously had a duplicate, drifting copy
+# here (marked "copied from mod_dge.R"). It now lives solely in utils_core.R
+# and is used by both the DGE and isoform import paths.
 
 convert_pdf_to_png <- function(pdf_file, dpi = 200) {
 
@@ -129,13 +75,13 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
       stop("Custom tx2gene must contain columns 'tx_id' and 'gene_id'")
     }
     tx2gene <- tx2gene[, c("tx_id", "gene_id")]
-    tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
-    tx2gene$gene_id <- sub("\\..*$", "", tx2gene$gene_id)
+    tx2gene$tx_id <- strip_ensembl_version(tx2gene$tx_id)
+    tx2gene$gene_id <- strip_ensembl_version(tx2gene$gene_id)
   } else {
     tx2gene <- ensembldb::transcripts(edb, columns = c("tx_id", "gene_id"), return.type = "DataFrame")
     tx2gene <- as.data.frame(tx2gene)
-    tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
-    tx2gene$gene_id <- sub("\\..*$", "", tx2gene$gene_id)
+    tx2gene$tx_id <- strip_ensembl_version(tx2gene$tx_id)
+    tx2gene$gene_id <- strip_ensembl_version(tx2gene$gene_id)
   }
 
   # ---- Build gene_map (custom or from Ensembl) ----
@@ -152,7 +98,7 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
     if (!all(c("gene_id", "symbol") %in% colnames(gene_map))) {
       stop("Custom gene map must contain columns 'gene_id' (or 'ensembl') and 'symbol'")
     }
-    gene_map$gene_id <- sub("\\..*$", "", gene_map$gene_id)
+    gene_map$gene_id <- strip_ensembl_version(gene_map$gene_id)
     colnames(gene_map)[colnames(gene_map) == "gene_id"] <- "ensembl"
     if (!"entrezid" %in% colnames(gene_map)) {
       gene_map$entrezid <- NA_character_
@@ -174,7 +120,7 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
     gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
     gene_map <- as.data.frame(gene_map)
     colnames(gene_map) <- c("ensembl", "symbol")
-    gene_map$ensembl <- sub("\\..*$", "", gene_map$ensembl)
+    gene_map$ensembl <- strip_ensembl_version(gene_map$ensembl)
     if (!is.null(org_obj)) {
       mapped_entrez <- suppressMessages(
         AnnotationDbi::mapIds(org_obj,
@@ -207,7 +153,7 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
     names(file_list) <- sample_df[[sample_col]]
 
     txi <- tximport::tximport(file_list, type = count_type, txOut = TRUE, countsFromAbundance = "lengthScaledTPM")
-    rownames(txi$counts) <- sub("\\..*$", "", rownames(txi$counts))
+    rownames(txi$counts) <- strip_ensembl_version(rownames(txi$counts))
     meta <- sample_df[colnames(txi$counts), , drop = FALSE]
     return(list(txi = txi, meta = meta, tx2gene = tx2gene, gene_map = gene_map, type = "tximport"))
 
@@ -220,7 +166,7 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
     count_mat <- as.matrix(counts_df[, valid_samples, drop = FALSE])
     mode(count_mat) <- "numeric"
     count_mat[is.na(count_mat)] <- 0
-    rownames(count_mat) <- sub("\\..*$", "", rownames(count_mat))
+    rownames(count_mat) <- strip_ensembl_version(rownames(count_mat))
     meta <- sample_df[valid_samples, , drop = FALSE]
     return(list(counts = count_mat, meta = meta, tx2gene = tx2gene, gene_map = gene_map, type = "matrix"))
   }
@@ -335,8 +281,8 @@ run_dtu <- function(
   tx2gene <- isoform_obj$tx2gene
 
   # Clean transcript IDs: remove version suffixes (already done in import, but safe)
-  rownames(counts) <- sub("\\..*$", "", rownames(counts))
-  tx2gene$tx_id <- sub("\\..*$", "", tx2gene$tx_id)
+  rownames(counts) <- strip_ensembl_version(rownames(counts))
+  tx2gene$tx_id <- strip_ensembl_version(tx2gene$tx_id)
 
   gene_id_map <- tx2gene$gene_id[match(rownames(counts), tx2gene$tx_id)]
 
@@ -914,7 +860,6 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     switch_list <- .ckpt_load("step1_imported.rds")
 
   } else {
-    # ====================== FIXED BLOCK ====================================
     message("Building SwitchList from raw data...")
 
     if (isoform_obj$type == "tximport") {
@@ -953,7 +898,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     message("Pre-filtering transcripts to match FASTA file...")
     fasta_seqs    <- Biostrings::fasta.seqlengths(fasta_file)
     clean_id      <- function(x) {
-      x <- sub("\\..*$", "", x)
+      x <- strip_ensembl_version(x)
       x <- sub("\\|.*$", "", x)
       x <- sub(" .*$",   "", x)
       x
@@ -1043,7 +988,6 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     }
 
     # ---- isoformSwitchAnalysisCombined: ALL PARAMETERS UNCHANGED ----
-    # FIX: Ensure dplyr is attached so rename_with is available
     if (!requireNamespace("dplyr", quietly = TRUE)) {
       stop("dplyr is required but not installed.")
     }
@@ -1051,19 +995,6 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       attachNamespace("dplyr")
     }
 
-    # BUG FIX (pipeline crash): isoformSwitchAnalysisCombined() -> ... ->
-    # extractSwitchPairs() throws a hard `stop()` ("No genes were considered
-    # switching with the used cutoff values") whenever zero genes pass the
-    # switching cutoffs (alpha / dIFcutoff) -- e.g. small pilot datasets, weak
-    # effects, or an overly strict dIFcutoff for the expression range in this
-    # data. That error previously propagated all the way up through
-    # expressom() and killed the whole run, even though dte_res/dtu_res were
-    # already computed and checkpointed and had nothing to do with the
-    # failure. Catch it here: report clearly what happened, and return NULL
-    # instead of a switch_list. generate_dte_dtu_report() (called from
-    # main.R/expressom() after this function returns) already handles a NULL
-    # switch_list gracefully -- it just skips the switch-dependent sections
-    # of the report and still writes out the DTE/DTU results.
     switch_list <- tryCatch({
       sl <- IsoformSwitchAnalyzeR::isoformSwitchAnalysisCombined(
         switchAnalyzeRlist = switch_list,
@@ -2084,6 +2015,15 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
   gene_map <- isoform_obj$gene_map[, c("ensembl", "symbol")]
   colnames(gene_map) <- c("gene_id", "gene_symbol")
   dtu <- merge(dtu, gene_map, by = "gene_id", all.x = TRUE)
+  # Fallback: a custom tx2gene can use gene symbols directly as its gene_id
+  # (see strip_ensembl_version()/entrezid fix in mod_dge.R for the full
+  # explanation). When that happens the merge above finds no match, so try
+  # matching dtu$gene_id against gene_map's symbol column instead.
+  missing_sym <- is.na(dtu$gene_symbol) | dtu$gene_symbol == ""
+  if (any(missing_sym)) {
+    already_a_symbol <- dtu$gene_id[missing_sym] %in% gene_map$gene_symbol
+    dtu$gene_symbol[missing_sym][already_a_symbol] <- dtu$gene_id[missing_sym][already_a_symbol]
+  }
   dtu$gene_label <- paste0(dtu$gene_symbol, " (", dtu$gene_id, ")")
   
   # Save annotated tables as CSV
@@ -2126,7 +2066,7 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
     ggplot2::theme(legend.title = ggplot2::element_blank())
   ggplot2::ggsave(file.path(plot_dir, "DTE_MA.pdf"), p_ma, width = 8, height = 6)
   
-  # 3c. Top significant transcripts barplot (absolute log2FC) - FIXED: removed pipe
+  # 3c. Top significant transcripts barplot (absolute log2FC)
   dte_filtered <- dte[dte$signif, ]
   if (nrow(dte_filtered) > 0) {
     dte_ordered <- dte_filtered[order(dte_filtered$padj), ]

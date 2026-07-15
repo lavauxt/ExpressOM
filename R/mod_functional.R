@@ -389,17 +389,20 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   }
   ego_list <- purrr::compact(ego_list)
 
-  if (!"entrezid" %in% colnames(res_tbl) || all(is.na(res_tbl$entrezid)) || all(res_tbl$entrezid == "")) {
-    message("   -> entrezid column empty — mapping gene symbols via AnnotationDbi...")
+  if (!"entrezid" %in% colnames(res_tbl)) res_tbl$entrezid <- NA_character_
+  missing_entrez <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
+  if (any(missing_entrez)) {
+    message("   -> ", sum(missing_entrez), "/", nrow(res_tbl),
+            " genes missing Entrez IDs — mapping gene symbols via AnnotationDbi...")
     if (!is.null(org_obj)) {
       mapped <- suppressMessages(
         AnnotationDbi::mapIds(org_obj,
-                              keys       = as.character(res_tbl$gene),
+                              keys       = as.character(res_tbl$gene[missing_entrez]),
                               column     = "ENTREZID",
                               keytype    = "SYMBOL",
                               multiVals  = "first")
       )
-      res_tbl$entrezid <- mapped[as.character(res_tbl$gene)]
+      res_tbl$entrezid[missing_entrez] <- mapped[as.character(res_tbl$gene[missing_entrez])]
     } else {
       message("   -> WARNING: Could not load org_db object for on-the-fly mapping.")
     }

@@ -313,8 +313,6 @@ plot_top_genes_heatmap <- function(dds, results_data, condition_col, level, base
 
   norm_counts <- DESeq2::counts(dds, normalized = TRUE)
 
-  # BUG FIX: dds rownames are Ensembl IDs; res_tbl$gene is symbols.
-  # Match via the 'ensembl' column, then label rows with symbols.
   if ("ensembl" %in% colnames(top_sig) && any(!is.na(top_sig$ensembl))) {
     candidate_ids <- top_sig$ensembl[!is.na(top_sig$ensembl)]
     present_ids   <- intersect(candidate_ids, rownames(norm_counts))

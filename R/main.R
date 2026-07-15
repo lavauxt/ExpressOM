@@ -267,7 +267,7 @@ expressom <- function(count_type        = "salmon",
       dds_rep   <- res_list$dds
       res_rep   <- res_list$res_shrunken
 
-      clean_ens <- gsub("\\..*$", "", rownames(dds_rep))
+      clean_ens <- strip_ensembl_version(rownames(dds_rep))
       sym_map   <- tx_data$gene_map$symbol[match(clean_ens, tx_data$gene_map$ensembl)]
       sym_map[is.na(sym_map) | sym_map == ""] <- clean_ens[is.na(sym_map) | sym_map == ""]
       sym_map   <- make.unique(sym_map)
