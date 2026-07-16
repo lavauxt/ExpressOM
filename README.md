@@ -51,6 +51,9 @@ The pipeline fully automates annotation package installation. If the package ass
 3. Bundles and local-installs the structured R package wrapper securely on the fly.
 
 > 💡 **Tip:** Use https://www.gencodegenes.org/ to check for proper version of Ensembl fur Human and Mouse
+
+Every run starts with a pre-flight dependency check (`validate_environment()`): missing core packages (`DESeq2`, `tximport`, `dplyr`, `ggplot2`, `pheatmap`) stop the run immediately with a clear install message, while missing functional-analysis or isoform-analysis packages (only relevant if `run_dge`/`run_isoform` are enabled) produce an early warning instead of failing hours into a run.
+
 ---
 
 ## Data Preparation
@@ -149,7 +152,7 @@ The `run_bulk_pipeline` function generates a heavily organized output structure 
 * **`ORA/` & `GSEA/`**: Extensive targets and plots for GO mapping, Reactome, Disease Ontology, and KEGG generic pathways (Dotplots, Ridgeplots, Pathway Graphs).
 * **`SPIA/`**: Signaling Pathway Impact Analysis graphs and Evidence CSVs.
 * **`Transcription_Factors/`**: Output mapping active transcription factor perturbations based on dynamically mapped Enrichr libraries.
-* **`RegionReport/`**: Auto-generated interactive `RegionReport` HTML documents.
+* **`RegionReport/`**: Auto-generated interactive `RegionReport` HTML documents. Figures embedded in this report (and in the isoform `DTU_DTE_report/report.html`) are automatically converted from PDF to PNG for display, since browsers can't render a PDF through an `<img>` tag; install the `pdftools` package if you want these figures to appear inline (otherwise the underlying `.pdf` plot files are still written to `Plots/`, just not embedded in the HTML report).
 * **`Save_rdata/`**: The complete populated R environment serialized as an `.RData` file.
 * **`Log/`**: A single, unified log tree for the whole run — always check here first if something looks like it didn't run:
   * `Log/SessionInfo.txt`, `Log/Warnings.txt` — captured at the very end of the run, regardless of what was enabled.
@@ -313,6 +316,17 @@ switch_list <- run_isoform_switch(
 
 See `vignette("isoform-predictors", package = "ExpressOM")` for a full
 walkthrough, including troubleshooting and performance notes.
+
+> 💡 **Custom `fasta_file`/`gff_file` compatibility:** `run_isoform_switch()`
+> normalizes transcript IDs (stripping Ensembl-style version suffixes,
+> GENCODE-style `|`-delimited header fields, and space-separated
+> descriptions) consistently across the count matrix, the FASTA, and the
+> annotation before they're compared, and asks `importRdata()` for the same
+> tolerance (`ignoreAfterBar`/`ignoreAfterSpace`/`ignoreAfterPeriod`). If you
+> still see a "no transcripts match" / near-zero-overlap error with a custom
+> reference, it usually means the FASTA/GTF and the quantification were
+> genuinely built from different transcriptome versions rather than just a
+> naming-convention mismatch.
 
 Independently of `run_predictors`, `run_isoform_switch()` also runs
 `IsoformSwitchAnalyzeR::analyzeAlternativeSplicing()` on every call (exon

@@ -134,6 +134,18 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
   org_info <- get_organism_info(edb)
   org_obj <- .load_org_db(org_info$org_db)
+
+  # Sample correlation heatmap for this specific comparison. The RegionReport
+  # Rmd built in main.R looks for "SampleCorrelation_<level>_vs_<base>.pdf"
+  # (run_eda()'s own heatmap is a differently-named, EDA-wide file and isn't
+  # a substitute), so this needs to actually run for that report section to
+  # render instead of silently staying blank.
+  if (!is.null(main_condition) && main_condition %in% colnames(SummarizedExperiment::colData(dds))) {
+    vsd <- tryCatch(DESeq2::vst(dds, blind = TRUE),
+                    error = function(e) DESeq2::varianceStabilizingTransformation(dds, blind = TRUE))
+    plot_sample_correlation(vsd, main_condition, plot_dir, paste0(level, "_vs_", base))
+  }
+
   safe_pdf(file.path(plot_dir, paste0("MAplot_unshrunken_", level, "_vs_", base, ".pdf")), expr = {
     DESeq2::plotMA(res_unshrunken, ylim = c(-2, 2))
     graphics::abline(h = c(-1, 1), col = "dodgerblue", lwd = 2)
@@ -169,18 +181,10 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
     print(p_top)
   })
   safe_pdf(file.path(plot_dir, paste0("DE_Volcanoplot_", level, "_vs_", base, ".pdf")), expr = {
-    suppressWarnings({
-      vp <- EnhancedVolcano::EnhancedVolcano(
-        results_data$res_tbl, lab = results_data$res_tbl$gene,
-        selectLab = highlight_genes,
-        drawConnectors = !is.null(highlight_genes),
-        x = 'log2FoldChange', y = 'padj',
-        title = paste(level, "vs", base),
-        pCutoff = padj_cutoff, FCcutoff = 1.0, pointSize = 2.0, labSize = 4.0,
-        col = c('grey', 'grey', 'grey', 'red2')
-      )
-      print(vp)
-    })
+    suppressWarnings(
+      print(plot_volcano(results_data$res_tbl, padj_cutoff, highlight_genes,
+                         title = paste(level, "vs", base)))
+    )
   })
 }
 
@@ -268,14 +272,14 @@ plot_sample_correlation <- function(vsd, condition_col, plot_dir, comp_name) {
   rownames(annotation) <- colnames(cor_mat)
   colnames(annotation) <- condition_col
 
-  pdf(file.path(plot_dir, paste0("SampleCorrelation_", comp_name, ".pdf")), width = 8, height = 7)
-  pheatmap::pheatmap(cor_mat,
-                     annotation_col  = annotation,
-                     main            = paste0("Sample Correlation Matrix - ", comp_name),
-                     color           = colorRampPalette(c("navy", "white", "firebrick3"))(50),
-                     cluster_rows    = TRUE, cluster_cols = TRUE,
-                     display_numbers = FALSE, fontsize_row = 8)
-  dev.off()
+  safe_pdf(file.path(plot_dir, paste0("SampleCorrelation_", comp_name, ".pdf")), width = 8, height = 7, expr = {
+    pheatmap::pheatmap(cor_mat,
+                       annotation_col  = annotation,
+                       main            = paste0("Sample Correlation Matrix - ", comp_name),
+                       color           = colorRampPalette(c("navy", "white", "firebrick3"))(50),
+                       cluster_rows    = TRUE, cluster_cols = TRUE,
+                       display_numbers = FALSE, fontsize_row = 8)
+  })
   message("   -> Sample correlation heatmap saved to: ", plot_dir)
 }
 
@@ -383,8 +387,6 @@ plot_top_genes_heatmap <- function(dds, results_data, condition_col, level, base
   dev.off()
   message("   -> Top genes heatmap saved to: ", plot_dir)
 }
-
-# ---------------------- Unchanged functions below ----------------------
 
 #' Plot Volcano
 #' @keywords internal

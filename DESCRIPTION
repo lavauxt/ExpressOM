@@ -61,6 +61,7 @@ Imports:
     tximport,
     withr
 Suggests:
+    Biostrings,
     DRIMSeq,
     DT,
     DEXSeq,
@@ -72,6 +73,7 @@ Suggests:
     org.Hs.eg.db,
     org.Mm.eg.db,
     pcaExplorer,
+    pdftools,
     regionReport,
     rmarkdown,
     testthat (>= 3.0.0),

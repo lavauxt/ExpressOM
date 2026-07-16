@@ -117,6 +117,11 @@ expressom <- function(count_type        = "salmon",
 
   execution_order <- match.arg(execution_order)
 
+  # Pre-flight dependency check: fail fast on missing core packages, and warn
+  # early about missing functional/isoform packages, rather than discovering
+  # a missing dependency after DGE/isoform steps have already been running.
+  validate_environment(run_isoform = run_isoform, run_functional = run_dge)
+
   # Guard: warn if external predictors requested without WSL on native Windows
   if (isTRUE(run_predictors) && .Platform$OS.type == "windows" && !use_wsl) {
     warning(
@@ -296,11 +301,25 @@ expressom <- function(count_type        = "salmon",
       if (!dir.exists(report_dir)) dir.create(report_dir, recursive = TRUE)
 
       plot_dir_rel  <- "../Plots"
+      plot_dir_abs  <- file.path(out_dir, "Plots")
       pca_file      <- file.path(plot_dir_rel, paste0("PCA_",              level, "_vs_", base, ".pdf"))
       pca_corr_file <- file.path(plot_dir_rel, paste0("PCA_BatchCorrected_", level, "_vs_", base, ".pdf"))
       heatmap_file  <- file.path(plot_dir_rel, paste0("SampleCorrelation_", level, "_vs_", base, ".pdf"))
       volcano_file  <- file.path(plot_dir_rel, paste0("DE_Volcanoplot_",   level, "_vs_", base, ".pdf"))
       ma_file       <- file.path(plot_dir_rel, paste0("MAplot_shrunken_",  level, "_vs_", base, ".pdf"))
+
+      # knitr::include_graphics() on a .pdf path produces an <img src="...pdf">
+      # tag, which browsers cannot render -- and DESeq2Report() always
+      # produces an HTML report. Convert each figure to a PNG (if pdftools is
+      # available) and repoint the *_file variables at it so the custom code
+      # chunks below actually display instead of showing broken images.
+      for (v in c("pca_file", "pca_corr_file", "heatmap_file", "volcano_file", "ma_file")) {
+        rel_pdf <- get(v)
+        abs_pdf <- file.path(plot_dir_abs, basename(rel_pdf))
+        if (file.exists(abs_pdf) && !is.null(convert_pdf_to_png(abs_pdf))) {
+          assign(v, sub("\\.pdf$", ".png", rel_pdf))
+        }
+      }
 
       custom_script <- tempfile(fileext = ".Rmd")
       writeLines(c(

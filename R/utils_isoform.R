@@ -195,6 +195,20 @@
   out             <- character(0)
   missing_exe_msg <- NULL
 
+  # Always capture stdout+stderr from the child process, regardless of
+  # `intern`. Only the *return value* differs by `intern` (character vector
+  # of output vs. a bare exit-status integer) -- the captured text itself is
+  # needed either way so .log_wsl_command() can persist what actually
+  # happened. When `ignore_stderr = FALSE` the caller additionally wants to
+  # see it live, so it's echoed to the console after the call completes.
+  run_capture <- function(cmd, args) {
+    tryCatch({
+      o <- suppressWarnings(system2(cmd, args, stdout = TRUE, stderr = TRUE))
+      list(out = o, status = attr(o, "status") %||% 0L)
+    }, error = function(e) list(out = character(0), status = 127L,
+                                 error = conditionMessage(e)))
+  }
+
   if (via_wsl) {
     if (!nzchar(Sys.which("wsl"))) {
       missing_exe_msg <- paste0(
@@ -204,22 +218,10 @@
     } else {
       wsl_sh <- .to_wsl_path(tmp, wsl_distro)
       args   <- c("-d", wsl_distro, "bash", wsl_sh)
-      res <- tryCatch({
-        if (intern) {
-          o <- suppressWarnings(system2("wsl", args,
-                                        stdout = TRUE,
-                                        stderr = if (ignore_stderr) FALSE else TRUE))
-          list(out = o, status = attr(o, "status") %||% 0L)
-        } else {
-          s <- system2("wsl", args,
-                      stdout = if (ignore_stderr) FALSE else "",
-                      stderr = if (ignore_stderr) FALSE else "")
-          list(out = character(0), status = s)
-        }
-      }, error = function(e) list(out = character(0), status = 127L,
-                                   error = conditionMessage(e)))
+      res <- run_capture("wsl", args)
       out <- res$out; run_status <- res$status
       if (!is.null(res$error)) missing_exe_msg <- res$error
+      if (!ignore_stderr && length(out) > 0) message(paste(out, collapse = "\n"))
     }
   } else {
     bash_bin <- Sys.which("bash")
@@ -230,22 +232,10 @@
         "without WSL/Git-Bash these steps will be skipped."
       )
     } else {
-      res <- tryCatch({
-        if (intern) {
-          o <- suppressWarnings(system2(bash_bin, tmp,
-                                        stdout = TRUE,
-                                        stderr = if (ignore_stderr) FALSE else TRUE))
-          list(out = o, status = attr(o, "status") %||% 0L)
-        } else {
-          s <- system2(bash_bin, tmp,
-                      stdout = if (ignore_stderr) FALSE else "",
-                      stderr = if (ignore_stderr) FALSE else "")
-          list(out = character(0), status = s)
-        }
-      }, error = function(e) list(out = character(0), status = 127L,
-                                   error = conditionMessage(e)))
+      res <- run_capture(bash_bin, tmp)
       out <- res$out; run_status <- res$status
       if (!is.null(res$error)) missing_exe_msg <- res$error
+      if (!ignore_stderr && length(out) > 0) message(paste(out, collapse = "\n"))
     }
   }
 
@@ -261,7 +251,7 @@
   if (!is.null(log_dir)) {
     .log_wsl_command(paste(bash_body, collapse = "; "),
                      exit_code = run_status,
-                     stdout = if (intern) out else NULL,
+                     stdout = out,
                      stderr = missing_exe_msg,
                      log_dir = log_dir)
   }

@@ -5,20 +5,42 @@
 # here (marked "copied from mod_dge.R"). It now lives solely in utils_core.R
 # and is used by both the DGE and isoform import paths.
 
+#' Convert a PDF plot to a PNG alongside it
+#'
+#' Used by \code{generate_dte_dtu_report()} so plots can be embedded in the
+#' HTML report via \code{knitr::include_graphics()}: browsers cannot render a
+#' PDF through an \code{<img>} tag, so every figure needs a PNG rendition to
+#' actually display in \code{report.html} (PDFs remain the primary output
+#' format for the standalone plot files themselves).
+#'
+#' @param pdf_file Path to the source PDF.
+#' @param dpi Resolution for the rendered PNG.
+#' @return Path to the created PNG, or NULL if conversion wasn't possible.
+#' @keywords internal
 convert_pdf_to_png <- function(pdf_file, dpi = 200) {
 
   if (!file.exists(pdf_file)) {
     warning("PDF not found: ", pdf_file)
     return(NULL)
   }
+  if (!requireNamespace("pdftools", quietly = TRUE)) {
+    warning("Package 'pdftools' not installed; cannot convert ", pdf_file,
+            " to PNG for HTML embedding (it will fall back to the unrendered PDF path).")
+    return(NULL)
+  }
 
   png_file <- sub("\\.pdf$", ".png", pdf_file)
 
-  pdftools::pdf_convert(
-    pdf = pdf_file,
-    filenames = png_file,
-    dpi = dpi
-  )
+  tryCatch({
+    pdftools::pdf_convert(
+      pdf = pdf_file,
+      filenames = png_file,
+      dpi = dpi,
+      verbose = FALSE
+    )
+  }, error = function(e) {
+    warning("Failed to convert ", pdf_file, " to PNG: ", conditionMessage(e))
+  })
 
   if (file.exists(png_file)) {
     return(normalizePath(
@@ -907,11 +929,26 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     clean_rownames   <- clean_id(rownames(count_matrix))
     keep_in_fasta    <- clean_rownames %in% clean_fasta_ids
     count_matrix     <- count_matrix[keep_in_fasta, , drop = FALSE]
+    # Relabel to the cleaned IDs now, not just right before importRdata().
+    # Everything from here on (the tx2gene join below, and the object handed
+    # to importRdata()) must compare against the SAME normalized ID namespace
+    # used for clean_fasta_ids/tx2gene$tx_clean. Leaving the raw (uncleaned)
+    # rownames in place until the very end previously caused the next filter
+    # to compare un-cleaned quantification IDs against cleaned annotation
+    # IDs -- harmless for the auto-downloaded Ensembl reference (whose IDs
+    # strip_ensembl_version() already normalizes at import time), but for a
+    # custom FASTA/GTF/quantification combination (e.g. a Salmon index built
+    # from a raw GENCODE FASTA, where quant.sf "Name" retains the full
+    # pipe-delimited header) it silently dropped every transcript at the next
+    # step, surfacing as an apparent "FASTA/GTF/count matrix are
+    # incompatible" failure.
+    rownames(count_matrix) <- clean_rownames[keep_in_fasta]
     message("  Kept ", nrow(count_matrix), " / ", length(clean_rownames),
             " transcripts matching the FASTA file.")
     if (nrow(count_matrix) == 0) {
       stop("No transcript IDs match between count matrix and FASTA file. ",
-           "Check ID formats or set ignoreAfterPeriod = TRUE in importRdata().")
+           "Check ID formats (pipe-delimited GENCODE headers, version suffixes, ",
+           "or a genuinely different annotation/quantification source).")
     }
 
     # Remove genes with only one transcript (DRIMSeq requirement)
@@ -928,8 +965,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     message("  Kept ", nrow(count_matrix), " transcripts from ",
             length(unique(tx2gene$gene_id)), " genes after removing single-transcript genes.")
 
-    rownames(count_matrix)  <- clean_id(rownames(count_matrix))
-    isoform_count_matrix    <- round(count_matrix)
+    isoform_count_matrix <- round(count_matrix)
 
     # Build design matrix from filtered metadata
     design_matrix <- data.frame(
@@ -948,6 +984,14 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       designMatrix         = design_matrix,
       isoformExonAnnoation = gff_file,
       isoformNtFasta       = fasta_file,
+      # Match the same ID-normalization our own clean_id() applies above, so
+      # importRdata()'s independent re-parsing of gff_file/fasta_file doesn't
+      # reintroduce a mismatch against isoform_count_matrix: ignoreAfterBar
+      # handles GENCODE-style "ENST...|ENSG...|..." headers, ignoreAfterSpace
+      # handles Ensembl-style "ENST... cdna chromosome:..." headers, and
+      # ignoreAfterPeriod handles version-suffix differences.
+      ignoreAfterBar       = TRUE,
+      ignoreAfterSpace     = TRUE,
       ignoreAfterPeriod    = TRUE,
       showProgress         = TRUE
     )
@@ -2488,6 +2532,23 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
     rmd_lines <- c(rmd_lines, "\nNo custom genes requested.")
   }
   
+  # Convert every plot PDF to a PNG and repoint the Rmd at the PNGs.
+  # knitr::include_graphics() on a .pdf path produces an <img src="...pdf">
+  # tag in html_document output, which browsers cannot render -- every figure
+  # referenced above would otherwise silently fail to display in report.html.
+  plot_pdfs <- list.files(plot_dir, pattern = "\\.pdf$", recursive = TRUE, full.names = TRUE)
+  converted_any <- FALSE
+  for (pdf_path in plot_pdfs) {
+    if (!is.null(convert_pdf_to_png(pdf_path))) converted_any <- TRUE
+  }
+  if (converted_any) {
+    rmd_lines <- gsub("\\.pdf'", ".png'", rmd_lines)
+  } else if (length(plot_pdfs) > 0) {
+    warning("Could not convert any report plots to PNG (see preceding warnings); ",
+            "figures in report.html may not render since browsers cannot display ",
+            "PDF files through an <img> tag. Install 'pdftools' to fix this.")
+  }
+
   # Write to temporary Rmd file
   writeLines(rmd_lines, rmd_file)
   

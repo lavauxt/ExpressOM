@@ -11,9 +11,7 @@
 
 #' @keywords internal
 .run_go_ontology <- function(ont, sigOE_genes, allOE_genes, org_db,
-                             go_pvalue_cutoff, go_qvalue_cutoff,
-                             OE_foldchanges, top_genes,
-                             dir_go, comp_name) {
+                             go_pvalue_cutoff, go_qvalue_cutoff) {
   message("   -> Running GO ", ont, "...")
   ego <- safe_run(
     suppressMessages(clusterProfiler::enrichGO(
@@ -29,27 +27,31 @@
     )),
     label = paste("GO", ont)
   )
-  
+
   if (is.null(ego) || nrow(as.data.frame(ego)) == 0) {
     message("      No significant results for GO ", ont)
     return(NULL)
   }
+  ego
+}
 
+#' Write CSV/plot outputs for a completed GO ORA result
+#' @keywords internal
+.write_go_ontology_outputs <- function(ego, ont, OE_foldchanges, top_genes, dir_go, comp_name) {
   .write_enrich_csv(ego, file.path(dir_go, paste0("GO_", ont, "_", comp_name, ".csv")))
-  
+
   ego_wrapped <- ego
-  
   if (nrow(ego@result) > 5) {
     ego_wrapped@result$Description <- stringr::str_wrap(ego_wrapped@result$Description, width = 50)
     safe_pdf(file.path(dir_go, paste0("GO_", ont, "_Dotplot_", comp_name, ".pdf")),
              width = 14, height = 14,
              expr  = print(enrichplot::dotplot(ego_wrapped, showCategory = top_genes, label_format = 50)))
-             
+
     safe_pdf(file.path(dir_go, paste0("GO_", ont, "_Cnetplot_", comp_name, ".pdf")),
              width = 14, height = 14,
              expr  = print(enrichplot::cnetplot(ego_wrapped, showCategory = top_genes, foldChange = OE_foldchanges)))
   }
-  return(ego_wrapped)
+  ego_wrapped
 }
 
 #' @keywords internal
@@ -107,8 +109,7 @@
 }
 
 #' @keywords internal
-.run_disease_ontology <- function(sig_entrez_ids, universe_entrez, go_pvalue_cutoff, go_qvalue_cutoff, top_genes,
-                                  dir_ora, comp_name) {
+.run_disease_ontology <- function(sig_entrez_ids, universe_entrez, go_pvalue_cutoff, go_qvalue_cutoff) {
   hdo <- .ensure_hdo_sqlite()
   if (is.null(hdo)) { message("Skipping Disease Ontology (no HDO.sqlite)."); return(invisible(NULL)) }
 
@@ -118,7 +119,12 @@
                                     qvalueCutoff = go_qvalue_cutoff),
                      label = "DOSE enrichDO")
   if (is.null(do_res) || nrow(as.data.frame(do_res)) == 0) return(invisible(NULL))
+  do_res
+}
 
+#' Write CSV/plot outputs for a completed Disease Ontology result
+#' @keywords internal
+.write_disease_ontology_outputs <- function(do_res, top_genes, dir_ora, comp_name) {
   dir_dose <- safe_dir(file.path(dir_ora, "DOSE"))
   .write_enrich_csv(do_res, file.path(dir_dose, paste0("DOSE_Enrichment_", comp_name, ".csv")))
   if (nrow(do_res@result) > 5) {
@@ -126,6 +132,7 @@
              width = 14, height = 14,
              expr  = print(enrichplot::dotplot(do_res, showCategory = top_genes, label_format = 50)))
   }
+  invisible(do_res)
 }
 
 #' Run KEGG Pathview for GSEA results
@@ -386,26 +393,12 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   has_go_results <- FALSE
   for (ont in c("BP", "MF", "CC")) {
     ego <- .run_go_ontology(ont, sigOE_genes, allOE_genes, org_db,
-                             go_pvalue_cutoff, go_qvalue_cutoff,
-                             OE_foldchanges, top_genes,
-                             dir_go = NULL, comp_name)  # pass NULL for dir_go; we'll create inside if needed
+                             go_pvalue_cutoff, go_qvalue_cutoff)
     if (!is.null(ego)) {
-      # Now create the ORA and GO directories
+      # Only create the ORA/GO directories once we know there's something to write
       dir_ora <- safe_dir(dir_ora)
-      dir_go <- safe_dir(file.path(dir_ora, "GO"))
-      # The .run_go_ontology function already writes files, but it needs the directory path.
-      # We'll re-call it with the actual dir_go.
-      # Alternatively, we can modify .run_go_ontology to accept a directory and create it.
-      # For simplicity, we'll restructure: we'll handle writing inside the loop with explicit dir creation.
-      # Since .run_go_ontology currently writes directly using the passed dir, we need to pass the actual dir.
-      # We'll refactor: we'll call a version that accepts the path and creates it.
-      # Let's just recreate the logic inline here to avoid double-calling.
-      # Better: we'll define a local wrapper that creates dir and then calls the internal.
-      ego <- .run_go_ontology(ont, sigOE_genes, allOE_genes, org_db,
-                               go_pvalue_cutoff, go_qvalue_cutoff,
-                               OE_foldchanges, top_genes,
-                               dir_go, comp_name)
-      ego_list[[ont]] <- ego
+      dir_go  <- safe_dir(file.path(dir_ora, "GO"))
+      ego_list[[ont]] <- .write_go_ontology_outputs(ego, ont, OE_foldchanges, top_genes, dir_go, comp_name)
       has_go_results <- TRUE
     }
   }
@@ -520,18 +513,12 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   # ---- 1E. ORA Disease Ontology (Human only)
   message("Running Disease Ontology ORA...")
   if (kegg_code == "hsa" && length(sig_entrez_ids) > 0) {
-    # Only create DOSE dir if we have results
-    do_res <- .run_disease_ontology(sig_entrez_ids, universe_entrez = as.character(res_entrez$entrezid), 
-                                     go_pvalue_cutoff, go_qvalue_cutoff, top_genes, 
-                                     dir_ora = NULL, comp_name) # we'll create inside
-    # Actually .run_disease_ontology writes directly; we need to pass a dir.
-    # We'll modify the call to create the dir if results exist.
-    # We'll handle inside .run_disease_ontology or we can check for return and then write.
-    # For simplicity, let's assume .run_disease_ontology will create the directories itself when it has results.
-    # We'll ensure that function uses safe_dir internally.
-    .run_disease_ontology(sig_entrez_ids, universe_entrez = as.character(res_entrez$entrezid),
-                          go_pvalue_cutoff, go_qvalue_cutoff, top_genes, 
-                          dir_ora = dir_ora, comp_name)
+    do_res <- .run_disease_ontology(sig_entrez_ids, universe_entrez = as.character(res_entrez$entrezid),
+                                     go_pvalue_cutoff, go_qvalue_cutoff)
+    if (!is.null(do_res)) {
+      dir_ora <- safe_dir(dir_ora)
+      .write_disease_ontology_outputs(do_res, top_genes, dir_ora, comp_name)
+    }
   } else {
     message("      Skipping Disease Ontology ORA (not human or no sig genes)")
   }
