@@ -53,6 +53,7 @@ Imports:
     rappdirs,
     remotes,
     rlang,
+    satuRn,
     scales,
     stringr,
     tibble,

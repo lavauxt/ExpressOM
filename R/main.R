@@ -69,6 +69,15 @@
 #' @param nBest Number of top genes to include in RegionReport
 #' @param eda_only Logical: if TRUE, run only import + EDA (PCA, heatmap) then stop (no DGE or isoform).
 #' @param group_col Optional column name in metadata for colouring PCA/heatmap when no model is given.
+#' @param custom_transcript_id_map Path to a TSV/CSV with columns `count_id` and `fasta_id`.
+#'   If provided, transcript IDs in the count matrix are renamed to match the FASTA file
+#'   before any filtering; this resolves ID mismatches between custom references.
+#' @param skip_fasta_filter Logical: if TRUE, skip the pre‑filtering that keeps only transcripts
+#'   present in the FASTA file; rely on `importRdata()`'s own ID tolerance (e.g. `ignoreAfter*`).
+#'   (Default: FALSE)
+#' @param isoform_test_engine Which DTU test engine to use in IsoformSwitchAnalyzeR:
+#'   `"DEXSeq"` (default, built‑in), `"DRIMSeq"` (uses pre‑computed results from `run_dtu()`),
+#'   or `"satuRn"` (state‑of‑the‑art method). See `IsoformSwitchAnalyzeR::isoformSwitchTestSatuRn`.
 #' @return NULL (invisibly)
 expressom <- function(count_type        = "salmon",
                       data_dir          = "./data",
@@ -113,9 +122,13 @@ expressom <- function(count_type        = "salmon",
                       run_dexseq        = FALSE,
                       isoform_plot_top_n = 10,
                       eda_only          = FALSE,
-                      group_col         = NULL) {
+                      group_col         = NULL,
+                      custom_transcript_id_map = NULL,
+                      skip_fasta_filter = FALSE,
+                      isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn")) {
 
   execution_order <- match.arg(execution_order)
+  isoform_test_engine <- match.arg(isoform_test_engine)
 
   # Pre-flight dependency check: fail fast on missing core packages, and warn
   # early about missing functional/isoform packages, rather than discovering
@@ -572,7 +585,10 @@ expressom <- function(count_type        = "salmon",
         save_dir       = iso_save_dir,
         resume_from    = resume_isoform_from,
         predictor_cpu  = predictor_cpu,
-        log_dir        = file.path(out_dir, "Log", "Isoform")
+        log_dir        = file.path(out_dir, "Log", "Isoform"),
+        custom_transcript_id_map = custom_transcript_id_map,
+        skip_fasta_filter        = skip_fasta_filter,
+        test_engine              = isoform_test_engine
       )
 
       # ---- DTE/DTU/DEXSeq/Switch report -------------------------------------

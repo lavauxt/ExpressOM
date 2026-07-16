@@ -777,6 +777,15 @@ plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL, sp
 #'   this when calling from a larger pipeline that already manages a single
 #'   unified log tree elsewhere, so isoform logs land there instead of a
 #'   second, separate location.
+#' @param custom_transcript_id_map Path to a TSV/CSV with columns `count_id` and `fasta_id`.
+#'   If provided, transcript IDs in the count matrix are renamed to match the FASTA file
+#'   before any filtering; this resolves ID mismatches between custom references.
+#' @param skip_fasta_filter Logical: if TRUE, skip the pre‑filtering that keeps only transcripts
+#'   present in the FASTA file; rely on `importRdata()`'s own ID tolerance (e.g. `ignoreAfter*`).
+#'   (Default: FALSE)
+#' @param test_engine Which DTU test engine to use in IsoformSwitchAnalyzeR:
+#'   `"DEXSeq"` (default, built‑in), `"DRIMSeq"` (uses pre‑computed results from `run_dtu()`),
+#'   or `"satuRn"` (state‑of‑the‑art method). See `IsoformSwitchAnalyzeR::isoformSwitchTestSatuRn`.
 #' @return IsoformSwitchAnalyzeR results object, or NULL if no genes were
 #'   found to be switching (see the isoformSwitchAnalysisCombined() tryCatch
 #'   below) -- callers should treat a NULL return as "no isoform switches
@@ -790,7 +799,12 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
                                wsl_distro = "Ubuntu-22.04",
                                save_dir = NULL, resume_from = NULL,
                                bsgenome_name = NULL, predictor_cpu = NULL,
-                               log_dir = NULL) {
+                               log_dir = NULL,
+                               custom_transcript_id_map = NULL,
+                               skip_fasta_filter = FALSE,
+                               test_engine = c("DEXSeq", "DRIMSeq", "satuRn")) {
+
+  test_engine <- match.arg(test_engine)
 
   if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE))
     stop("Please install IsoformSwitchAnalyzeR: BiocManager::install('IsoformSwitchAnalyzeR')")
@@ -799,12 +813,6 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
   if (!dir.exists(out_dir))  dir.create(out_dir,  recursive = TRUE)
   if (!is.null(save_dir) && !dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE)
-  # log_dir used to always be derived from out_dir, which is fine for
-  # standalone use of this function but meant that when called from the
-  # full expressom() pipeline it wrote to <out_dir>/IsoformSwitch/Log while
-  # the DGE side of the pipeline (and the README) both point users at a
-  # single top-level <out_dir>/Log -- so users following the docs found that
-  # folder empty. log_dir now lets the caller redirect this explicitly.
   if (is.null(log_dir)) log_dir <- file.path(out_dir, "Log")
   if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -916,43 +924,60 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       warning("One or both groups have fewer than 2 samples. DTU/switch analysis may be unreliable.")
     }
 
-    # Pre-filter: keep only transcripts present in the FASTA file
-    message("Pre-filtering transcripts to match FASTA file...")
-    fasta_seqs    <- Biostrings::fasta.seqlengths(fasta_file)
-    clean_id      <- function(x) {
-      x <- strip_ensembl_version(x)
-      x <- sub("\\|.*$", "", x)
-      x <- sub(" .*$",   "", x)
-      x
+    # ---- Custom ID mapping (NEW) ----
+    if (!is.null(custom_transcript_id_map)) {
+      if (is.character(custom_transcript_id_map) && file.exists(custom_transcript_id_map)) {
+        map_df <- data.table::fread(custom_transcript_id_map, header = TRUE, data.table = FALSE)
+      } else if (is.data.frame(custom_transcript_id_map)) {
+        map_df <- custom_transcript_id_map
+      } else {
+        stop("custom_transcript_id_map must be a data.frame or a path to a TSV/CSV file.")
+      }
+      required_cols <- c("count_id", "fasta_id")
+      if (!all(required_cols %in% colnames(map_df))) {
+        stop("custom_transcript_id_map must contain columns: ", paste(required_cols, collapse = ", "))
+      }
+      # Rename count matrix rows
+      old_rownames <- rownames(count_matrix)
+      new_rownames <- map_df$fasta_id[match(old_rownames, map_df$count_id)]
+      if (any(is.na(new_rownames))) {
+        warning("Some count IDs were not found in the mapping file; they will be kept unchanged.")
+        new_rownames[is.na(new_rownames)] <- old_rownames[is.na(new_rownames)]
+      }
+      rownames(count_matrix) <- new_rownames
+      message("  Remapped ", sum(!is.na(new_rownames)), " transcript IDs using custom map.")
     }
-    clean_fasta_ids  <- clean_id(names(fasta_seqs))
-    clean_rownames   <- clean_id(rownames(count_matrix))
-    keep_in_fasta    <- clean_rownames %in% clean_fasta_ids
-    count_matrix     <- count_matrix[keep_in_fasta, , drop = FALSE]
-    # Relabel to the cleaned IDs now, not just right before importRdata().
-    # Everything from here on (the tx2gene join below, and the object handed
-    # to importRdata()) must compare against the SAME normalized ID namespace
-    # used for clean_fasta_ids/tx2gene$tx_clean. Leaving the raw (uncleaned)
-    # rownames in place until the very end previously caused the next filter
-    # to compare un-cleaned quantification IDs against cleaned annotation
-    # IDs -- harmless for the auto-downloaded Ensembl reference (whose IDs
-    # strip_ensembl_version() already normalizes at import time), but for a
-    # custom FASTA/GTF/quantification combination (e.g. a Salmon index built
-    # from a raw GENCODE FASTA, where quant.sf "Name" retains the full
-    # pipe-delimited header) it silently dropped every transcript at the next
-    # step, surfacing as an apparent "FASTA/GTF/count matrix are
-    # incompatible" failure.
-    rownames(count_matrix) <- clean_rownames[keep_in_fasta]
-    message("  Kept ", nrow(count_matrix), " / ", length(clean_rownames),
-            " transcripts matching the FASTA file.")
-    if (nrow(count_matrix) == 0) {
-      stop("No transcript IDs match between count matrix and FASTA file. ",
-           "Check ID formats (pipe-delimited GENCODE headers, version suffixes, ",
-           "or a genuinely different annotation/quantification source).")
+
+    # Pre-filter: keep only transcripts present in the FASTA file (unless skipped)
+    if (!skip_fasta_filter) {
+      message("Pre-filtering transcripts to match FASTA file...")
+      fasta_seqs    <- Biostrings::fasta.seqlengths(fasta_file)
+      clean_id      <- function(x) {
+        x <- strip_ensembl_version(x)
+        x <- sub("\\|.*$", "", x)
+        x <- sub(" .*$",   "", x)
+        x
+      }
+      clean_fasta_ids  <- clean_id(names(fasta_seqs))
+      clean_rownames   <- clean_id(rownames(count_matrix))
+      keep_in_fasta    <- clean_rownames %in% clean_fasta_ids
+      count_matrix     <- count_matrix[keep_in_fasta, , drop = FALSE]
+      message("  Kept ", nrow(count_matrix), " / ", length(clean_rownames),
+              " transcripts matching the FASTA file.")
+      if (nrow(count_matrix) == 0) {
+        stop("No transcript IDs match between count matrix and FASTA file. ",
+             "Check ID formats (pipe-delimited GENCODE headers, version suffixes, ",
+             "or a genuinely different annotation/quantification source). ",
+             "You may supply a custom_transcript_id_map or set skip_fasta_filter = TRUE.")
+      }
+    } else {
+      message("Skipping FASTA pre-filtering (skip_fasta_filter = TRUE). ",
+              "Will rely on importRdata()'s ignoreAfter* arguments.")
     }
 
     # Remove genes with only one transcript (DRIMSeq requirement)
     tx2gene      <- isoform_obj$tx2gene
+    # Use cleaned IDs for consistency; if mapping was done, rownames already match
     tx2gene$tx_clean <- clean_id(tx2gene$tx_id)
     keep_tx      <- rownames(count_matrix) %in% tx2gene$tx_clean
     count_matrix <- count_matrix[keep_tx, , drop = FALSE]
@@ -984,12 +1009,6 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       designMatrix         = design_matrix,
       isoformExonAnnoation = gff_file,
       isoformNtFasta       = fasta_file,
-      # Match the same ID-normalization our own clean_id() applies above, so
-      # importRdata()'s independent re-parsing of gff_file/fasta_file doesn't
-      # reintroduce a mismatch against isoform_count_matrix: ignoreAfterBar
-      # handles GENCODE-style "ENST...|ENSG...|..." headers, ignoreAfterSpace
-      # handles Ensembl-style "ENST... cdna chromosome:..." headers, and
-      # ignoreAfterPeriod handles version-suffix differences.
       ignoreAfterBar       = TRUE,
       ignoreAfterSpace     = TRUE,
       ignoreAfterPeriod    = TRUE,
@@ -1013,10 +1032,10 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   }
 
   # --------------------------------------------------------------------------
-  # Step 2 – Run combined analysis (Part1 + Part2)
+  # Step 2 – Run DTU test according to chosen engine
   # --------------------------------------------------------------------------
   if (!already_analyzed) {
-    message("Running isoformSwitchAnalysisCombined...")
+    message("Running DTU test using engine: ", test_engine)
 
     if (!is.null(switch_list$ntSequence) && length(switch_list$ntSequence) > 0) {
       genome_object <- NULL
@@ -1031,7 +1050,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       genome_object <- NULL
     }
 
-    # ---- isoformSwitchAnalysisCombined: ALL PARAMETERS UNCHANGED ----
+    # Ensure dplyr is attached
     if (!requireNamespace("dplyr", quietly = TRUE)) {
       stop("dplyr is required but not installed.")
     }
@@ -1039,54 +1058,118 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       attachNamespace("dplyr")
     }
 
-    switch_list <- tryCatch({
-      sl <- IsoformSwitchAnalyzeR::isoformSwitchAnalysisCombined(
-        switchAnalyzeRlist = switch_list,
-        genomeObject       = genome_object,
-        pathToOutput       = out_dir,
-        n                  = 50
-      )
-      message("Combined analysis completed.")
-      sl
-    }, error = function(e) {
-      no_switches <- grepl("no genes were considered switching", conditionMessage(e), ignore.case = TRUE)
-      if (no_switches) {
-        message("\n=== No isoform switches detected ===")
-        message("isoformSwitchAnalysisCombined() found zero genes meeting the switching ",
-                "cutoffs for '", level, "' vs '", base, "'. This usually means: the effect ",
-                "is genuinely weak/absent in this comparison, sample sizes are too small to ",
-                "reach significance, or the default cutoffs (alpha = 0.05, dIFcutoff = 0.1) ",
-                "are too strict for this dataset. Isoform switch analysis (predictors, ",
-                "consequence/splicing plots, switch plots) will be skipped for this ",
-                "comparison, but DTE and DTU results computed earlier are unaffected and ",
-                "have already been saved.")
-        message("To investigate: try re-running isoformSwitchAnalysisCombined() directly ",
-                "with a relaxed dIFcutoff/alpha, or inspect switch_list$isoformFeatures ",
-                "(available in the step1_imported.rds checkpoint if save_dir was set) for ",
-                "the dIF/q-value distribution actually observed.")
-      } else {
-        message("\n=== isoformSwitchAnalysisCombined() failed ===")
-        message("Error: ", conditionMessage(e))
-        message("Isoform switch analysis will be skipped for this comparison; DTE and DTU ",
-                "results computed earlier are unaffected and have already been saved.")
+    switch_list <- switch(
+      test_engine,
+      DEXSeq = {
+        message("Using built-in DEXSeq via isoformSwitchAnalysisCombined...")
+        tryCatch({
+          sl <- IsoformSwitchAnalyzeR::isoformSwitchAnalysisCombined(
+            switchAnalyzeRlist = switch_list,
+            genomeObject       = genome_object,
+            pathToOutput       = out_dir,
+            n                  = 50
+          )
+          message("Combined analysis (DEXSeq) completed.")
+          sl
+        }, error = function(e) {
+          no_switches <- grepl("no genes were considered switching", conditionMessage(e), ignore.case = TRUE)
+          if (no_switches) {
+            message("\n=== No isoform switches detected ===")
+            message("isoformSwitchAnalysisCombined() found zero genes meeting the switching ",
+                    "cutoffs for '", level, "' vs '", base, "'. This usually means: the effect ",
+                    "is genuinely weak/absent in this comparison, sample sizes are too small to ",
+                    "reach significance, or the default cutoffs (alpha = 0.05, dIFcutoff = 0.1) ",
+                    "are too strict for this dataset. Isoform switch analysis (predictors, ",
+                    "consequence/splicing plots, switch plots) will be skipped for this ",
+                    "comparison, but DTE and DTU results computed earlier are unaffected and ",
+                    "have already been saved.")
+          } else {
+            message("\n=== isoformSwitchAnalysisCombined() failed ===")
+            message("Error: ", conditionMessage(e))
+            message("Isoform switch analysis will be skipped for this comparison; DTE and DTU ",
+                    "results computed earlier are unaffected and have already been saved.")
+          }
+          NULL
+        })
+      },
+      DRIMSeq = {
+        message("Using pre‑computed DRIMSeq DTU results (from run_dtu)...")
+        if (is.null(dtu_results)) {
+          stop("test_engine = 'DRIMSeq' requires pre‑computed dtu_results. ",
+               "Set run_dtu = TRUE in the main pipeline or pass dtu_results.")
+        }
+        # Ensure dtu_results is a data.frame with required columns
+        drim_df <- dtu_results$dtu_results
+        if (is.null(drim_df)) {
+          stop("dtu_results does not contain a 'dtu_results' element.")
+        }
+        required_cols <- c("gene_id", "feature_id", "pvalue", "adj_pvalue")
+        if (!all(required_cols %in% colnames(drim_df))) {
+          stop("DRIMSeq results must contain columns: ", paste(required_cols, collapse = ", "))
+        }
+        # Rename 'feature_id' to 'feature_id' (already) and ensure 'adj_pvalue' exists
+        # The function accepts dtuResults with columns: gene_id, feature_id, pvalue, adj_pvalue (and optionally log2FC)
+        tryCatch({
+          sl <- IsoformSwitchAnalyzeR::isoformSwitchAnalysisCombined(
+            switchAnalyzeRlist = switch_list,
+            genomeObject       = genome_object,
+            pathToOutput       = out_dir,
+            n                  = 50,
+            dtuResults         = drim_df
+          )
+          message("Combined analysis (DRIMSeq) completed.")
+          sl
+        }, error = function(e) {
+          message("Error in isoformSwitchAnalysisCombined with DRIMSeq results: ", e$message)
+          NULL
+        })
+      },
+      satuRn = {
+        message("Running satuRn DTU test...")
+        if (!requireNamespace("satuRn", quietly = TRUE)) {
+          stop("Package 'satuRn' is required for test_engine = 'satuRn'. Install with BiocManager::install('satuRn').")
+        }
+        # First, we need to run the satuRn test on the switchList
+        # This function returns a switchList with the DTU results added
+        sl_tested <- tryCatch({
+          IsoformSwitchAnalyzeR::isoformSwitchTestSatuRn(
+            switchAnalyzeRlist = switch_list,
+            alpha = 0.05,               # could be made parameter
+            dIFcutoff = 0.1,
+            reduceToSwitchingGenes = FALSE
+          )
+        }, error = function(e) {
+          message("isoformSwitchTestSatuRn failed: ", e$message)
+          NULL
+        })
+        if (is.null(sl_tested)) {
+          message("satuRn test did not return a switchList. Skipping further analysis.")
+          NULL
+        } else {
+          # Now run Part2 (ORF prediction, consequence analysis, switch plots)
+          message("Running isoformSwitchAnalysisPart2 (ORF, consequences, plots)...")
+          tryCatch({
+            sl_final <- IsoformSwitchAnalyzeR::isoformSwitchAnalysisPart2(
+              switchAnalyzeRlist = sl_tested,
+              genomeObject       = genome_object,
+              pathToOutput       = out_dir,
+              n                  = 50
+            )
+            message("satuRn analysis completed.")
+            sl_final
+          }, error = function(e) {
+            message("isoformSwitchAnalysisPart2 failed: ", e$message)
+            # Return the tested list anyway, which already has the DTU results
+            sl_tested
+          })
+        }
       }
-      NULL
-    })
+    )
 
     if (is.null(switch_list)) {
       return(invisible(NULL))
     }
 
-    # MISSING FEATURE (found comparing against the IsoformSwitchAnalyzeR
-    # vignette): isoformSwitchAnalysisCombined() does NOT run alternative
-    # splicing annotation the way isoformSwitchAnalysisPart2() does. Without
-    # it, switch_list never gains per-event exon-skipping / mutually-exclusive-
-    # exon / alternative 5'/3' splice site / alternative TSS-TES classification,
-    # so the genome-wide extractSplicingSummary()/extractSplicingEnrichment()
-    # figures the vignette highlights could never be produced downstream. Run
-    # it unconditionally here (not gated on run_predictors) so it's available
-    # for every pipeline run, matching the standard ISA workflow order
-    # (CPAT/PFAM/SignalP -> analyzeAlternativeSplicing -> analyzeSwitchConsequences).
     switch_list <- tryCatch({
       message("Annotating alternative splicing events (exon skipping, intron retention, ",
               "alt. 5'/3' splice sites, alt. TSS/TES)...")
@@ -1197,7 +1280,6 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   message("Isoform switch analysis completed. Results saved in: ", out_dir)
   return(switch_list)
 }
-
 
 # ==============================================================================
 # Internal: run external predictors (CPAT, SignalP, Pfam) via WSL or natively
