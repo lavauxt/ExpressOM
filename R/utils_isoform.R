@@ -50,15 +50,7 @@
 #' @return Invisibly, TRUE/FALSE indicating whether the write succeeded.
 #' @keywords internal
 .wsl_write_env_var <- function(var, value, wsl_distro = "Ubuntu", use_wsl = TRUE) {
-  # NOTE: .ISOFORM_ENV_FILE intentionally contains a literal "$HOME" that the
-  # *execution environment* (WSL/native shell) must expand at run time -- it
-  # must always appear double-quoted (or bare) in the generated script,
-  # never single-quoted, since single quotes would freeze it as the literal
-  # string "$HOME" and point at a nonexistent path.
-  # Use double quotes (not shQuote()'s single quotes) so that a literal
-  # "$HOME" embedded in `value` (e.g. the "$HOME/pfam_db" default) is
-  # expanded by the execution shell when the env file is sourced, per the
-  # note above.
+
   export_line <- sprintf("export %s=%s", var, .dq(value))
   body <- c(
     sprintf('touch "%s"', .ISOFORM_ENV_FILE),
@@ -184,10 +176,6 @@
                               ignore_stderr = TRUE,
                               log_dir       = NULL) {
 
-  # Source the shared persistent-env-var file first (see .ISOFORM_ENV_FILE
-  # above) so CPAT_DATA / SIGNALP_DIR etc. set by the install_*() helpers are
-  # visible here. Guarded with `|| true` so this is a silent no-op the first
-  # time a user runs predictors, before any install helper has created it.
   env_file_source <- sprintf('[ -f %s ] && . %s 2>/dev/null || true',
                              .ISOFORM_ENV_FILE, .ISOFORM_ENV_FILE)
 
@@ -200,28 +188,17 @@
   script <- c("#!/bin/bash", "set -e", activate, bash_body)
   tmp    <- tempfile(fileext = ".sh")
   on.exit(unlink(tmp), add = TRUE)
-  # Fixed way (forces Unix LF line endings even on Windows):
+
   con <- file(tmp, "wb")
   writeLines(script, con, sep = "\n")
   close(con)
-  
-  #writeLines(script, tmp, sep = "\n", useBytes = TRUE)
 
-  # Route through WSL only on Windows AND when explicitly requested. Every
-  # other case (native Linux, macOS, or R already running inside WSL itself)
-  # executes the script with the local `bash` -- no WSL concept applies there.
   via_wsl <- (.Platform$OS.type == "windows") && isTRUE(use_wsl)
 
   run_status      <- 127L
   out             <- character(0)
   missing_exe_msg <- NULL
 
-  # Always capture stdout+stderr from the child process, regardless of
-  # `intern`. Only the *return value* differs by `intern` (character vector
-  # of output vs. a bare exit-status integer) -- the captured text itself is
-  # needed either way so .log_wsl_command() can persist what actually
-  # happened. When `ignore_stderr = FALSE` the caller additionally wants to
-  # see it live, so it's echoed to the console after the call completes.
   run_capture <- function(cmd, args) {
     tryCatch({
       o <- suppressWarnings(system2(cmd, args, stdout = TRUE, stderr = TRUE))
@@ -261,9 +238,6 @@
   }
 
   if (!is.null(missing_exe_msg)) {
-    # message() prints immediately (unlike warning(), which the pipeline
-    # defers via options(nwarnings=...) until the run finishes) -- this is
-    # an environment-level failure the user needs to see right away.
     message("WSL/predictor environment error: ", missing_exe_msg)
     warning(missing_exe_msg, call. = FALSE)
     run_status <- 127L
@@ -305,12 +279,7 @@
                            conda_env  = "isoform_tools") {
   result <- .wsl_exec_script(
     bash_body = c(
-      # PFAM_DB may have been persisted by install_isoform_databases() to a
-      # custom location; the shared env file is sourced by .wsl_exec_script()
-      # before this body runs, so check it first.
       'if [ -n "$PFAM_DB" ] && [ -f "$PFAM_DB" ]; then echo "$PFAM_DB"; exit 0; fi',
-      # Keep the whole for-loop on a single line to avoid any ambiguity in
-      # how a for-in list is parsed when split across multiple lines.
       'for _p in "$HOME/pfam_db/Pfam-A.hmm" "$HOME/databases/Pfam-A.hmm" "$HOME/.local/share/pfam/Pfam-A.hmm" "/opt/databases/Pfam-A.hmm" "/usr/local/share/pfam/Pfam-A.hmm"; do [ -f "$_p" ] && echo "$_p" && break; done'
     ),
     wsl_distro = wsl_distro, use_wsl = use_wsl,
@@ -369,7 +338,6 @@
   if (length(result) > 0) result[1] else NULL
 }
 
-# ---- Public utilities --------------------------------------------------------
 
 #' Check if WSL is available and configured
 #' @param distro WSL distribution name
@@ -480,9 +448,6 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
     if (verbose) message("  \u2717 conda not found (tools may still be available directly on PATH)")
   }
 
-  # Best-effort conda.sh discovery, reused for tool checks below so tools
-  # that only exist inside the conda env (and not on the bare PATH) are
-  # still detected correctly.
   conda_sh_guess <- NULL
   if (results$conda_env_exists) {
     conda_sh_guess <- .find_conda_sh(wsl_distro = distro, use_wsl = via_wsl)
@@ -534,9 +499,6 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
   results$cpat_models_found <- !is.null(cpat_logit_human) && !is.null(cpat_logit_mouse)
   if (verbose) message("  ", if (results$cpat_models_found) "\u2713" else "\u2717", " CPAT logit models")
 
-  # 5. Write log file. log_dir (explicit override) wins over out_dir/Log so
-  # callers that manage a single unified log tree (e.g. the full pipeline)
-  # don't end up with debug info scattered in a second location.
   effective_log_dir <- if (!is.null(log_dir)) log_dir
                         else if (!is.null(out_dir)) file.path(out_dir, "Log")
                         else NULL
@@ -878,9 +840,6 @@ install_isoform_databases <- function(distro        = "Ubuntu",
   )
   cpat_ok <- TRUE
   for (url in cpat_urls) {
-    # basename(url) on these SourceForge URLs returns "download" (the actual
-    # trailing path segment); the real filename is the second-to-last
-    # segment, e.g. ".../Human_Hexamer.tsv/download" -> "Human_Hexamer.tsv".
     fname  <- basename(sub("/download$", "", url))
     dest   <- paste0(cpat_data_dir, "/", fname)
     status <- .run(sprintf('wget -q -L --max-redirect=20 --user-agent="Mozilla/5.0" -O %s %s',
@@ -896,8 +855,6 @@ install_isoform_databases <- function(distro        = "Ubuntu",
     }
   }
 
-  # Persist CPAT_DATA via the shared env file (NOT ~/.bashrc -- see note above
-  # .ISOFORM_ENV_FILE) so it reaches CPAT at actual prediction time.
   .wsl_write_env_var("CPAT_DATA", cpat_data_dir, wsl_distro = distro, use_wsl = via_wsl)
   message(if (cpat_ok) "CPAT data installed successfully. CPAT_DATA -> " else
           "CPAT data installed with errors (see above). CPAT_DATA -> ", cpat_data_dir)
@@ -939,9 +896,6 @@ install_isoform_databases <- function(distro        = "Ubuntu",
       }
     }
   }
-  # Persist PFAM_DB via the shared env file so .find_pfam_db() (and any
-  # custom install location) is discoverable at actual prediction time,
-  # mirroring how CPAT_DATA is persisted above.
   .wsl_write_env_var("PFAM_DB", pfam_hmm, wsl_distro = distro, use_wsl = via_wsl)
   message("Pfam database step complete. Location: ", pfam_db_dir, " (PFAM_DB -> ", pfam_hmm, ")")
 

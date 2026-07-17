@@ -1559,9 +1559,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
     } else if (has_sp5) {
       sp_attempted <- TRUE
-      # SignalP 5 syntax: no `-output <dir>` flag exists; results are named
-      # from `-prefix <prefix>` as `<prefix>_summary.signalp5` etc. Point the
-      # prefix inside sp_out_dir_w so results land in a predictable location.
+
       sp_prefix_w <- paste0(sp_out_dir_w, "/signalp5")
       sp_cmd <- sprintf(
         "signalp -fasta %s -org euk -format short -prefix %s",
@@ -2144,10 +2142,7 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
   gene_map <- isoform_obj$gene_map[, c("ensembl", "symbol")]
   colnames(gene_map) <- c("gene_id", "gene_symbol")
   dtu <- merge(dtu, gene_map, by = "gene_id", all.x = TRUE)
-  # Fallback: a custom tx2gene can use gene symbols directly as its gene_id
-  # (see strip_ensembl_version()/entrezid fix in mod_dge.R for the full
-  # explanation). When that happens the merge above finds no match, so try
-  # matching dtu$gene_id against gene_map's symbol column instead.
+
   missing_sym <- is.na(dtu$gene_symbol) | dtu$gene_symbol == ""
   if (any(missing_sym)) {
     already_a_symbol <- dtu$gene_id[missing_sym] %in% gene_map$gene_symbol
@@ -2281,23 +2276,7 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
 
     # 3f-bis. Genome-wide functional-consequence and alternative-splicing
     # summary plots.
-    #
-    # MISSING FEATURE (found by comparing this pipeline's isoform outputs
-    # against the IsoformSwitchAnalyzeR vignette's "Examples of Switch
-    # Visualization" / "Analyzing Alternative Splicing" sections): the
-    # vignette's genome-wide overview is not just the dIF-vs-q-value scatter
-    # above -- it also includes bar-chart summaries (and enrichment tests) of
-    # *what kind* of functional and splicing changes occurred across all
-    # switches. analyzeSwitchConsequences() was already being run (Step 3.5 /
-    # inside isoformSwitchAnalysisCombined), so extractConsequenceSummary()
-    # and extractConsequenceEnrichment() only needed to be *called* -- the
-    # underlying data was already there. extractSplicingSummary() and
-    # extractSplicingEnrichment() additionally required the new
-    # analyzeAlternativeSplicing() call added above. All four are wrapped in
-    # safe_run(): they are supplementary figures and must never abort report
-    # generation if a given dataset is too small/uniform for a particular
-    # plot (e.g. extractConsequenceEnrichment requires >= minEventsForPlotting
-    # events in opposite directions).
+
     safe_run(
       {
         p_cons <- IsoformSwitchAnalyzeR::extractConsequenceSummary(
@@ -2351,8 +2330,6 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
               "in switch_list (analyzeAlternativeSplicing() may have failed upstream -- see earlier messages).")
     }
 
-    # Automatic top-N + forced-gene switch summary plots (structure/ORF/domains
-    # alongside gene expression, isoform expression, and isoform usage)
     if (isTRUE(plot_switch_summary)) {
       safe_run(
         plot_isoform_switch_summary(switch_list, plot_dir = plot_dir,
@@ -2401,10 +2378,6 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
   rmd_file <- tempfile(fileext = ".Rmd")
   on.exit(unlink(rmd_file), add = TRUE)
   
-  # Absolute paths for the CSV files (so the Rmd is self-contained).
-  # winslash = "/" ensures forward slashes on Windows: backslashes in embedded
-  # R string literals trigger the '\U used without hex digits' parse error
-  # (e.g. C:\Users\... → \U is treated as a Unicode escape sequence).
   dte_abs_path <- normalizePath(file.path(report_dir, "DTE_results_annotated.csv"), winslash = "/")
   dtu_abs_path <- normalizePath(file.path(report_dir, "DTU_results_annotated.csv"), winslash = "/")
   if (has_dexseq) {
@@ -2617,10 +2590,6 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
     rmd_lines <- c(rmd_lines, "\nNo custom genes requested.")
   }
   
-  # Convert every plot PDF to a PNG and repoint the Rmd at the PNGs.
-  # knitr::include_graphics() on a .pdf path produces an <img src="...pdf">
-  # tag in html_document output, which browsers cannot render -- every figure
-  # referenced above would otherwise silently fail to display in report.html.
   plot_pdfs <- list.files(plot_dir, pattern = "\\.pdf$", recursive = TRUE, full.names = TRUE)
   converted_any <- FALSE
   for (pdf_path in plot_pdfs) {
@@ -2634,10 +2603,9 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
             "PDF files through an <img> tag. Install 'pdftools' to fix this.")
   }
 
-  # Write to temporary Rmd file
+
   writeLines(rmd_lines, rmd_file)
-  
-  # Render the report
+
   rmarkdown::render(rmd_file, output_file = "report.html", output_dir = report_dir, quiet = TRUE)
   
   # Free large objects after report generation
