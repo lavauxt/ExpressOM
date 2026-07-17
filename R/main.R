@@ -92,6 +92,7 @@ expressom <- function(count_type        = "salmon",
                       batch_col         = NULL,
                       replicate_col     = NULL,
                       shrink_method     = "ashr",
+                      pca_ntop          = 500,
                       ensembl_package_name = "EnsDb.Hsapiens.v107",
                       top_genes         = 30,
                       gmt_file          = c("C2", "C3", "C5", "C8"),
@@ -242,7 +243,8 @@ expressom <- function(count_type        = "salmon",
     base           = base,
     main_condition = main_condition,
     group_col      = group_col,
-    batch_col      = batch_col
+    batch_col      = batch_col,
+    pca_ntop       = pca_ntop
   )
 
   # If eda_only, stop here

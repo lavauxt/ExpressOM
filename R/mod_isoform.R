@@ -948,16 +948,18 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       message("  Remapped ", sum(!is.na(new_rownames)), " transcript IDs using custom map.")
     }
 
+    # ---- ID cleaning function (MUST BE DEFINED BEFORE USE) ----
+    clean_id <- function(x) {
+      x <- strip_ensembl_version(x)
+      x <- sub("\\|.*$", "", x)
+      x <- sub(" .*$",   "", x)
+      x
+    }
+
     # Pre-filter: keep only transcripts present in the FASTA file (unless skipped)
     if (!skip_fasta_filter) {
       message("Pre-filtering transcripts to match FASTA file...")
       fasta_seqs    <- Biostrings::fasta.seqlengths(fasta_file)
-      clean_id      <- function(x) {
-        x <- strip_ensembl_version(x)
-        x <- sub("\\|.*$", "", x)
-        x <- sub(" .*$",   "", x)
-        x
-      }
       clean_fasta_ids  <- clean_id(names(fasta_seqs))
       clean_rownames   <- clean_id(rownames(count_matrix))
       keep_in_fasta    <- clean_rownames %in% clean_fasta_ids
@@ -1009,9 +1011,9 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       designMatrix         = design_matrix,
       isoformExonAnnoation = gff_file,
       isoformNtFasta       = fasta_file,
-      ignoreAfterBar       = TRUE,
-      ignoreAfterSpace     = TRUE,
-      ignoreAfterPeriod    = TRUE,
+      ignoreAfterBar       = FALSE,
+      ignoreAfterSpace     = FALSE,
+      ignoreAfterPeriod    = FALSE,
       showProgress         = TRUE
     )
     # ========================================================================

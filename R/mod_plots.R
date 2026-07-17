@@ -10,8 +10,11 @@
 #' @param main_condition The primary modeled condition (could be NULL)
 #' @param group_col Optional column name to use for colouring/annotation (overrides main_condition if non-NULL)
 #' @param batch_col Optional batch column name for limma correction and before/after PCA
+#' @param pca_ntop Number of most variable genes to use for PCA (default 500; set NULL to use all)
 #' @export
-run_eda <- function(dds, edb, out_dir, level, base, main_condition = NULL, group_col = NULL, batch_col = NULL) {
+run_eda <- function(dds, edb, out_dir, level, base,
+                    main_condition = NULL, group_col = NULL,
+                    batch_col = NULL, pca_ntop = 500) {
   # Determine which column to use for grouping: group_col takes precedence
   cond_col <- group_col %||% main_condition
 
@@ -44,19 +47,33 @@ run_eda <- function(dds, edb, out_dir, level, base, main_condition = NULL, group
 
   # --- PCA before batch correction ---
   if (!is.null(cond_col) && cond_col %in% colnames(SummarizedExperiment::colData(dds))) {
-    p_orig <- plot_custom_pca(rld, condition = cond_col, batch = batch_col,
-                              title = paste0("PCA (", cond_col, ")", if (!is.null(level) && !is.null(base)) paste0(" - ", level, " vs ", base) else ""),
-                              return_plot = TRUE)
+    res_orig <- plot_custom_pca(rld, condition = cond_col, batch = batch_col,
+                                 title = paste0("PCA (", cond_col, ")", if (!is.null(level) && !is.null(base)) paste0(" - ", level, " vs ", base) else ""),
+                                 return_plot = TRUE, return_gene_list = TRUE,
+                                 ntop = pca_ntop)
+    p_orig <- res_orig$plot
+    gene_info_orig <- res_orig$gene_info
   } else {
-    # No grouping column – plot without colour
-    p_orig <- plot_custom_pca(rld, condition = NULL, batch = batch_col,
-                              title = "PCA (no condition grouping)",
-                              return_plot = TRUE)
+    res_orig <- plot_custom_pca(rld, condition = NULL, batch = batch_col,
+                                 title = "PCA (no condition grouping)",
+                                 return_plot = TRUE, return_gene_list = TRUE,
+                                 ntop = pca_ntop)
+    p_orig <- res_orig$plot
+    gene_info_orig <- res_orig$gene_info
   }
 
   pdf(file.path(plot_dir, paste0("PCA_", comp_label, ".pdf")), width = 9, height = 7)
   print(p_orig)
   dev.off()
+
+  # Save gene list if we used top N (or always if return_gene_list was TRUE)
+  if (!is.null(gene_info_orig) && nrow(gene_info_orig) > 0) {
+    write.table(gene_info_orig,
+                file = file.path(plot_dir, paste0("PCA_", comp_label, ".tsv")),
+                sep = "\t", row.names = FALSE, quote = FALSE)
+    message("   -> Saved top variable genes used in PCA to: ",
+            file.path(plot_dir, paste0("PCA_", comp_label, ".tsv")))
+  }
 
   # --- Batch correction + PCA after ---
   if (!is.null(batch_col) && batch_col %in% colnames(SummarizedExperiment::colData(dds)) &&
@@ -78,13 +95,22 @@ run_eda <- function(dds, edb, out_dir, level, base, main_condition = NULL, group
       if (!is.null(corrected_mat)) {
         rld_corrected <- rld
         SummarizedExperiment::assay(rld_corrected) <- corrected_mat
-        p_corr <- plot_custom_pca(rld_corrected, condition = cond_col, batch = batch_col,
-                                  title = "PCA After Batch Correction (limma)",
-                                  return_plot = TRUE)
+        res_corr <- plot_custom_pca(rld_corrected, condition = cond_col, batch = batch_col,
+                                     title = "PCA After Batch Correction (limma)",
+                                     return_plot = TRUE, return_gene_list = TRUE,
+                                     ntop = pca_ntop)
+        p_corr <- res_corr$plot
+        gene_info_corr <- res_corr$gene_info
         pdf(file.path(plot_dir, paste0("PCA_BatchCorrected_", comp_label, ".pdf")), width = 9, height = 7)
         print(p_corr)
         dev.off()
-        message("   -> Batch-corrected PCA saved to: ", plot_dir)
+        if (!is.null(gene_info_corr) && nrow(gene_info_corr) > 0) {
+          write.table(gene_info_corr,
+                      file = file.path(plot_dir, paste0("PCA_BatchCorrected_", comp_label, ".tsv")),
+                      sep = "\t", row.names = FALSE, quote = FALSE)
+          message("   -> Saved top variable genes used in batch-corrected PCA to: ",
+                  file.path(plot_dir, paste0("PCA_BatchCorrected_", comp_label, ".tsv")))
+        }
       }
     }
   }
@@ -110,6 +136,8 @@ run_eda <- function(dds, edb, out_dir, level, base, main_condition = NULL, group
   safe_pdf(file.path(plot_dir, paste0("HeatMap_", comp_label, ".pdf")), expr = {
     pheatmap::pheatmap(rld_cor, annotation_col = anno, main = "Sample Correlation (Gene Symbols)")
   })
+
+  message("EDA completed. Plots saved in: ", plot_dir)
 }
 
 #' Generate Bulk Visualizations
@@ -196,17 +224,41 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
 #' @param title Plot title
 #' @param ellipse Logical, whether to add 95% confidence ellipses
 #' @param return_plot If TRUE, returns ggplot object; otherwise prints
+#' @param ntop Number of top variable genes to use for PCA (NULL = all genes)
+#' @param return_gene_list If TRUE, return a list with plot and gene_info; otherwise only the plot
 #' @export
-plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse = TRUE, return_plot = TRUE) {
+plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse = TRUE,
+                            return_plot = TRUE, ntop = NULL, return_gene_list = FALSE) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) stop("ggplot2 required")
 
   if (inherits(vsd, "SummarizedExperiment")) {
     mat     <- SummarizedExperiment::assay(vsd)
     coldata <- as.data.frame(SummarizedExperiment::colData(vsd))
   } else if (is.matrix(vsd)) {
-    stop("If vsd is a matrix, you must provide coldata separately. This function currently expects a SummarizedExperiment object.")
+    # If a matrix is provided, we need coldata separately – but this function expects SE.
+    # Keep original behavior: if matrix, error.
+    stop("vsd must be a SummarizedExperiment object (e.g., DESeqDataSet or DESeqTransform)")
   } else {
-    stop("vsd must be a SummarizedExperiment object (e.g., DESeqDataSet or DESeqTransform) or a matrix")
+    stop("vsd must be a SummarizedExperiment object")
+  }
+
+  # --- Subset to top N variable genes if requested ---
+  gene_info <- NULL
+  if (!is.null(ntop) && is.numeric(ntop) && ntop > 0 && ntop < nrow(mat)) {
+    row_var <- apply(mat, 1, var, na.rm = TRUE)
+    row_var[is.na(row_var)] <- -Inf
+    top_idx <- order(row_var, decreasing = TRUE)[seq_len(min(ntop, nrow(mat)))]
+    gene_names <- rownames(mat)[top_idx]
+    gene_var   <- row_var[top_idx]
+    mat <- mat[top_idx, , drop = FALSE]
+    gene_info <- data.frame(gene = gene_names, variance = gene_var, stringsAsFactors = FALSE)
+  } else {
+    # Keep all genes; gene_info will have NA for variance (or we could compute it)
+    if (return_gene_list) {
+      row_var <- apply(mat, 1, var, na.rm = TRUE)
+      row_var[is.na(row_var)] <- NA_real_
+      gene_info <- data.frame(gene = rownames(mat), variance = row_var, stringsAsFactors = FALSE)
+    }
   }
 
   pca        <- prcomp(t(mat), center = TRUE, scale. = FALSE)
@@ -216,23 +268,18 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
 
   # ---- Handle NULL or missing condition ----
   if (is.null(condition) || !(condition %in% colnames(pca_df))) {
-    # Create a dummy group so ggplot gets a colour aesthetic
     pca_df$Group <- "All Samples"
     condition    <- "Group"
-    # Disable ellipses (only one group)
     ellipse      <- FALSE
-    message("plot_custom_pca: no valid condition column; using constant colour.")
   }
 
   p <- ggplot2::ggplot(pca_df, ggplot2::aes(x = .data[["PC1"]], y = .data[["PC2"]],
                                              color = .data[[condition]]))
 
   # stat_ellipse needs >= 3 points per group and > 1 group
-  min_pts_per_group <- min(table(pca_df[[condition]]))
-  if (ellipse && length(unique(pca_df[[condition]])) > 1 && min_pts_per_group >= 3) {
+  if (ellipse && length(unique(pca_df[[condition]])) > 1 &&
+      min(table(pca_df[[condition]])) >= 3) {
     p <- p + ggplot2::stat_ellipse(level = 0.95, linetype = 2)
-  } else if (ellipse) {
-    message("plot_custom_pca: ellipse skipped (need >= 3 samples per group and >= 2 groups)")
   }
 
   p <- p + ggplot2::geom_point(size = 3.5, alpha = 0.8)
@@ -252,7 +299,11 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
     ggplot2::theme(panel.grid.minor = ggplot2::element_blank()) +
     ggplot2::labs(title = title)
 
-  if (return_plot) return(p) else print(p)
+  if (return_gene_list) {
+    return(list(plot = p, gene_info = gene_info))
+  } else {
+    if (return_plot) return(p) else { print(p); invisible(p) }
+  }
 }
 
 #' Sample Correlation Heatmap
