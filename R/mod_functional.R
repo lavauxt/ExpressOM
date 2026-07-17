@@ -163,7 +163,7 @@
           gene.data  = gene_data,
           pathway.id = pid,
           species    = kegg_code,
-          gene.idtype = "entrez",        # explicitly tell pathview we use Entrez IDs
+          gene.idtype = "KEGG",        # entrez  or KEGG ?
           limit      = list(gene = 2, cpd = 1),
           kegg.dir   = "."
         )
@@ -586,13 +586,14 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 
   if (!is.null(gseaKEGG) && nrow(as.data.frame(gseaKEGG)) > 0) {
     disease_pattern <- paste0("^", kegg_code, "05")
-    gseaKEGG@result <- gseaKEGG@result[!grepl(disease_pattern, gseaKEGG@result$ID), ]
+    # Safely filter the S4 object using dplyr
+    gseaKEGG <- dplyr::filter(gseaKEGG, !grepl(disease_pattern, ID))
     
-    if (nrow(gseaKEGG@result) == 0) {
+    if (nrow(as.data.frame(gseaKEGG)) == 0) {
       message("      No non-disease KEGG pathways remained after filtering.")
       gseaKEGG <- NULL
     } else {
-      message("      Filtered out KEGG Disease pathways. Remaining: ", nrow(gseaKEGG@result))
+      message("      Filtered out KEGG Disease pathways. Remaining: ", nrow(as.data.frame(gseaKEGG)))
     }
   }
 
