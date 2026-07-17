@@ -23,6 +23,18 @@
 #
 .ISOFORM_ENV_FILE <- "$HOME/.isoform_tools_env.sh"
 
+#' Double-quote a shell argument while preserving `$VAR`-style expansion
+#'
+#' Unlike `shQuote(x, type = "sh")` (which single-quotes and therefore
+#' freezes any literal `$HOME`/`$VAR` inside `x`), this wraps `x` in double
+#' quotes and escapes only the characters that are special inside double
+#' quotes (`\\`, `"`, `` ` ``), so a value like `"$HOME/pfam_db"` still
+#' expands correctly when the generated script runs.
+#' @keywords internal
+.dq <- function(x) {
+  sprintf('"%s"', gsub('([\\\\"`])', '\\\\\\1', x))
+}
+
 #' Persist an environment variable for later predictor runs
 #'
 #' Appends (or replaces) an `export VAR="value"` line in the dedicated
@@ -43,7 +55,11 @@
   # must always appear double-quoted (or bare) in the generated script,
   # never single-quoted, since single quotes would freeze it as the literal
   # string "$HOME" and point at a nonexistent path.
-  export_line <- sprintf("export %s=%s", var, shQuote(value, type = "sh"))
+  # Use double quotes (not shQuote()'s single quotes) so that a literal
+  # "$HOME" embedded in `value` (e.g. the "$HOME/pfam_db" default) is
+  # expanded by the execution shell when the env file is sourced, per the
+  # note above.
+  export_line <- sprintf("export %s=%s", var, .dq(value))
   body <- c(
     sprintf('touch "%s"', .ISOFORM_ENV_FILE),
     sprintf('grep -v "^export %s=" "%s" > "%s.tmp" 2>/dev/null || true', var, .ISOFORM_ENV_FILE, .ISOFORM_ENV_FILE),
@@ -184,7 +200,12 @@
   script <- c("#!/bin/bash", "set -e", activate, bash_body)
   tmp    <- tempfile(fileext = ".sh")
   on.exit(unlink(tmp), add = TRUE)
-  writeLines(script, tmp, useBytes = TRUE)
+  # Fixed way (forces Unix LF line endings even on Windows):
+  con <- file(tmp, "wb")
+  writeLines(script, con, sep = "\n")
+  close(con)
+  
+  #writeLines(script, tmp, sep = "\n", useBytes = TRUE)
 
   # Route through WSL only on Windows AND when explicitly requested. Every
   # other case (native Linux, macOS, or R already running inside WSL itself)
@@ -283,14 +304,14 @@
                            conda_sh   = NULL,
                            conda_env  = "isoform_tools") {
   result <- .wsl_exec_script(
-    bash_body = paste(
-      'for _p in',
-      '"$HOME/pfam_db/Pfam-A.hmm"',
-      '"$HOME/databases/Pfam-A.hmm"',
-      '"$HOME/.local/share/pfam/Pfam-A.hmm"',
-      '"/opt/databases/Pfam-A.hmm"',
-      '"/usr/local/share/pfam/Pfam-A.hmm"',
-      '; do [ -f "$_p" ] && echo "$_p" && break; done'
+    bash_body = c(
+      # PFAM_DB may have been persisted by install_isoform_databases() to a
+      # custom location; the shared env file is sourced by .wsl_exec_script()
+      # before this body runs, so check it first.
+      'if [ -n "$PFAM_DB" ] && [ -f "$PFAM_DB" ]; then echo "$PFAM_DB"; exit 0; fi',
+      # Keep the whole for-loop on a single line to avoid any ambiguity in
+      # how a for-in list is parsed when split across multiple lines.
+      'for _p in "$HOME/pfam_db/Pfam-A.hmm" "$HOME/databases/Pfam-A.hmm" "$HOME/.local/share/pfam/Pfam-A.hmm" "/opt/databases/Pfam-A.hmm" "/usr/local/share/pfam/Pfam-A.hmm"; do [ -f "$_p" ] && echo "$_p" && break; done'
     ),
     wsl_distro = wsl_distro, use_wsl = use_wsl,
     conda_sh   = conda_sh, conda_env = conda_env,
@@ -560,7 +581,7 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   wsl_windows_path <- trimws(wsl_windows_path[nzchar(trimws(wsl_windows_path))])[1]
 
   message("Copying SignalP from Windows (", wsl_windows_path, ") to WSL (", install_path, ")...")
-  mkdir_status <- .wsl_exec_script(sprintf("sudo mkdir -p %s", shQuote(install_path, type = "sh")),
+  mkdir_status <- .wsl_exec_script(sprintf("sudo mkdir -p %s", .dq(install_path)),
                                    wsl_distro = distro, use_wsl = TRUE)
   if (!isTRUE(mkdir_status == 0L)) {
     message("Failed to create ", install_path, " (exit code ", mkdir_status, "). Check sudo permissions.")
@@ -568,7 +589,7 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   }
 
   cp_status <- .wsl_exec_script(
-    sprintf("sudo cp -r %s/. %s/", shQuote(wsl_windows_path, type = "sh"), shQuote(install_path, type = "sh")),
+    sprintf("sudo cp -r %s/. %s/", .dq(wsl_windows_path), .dq(install_path)),
     wsl_distro = distro, use_wsl = TRUE
   )
   if (!isTRUE(cp_status == 0L)) {
@@ -577,10 +598,10 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   }
 
   bin_path <- file.path(install_path, "bin", "signalp")
-  chmod_status <- .wsl_exec_script(sprintf("sudo chmod +x %s", shQuote(bin_path, type = "sh")),
+  chmod_status <- .wsl_exec_script(sprintf("sudo chmod +x %s", .dq(bin_path)),
                                    wsl_distro = distro, use_wsl = TRUE)
   ln_status <- .wsl_exec_script(
-    sprintf("sudo ln -sf %s /usr/local/bin/signalp", shQuote(bin_path, type = "sh")),
+    sprintf("sudo ln -sf %s /usr/local/bin/signalp", .dq(bin_path)),
     wsl_distro = distro, use_wsl = TRUE
   )
   if (!isTRUE(chmod_status == 0L) || !isTRUE(ln_status == 0L)) {
@@ -589,7 +610,7 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   }
 
   data_dir <- file.path(install_path, "data")
-  data_dir_exists <- .wsl_exec_script(sprintf("[ -d %s ]", shQuote(data_dir, type = "sh")),
+  data_dir_exists <- .wsl_exec_script(sprintf("[ -d %s ]", .dq(data_dir)),
                                       wsl_distro = distro, use_wsl = TRUE)
   if (isTRUE(data_dir_exists == 0L)) {
     .wsl_write_env_var("SIGNALP_DIR", data_dir, wsl_distro = distro, use_wsl = TRUE)
@@ -621,7 +642,7 @@ install_wsl_isoform_tools <- function(distro              = "Ubuntu",
   .run <- function(cmd, conda = FALSE) {
     body <- if (conda)
       sprintf('bash -c "source %s 2>/dev/null && conda activate isoform_tools && %s"',
-              shQuote(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh", type = "sh"), cmd)
+              .dq(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh"), cmd)
     else cmd
     status <- .wsl_exec_script(body, wsl_distro = distro, use_wsl = TRUE, log_dir = log_dir)
     status
@@ -673,14 +694,14 @@ install_wsl_isoform_tools <- function(distro              = "Ubuntu",
 
     env_check <- .run_intern(sprintf(
       'bash -c "source %s 2>/dev/null && conda env list | grep isoform_tools || true"',
-      shQuote(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh", type = "sh")
+      .dq(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh")
     ))
     env_check <- trimws(env_check[nzchar(trimws(env_check))])
     if (length(env_check) == 0) {
       message("Creating conda environment 'isoform_tools'...")
       create_status <- .run(sprintf(
         'bash -c "source %s && conda activate base && mamba create -y -n isoform_tools python=3.9"',
-        shQuote(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh", type = "sh")
+        .dq(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh")
       ))
       if (!isTRUE(create_status == 0L)) {
         message("  \u2717 Failed to create conda environment 'isoform_tools' (exit code ",
@@ -845,7 +866,7 @@ install_isoform_databases <- function(distro        = "Ubuntu",
     message("  CPAT not found on PATH/conda env (this is OK if you haven't installed it yet). ",
             "Installing data to: ", cpat_data_dir)
   }
-  mkdir_status <- .run(sprintf("mkdir -p %s", shQuote(cpat_data_dir, type = "sh")))
+  mkdir_status <- .run(sprintf("mkdir -p %s", .dq(cpat_data_dir)))
   if (!isTRUE(mkdir_status == 0L))
     message("  ! Could not create ", cpat_data_dir, " (exit code ", mkdir_status, ") -- check permissions.")
 
@@ -857,11 +878,13 @@ install_isoform_databases <- function(distro        = "Ubuntu",
   )
   cpat_ok <- TRUE
   for (url in cpat_urls) {
-    # basename() would otherwise pick up the trailing "/download" segment
-    fname  <- sub("/download$", "", basename(url))
+    # basename(url) on these SourceForge URLs returns "download" (the actual
+    # trailing path segment); the real filename is the second-to-last
+    # segment, e.g. ".../Human_Hexamer.tsv/download" -> "Human_Hexamer.tsv".
+    fname  <- basename(sub("/download$", "", url))
     dest   <- paste0(cpat_data_dir, "/", fname)
     status <- .run(sprintf('wget -q -L --max-redirect=20 --user-agent="Mozilla/5.0" -O %s %s',
-                          shQuote(dest, type = "sh"), shQuote(url, type = "sh")))
+                          .dq(dest), .dq(url)))
     if (isTRUE(status == 0L)) {
       message("  \u2713 Downloaded: ", fname)
     } else {
@@ -882,25 +905,25 @@ install_isoform_databases <- function(distro        = "Ubuntu",
   # ---- Pfam database ----
   message("Installing Pfam-A.hmm...")
   if (is.null(pfam_db_dir)) pfam_db_dir <- "$HOME/pfam_db"
-  .run(sprintf("mkdir -p %s", shQuote(pfam_db_dir, type = "sh")))
+  .run(sprintf("mkdir -p %s", .dq(pfam_db_dir)))
 
   pfam_url    <- "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz"
   pfam_hmm    <- paste0(pfam_db_dir, "/Pfam-A.hmm")
   pfam_gz     <- paste0(pfam_hmm, ".gz")
-  dl_status   <- .run(sprintf("wget -q -O %s %s", shQuote(pfam_gz, type = "sh"), shQuote(pfam_url, type = "sh")))
+  dl_status   <- .run(sprintf("wget -q -O %s %s", .dq(pfam_gz), .dq(pfam_url)))
   if (!isTRUE(dl_status == 0L)) {
     message("  \u2717 FAILED to download Pfam-A.hmm.gz (exit code ", dl_status,
             "). Check network access to ftp.ebi.ac.uk inside the execution environment. Aborting Pfam install.")
   } else {
     message("  \u2713 Downloaded Pfam-A.hmm.gz")
-    gz_status <- .run(sprintf("gunzip -f %s", shQuote(pfam_gz, type = "sh")))
+    gz_status <- .run(sprintf("gunzip -f %s", .dq(pfam_gz)))
     if (!isTRUE(gz_status == 0L)) {
       message("  \u2717 gunzip failed (exit code ", gz_status, ") -- Pfam-A.hmm.gz may be corrupt or incomplete.")
     } else {
       message("  \u2713 Extracted Pfam-A.hmm")
       hmmpress_found <- .run("command -v hmmpress >/dev/null 2>&1")
       if (isTRUE(hmmpress_found == 0L)) {
-        press_status <- .run(sprintf("hmmpress -f %s", shQuote(pfam_hmm, type = "sh")))
+        press_status <- .run(sprintf("hmmpress -f %s", .dq(pfam_hmm)))
         if (isTRUE(press_status == 0L)) {
           message("  \u2713 hmmpress indexed ", pfam_hmm, " -- hmmscan is ready to use.")
         } else {
@@ -916,7 +939,11 @@ install_isoform_databases <- function(distro        = "Ubuntu",
       }
     }
   }
-  message("Pfam database step complete. Location: ", pfam_db_dir)
+  # Persist PFAM_DB via the shared env file so .find_pfam_db() (and any
+  # custom install location) is discoverable at actual prediction time,
+  # mirroring how CPAT_DATA is persisted above.
+  .wsl_write_env_var("PFAM_DB", pfam_hmm, wsl_distro = distro, use_wsl = via_wsl)
+  message("Pfam database step complete. Location: ", pfam_db_dir, " (PFAM_DB -> ", pfam_hmm, ")")
 
   # ---- SignalP ----
   message("SignalP models require a license and cannot be automatically installed.")

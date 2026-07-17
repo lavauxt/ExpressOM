@@ -1559,10 +1559,13 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
     } else if (has_sp5) {
       sp_attempted <- TRUE
-      # SignalP 5 syntax
+      # SignalP 5 syntax: no `-output <dir>` flag exists; results are named
+      # from `-prefix <prefix>` as `<prefix>_summary.signalp5` etc. Point the
+      # prefix inside sp_out_dir_w so results land in a predictable location.
+      sp_prefix_w <- paste0(sp_out_dir_w, "/signalp5")
       sp_cmd <- sprintf(
-        "signalp -fasta %s -org euk -format short -output %s",
-        shQuote(sp_fa_w, type = "sh"), shQuote(sp_out_dir_w, type = "sh")
+        "signalp -fasta %s -org euk -format short -prefix %s",
+        shQuote(sp_fa_w, type = "sh"), shQuote(sp_prefix_w, type = "sh")
       )
       message("  Running SignalP 5...")
       sp_status <- run_tool(sp_cmd)
