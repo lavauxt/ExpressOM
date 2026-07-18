@@ -1,0 +1,204 @@
+---
+title: "DTE/DTU Analysis Report (`r params$level` vs `r params$base`)"
+author: "ExpressOM"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+    highlight: tango
+params:
+  level:             "treated"
+  base:               "control"
+  top_n:              15
+  genes_of_interest:  !r NULL
+  dte_csv:            ""
+  dtu_csv:            ""
+  dexseq_csv:         !r NULL
+  has_dexseq:         FALSE
+  has_switch:         FALSE
+  plot_dir:           "plots"
+  switch_plot_top_n:  10
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(DT)
+library(ggplot2)
+
+# Emit a markdown image for `basename` if it exists under params$plot_dir,
+# preferring a .png rendition (browsers can't display a PDF through an <img>
+# tag) and falling back to the .pdf if no PNG conversion is available.
+# Called from `results='asis'` chunks; returns invisibly if the file is
+# missing so callers can just call it unconditionally.
+.fig <- function(basename, cap = NULL) {
+  png_path <- file.path(params$plot_dir, sub("\\.pdf$", ".png", basename))
+  pdf_path <- file.path(params$plot_dir, basename)
+  rel <- if (file.exists(png_path)) file.path("plots", sub("\\.pdf$", ".png", basename))
+         else if (file.exists(pdf_path)) file.path("plots", basename)
+         else return(invisible(NULL))
+  cat(sprintf("\n![%s](%s)\n\n", if (is.null(cap)) "" else cap, rel))
+  invisible(TRUE)
+}
+
+# List files (basenames) directly under a subdirectory of params$plot_dir,
+# or character(0) if it doesn't exist.
+.list_plot_files <- function(subdir, pattern = "\\.(pdf|png)$") {
+  d <- file.path(params$plot_dir, subdir)
+  if (!dir.exists(d)) return(character(0))
+  list.files(d, pattern = pattern, recursive = TRUE)
+}
+```
+
+## Overview
+
+- **Comparison**: `r params$level` vs `r params$base`
+- **Date**: `r Sys.time()`
+- **Top N shown**: `r params$top_n`
+- **Genes of interest**: `r if (length(params$genes_of_interest) > 0) paste(params$genes_of_interest, collapse = ", ") else "None requested"`
+
+## DTE Results (Differential Transcript Expression)
+
+### Volcano Plot
+```{r dte-volcano, results='asis'}
+.fig("DTE_volcano.pdf", "Volcano plot")
+```
+
+### MA Plot
+```{r dte-ma, results='asis'}
+.fig("DTE_MA.pdf", "MA plot")
+```
+
+### Top Significant Transcripts
+```{r dte-topbar, results='asis'}
+.fig("DTE_top_barplot.pdf", "Top DE transcripts")
+```
+
+### Interactive Table (top 1000 by padj)
+```{r dt-dte}
+dte_data <- read.csv(params$dte_csv, check.names = FALSE)
+dte_data <- dte_data[order(dte_data$padj), ][seq_len(min(1000, nrow(dte_data))), ]
+DT::datatable(dte_data, filter = "top", options = list(scrollX = TRUE))
+```
+
+## DTU Results (Differential Transcript Usage)
+
+### P-value Distribution
+```{r dtu-hist, results='asis'}
+.fig("DTU_pvalue_hist.pdf", "DTU p-value histogram")
+```
+
+### Interactive Table
+```{r dt-dtu}
+dtu_data <- read.csv(params$dtu_csv, check.names = FALSE)
+DT::datatable(dtu_data, filter = "top", options = list(scrollX = TRUE))
+```
+
+```{r dexseq-section, echo=FALSE, results='asis', eval=isTRUE(params$has_dexseq)}
+cat("\n## DEXSeq Results (Differential Transcript/Exon Usage)\n\n")
+cat("DEXSeq treats each transcript as an \"exonic bin\" within its parent gene and ",
+    "tests for differential usage independently of the DRIMSeq-based DTU test above; ",
+    "the two are commonly compared as a cross-validation of DTU calls.\n\n", sep = "")
+cat("### Interactive Table\n\n")
+```
+
+```{r dt-dexseq, eval=isTRUE(params$has_dexseq)}
+dexseq_data <- read.csv(params$dexseq_csv, check.names = FALSE)
+dexseq_data <- dexseq_data[order(dexseq_data$padj), ]
+DT::datatable(dexseq_data, filter = "top", options = list(scrollX = TRUE))
+```
+
+```{r switch-overview-header, echo=FALSE, results='asis', eval=isTRUE(params$has_switch)}
+cat("\n## Isoform Switch Overview\n\n")
+cat("### dIF vs. Isoform Switch Significance\n\n")
+```
+
+```{r switch-overview-fig, results='asis', eval=isTRUE(params$has_switch)}
+.fig("IsoformSwitch_overview.pdf", "Isoform Switch Overview")
+```
+
+```{r switch-genomewide, echo=FALSE, results='asis', eval=isTRUE(params$has_switch)}
+# Genome-wide functional-consequence and alternative-splicing summaries
+# (extractConsequenceSummary / extractConsequenceEnrichment /
+# extractSplicingSummary / extractSplicingEnrichment). Each is optional --
+# only shown if the corresponding file exists, since some can be legitimately
+# skipped for small/uniform datasets (see safe_run() calls in R/mod_isoform.R).
+genome_wide_figs <- list(
+  list(file = "ConsequenceSummary.pdf",    title = "Functional Consequences (Summary)",
+       cap  = "Genome-wide summary of functional consequences of isoform switching"),
+  list(file = "ConsequenceEnrichment.pdf", title = "Functional Consequences (Enrichment)",
+       cap  = "Enrichment of gain vs. loss for each functional consequence"),
+  list(file = "SplicingSummary.pdf",       title = "Alternative Splicing (Summary)",
+       cap  = "Genome-wide summary of alternative splicing event types"),
+  list(file = "SplicingEnrichment.pdf",    title = "Alternative Splicing (Enrichment)",
+       cap  = "Enrichment of gain vs. loss for each alternative splicing event type")
+)
+present <- vapply(genome_wide_figs, function(f) file.exists(file.path(params$plot_dir, f$file)) ||
+                    file.exists(file.path(params$plot_dir, sub("\\.pdf$", ".png", f$file))),
+                  logical(1))
+if (any(present)) {
+  cat("### Genome-wide Functional Consequences & Alternative Splicing\n\n")
+  for (f in genome_wide_figs[present]) {
+    cat("#### ", f$title, "\n\n", sep = "")
+    .fig(f$file, f$cap)
+  }
+}
+```
+
+```{r switch-top, echo=FALSE, results='asis', eval=isTRUE(params$has_switch)}
+top_switch_files <- .list_plot_files("top_switches", pattern = "\\.(pdf|png)$")
+# Once PDFs are converted to PNG we'd otherwise list both extensions for the
+# same figure; keep one entry per figure, preferring the PNG.
+top_switch_files <- unique(sub("\\.pdf$", ".png", top_switch_files))
+if (length(top_switch_files) > 0) {
+  cat("### Top ", params$switch_plot_top_n, " Isoform Switches\n\n", sep = "")
+  for (fn in top_switch_files) {
+    fig_label <- tools::file_path_sans_ext(basename(fn))
+    cat("#### ", fig_label, "\n\n", sep = "")
+    cat(sprintf("\n![](%s)\n\n", file.path("plots", "top_switches", fn)))
+  }
+}
+```
+
+## Gene-specific Plots
+
+```{r gene-specific, echo=FALSE, results='asis'}
+genes <- params$genes_of_interest
+if (length(genes) == 0) {
+  cat("\nNo custom genes requested.\n")
+} else {
+  gene_plot_types <- list(
+    list(prefix = "proportions_", label = "**Transcript proportions**"),
+    list(prefix = "DEXSeq_",      label = "**DEXSeq transcript usage**",
+         only_if = isTRUE(params$has_dexseq)),
+    list(prefix = "SwitchPlot_",  label = "**Isoform switch summary (structure, expression, usage)**"),
+    list(prefix = "Sashimi_",     label = "**Sashimi-style junction usage**"),
+    list(prefix = "ExonUsage_",   label = "**Exon-bin usage comparison**")
+  )
+  for (g in genes) {
+    section_lines <- character(0)
+    for (pt in gene_plot_types) {
+      if (!is.null(pt$only_if) && !isTRUE(pt$only_if)) next
+      fn <- paste0(pt$prefix, g, ".pdf")
+      png_exists <- file.exists(file.path(params$plot_dir, sub("\\.pdf$", ".png", fn)))
+      pdf_exists <- file.exists(file.path(params$plot_dir, fn))
+      if (png_exists || pdf_exists) {
+        section_lines <- c(section_lines, pt$label, "")
+      }
+    }
+    if (length(section_lines) > 0) {
+      cat("\n### ", g, "\n\n", sep = "")
+      for (pt in gene_plot_types) {
+        if (!is.null(pt$only_if) && !isTRUE(pt$only_if)) next
+        fn <- paste0(pt$prefix, g, ".pdf")
+        if (file.exists(file.path(params$plot_dir, sub("\\.pdf$", ".png", fn))) ||
+            file.exists(file.path(params$plot_dir, fn))) {
+          cat(pt$label, "\n\n", sep = "")
+          .fig(fn)
+        }
+      }
+    }
+  }
+}
+```

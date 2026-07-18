@@ -21,7 +21,10 @@ run_isoform_switch(
   resume_from = NULL,
   bsgenome_name = NULL,
   predictor_cpu = NULL,
-  log_dir = NULL
+  log_dir = NULL,
+  custom_transcript_id_map = NULL,
+  skip_fasta_filter = FALSE,
+  test_engine = c("DEXSeq", "DRIMSeq", "satuRn")
 )
 }
 \arguments{
@@ -63,6 +66,18 @@ command audit trail). Defaults to \code{file.path(out_dir, "Log")}. Set
 this when calling from a larger pipeline that already manages a single
 unified log tree elsewhere, so isoform logs land there instead of a
 second, separate location.}
+
+\item{custom_transcript_id_map}{Path to a TSV/CSV with columns `count_id` and `fasta_id`.
+If provided, transcript IDs in the count matrix are renamed to match the FASTA file
+before any filtering; this resolves ID mismatches between custom references.}
+
+\item{skip_fasta_filter}{Logical: if TRUE, skip the pre‑filtering that keeps only transcripts
+present in the FASTA file; rely on `importRdata()`'s own ID tolerance (e.g. `ignoreAfter*`).
+(Default: FALSE)}
+
+\item{test_engine}{Which DTU test engine to use in IsoformSwitchAnalyzeR:
+`"DEXSeq"` (default, built‑in), `"DRIMSeq"` (uses pre‑computed results from `run_dtu()`),
+or `"satuRn"` (state‑of‑the‑art method). See `IsoformSwitchAnalyzeR::isoformSwitchTestSatuRn`.}
 }
 \value{
 IsoformSwitchAnalyzeR results object, or NULL if no genes were

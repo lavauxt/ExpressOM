@@ -11,12 +11,15 @@ expressom(
   out_dir = "./results",
   sample_table = "./sample_table.csv",
   matrix_file = NULL,
+  custom_tx2gene = NULL,
+  custom_gene_map = NULL,
   level = "treated",
   base = "control",
   model = "~ condition",
   batch_col = NULL,
   replicate_col = NULL,
   shrink_method = "ashr",
+  pca_ntop = 500,
   ensembl_package_name = "EnsDb.Hsapiens.v107",
   top_genes = 30,
   gmt_file = c("C2", "C3", "C5", "C8"),
@@ -47,7 +50,10 @@ expressom(
   run_dexseq = FALSE,
   isoform_plot_top_n = 10,
   eda_only = FALSE,
-  group_col = NULL
+  group_col = NULL,
+  custom_transcript_id_map = NULL,
+  skip_fasta_filter = FALSE,
+  isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn")
 )
 
 run_bulk_pipeline(
@@ -56,12 +62,15 @@ run_bulk_pipeline(
   out_dir = "./results",
   sample_table = "./sample_table.csv",
   matrix_file = NULL,
+  custom_tx2gene = NULL,
+  custom_gene_map = NULL,
   level = "treated",
   base = "control",
   model = "~ condition",
   batch_col = NULL,
   replicate_col = NULL,
   shrink_method = "ashr",
+  pca_ntop = 500,
   ensembl_package_name = "EnsDb.Hsapiens.v107",
   top_genes = 30,
   gmt_file = c("C2", "C3", "C5", "C8"),
@@ -92,7 +101,10 @@ run_bulk_pipeline(
   run_dexseq = FALSE,
   isoform_plot_top_n = 10,
   eda_only = FALSE,
-  group_col = NULL
+  group_col = NULL,
+  custom_transcript_id_map = NULL,
+  skip_fasta_filter = FALSE,
+  isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn")
 )
 }
 \arguments{
@@ -105,6 +117,10 @@ run_bulk_pipeline(
 \item{sample_table}{Path to the sample table metadata}
 
 \item{matrix_file}{Path to raw counts file if count_type = 'matrix'}
+
+\item{custom_tx2gene}{Path to a custom transcript-to-gene mapping file (TSV with columns 'tx_id' and 'gene_id')}
+
+\item{custom_gene_map}{Path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')}
 
 \item{level}{Foreground level for contrast}
 
@@ -198,6 +214,18 @@ isoform_report_genes (default: 10)}
 \item{eda_only}{Logical: if TRUE, run only import + EDA (PCA, heatmap) then stop (no DGE or isoform).}
 
 \item{group_col}{Optional column name in metadata for colouring PCA/heatmap when no model is given.}
+
+\item{custom_transcript_id_map}{Path to a TSV/CSV with columns `count_id` and `fasta_id`.
+If provided, transcript IDs in the count matrix are renamed to match the FASTA file
+before any filtering; this resolves ID mismatches between custom references.}
+
+\item{skip_fasta_filter}{Logical: if TRUE, skip the pre‑filtering that keeps only transcripts
+present in the FASTA file; rely on `importRdata()`'s own ID tolerance (e.g. `ignoreAfter*`).
+(Default: FALSE)}
+
+\item{isoform_test_engine}{Which DTU test engine to use in IsoformSwitchAnalyzeR:
+`"DEXSeq"` (default, built‑in), `"DRIMSeq"` (uses pre‑computed results from `run_dtu()`),
+or `"satuRn"` (state‑of‑the‑art method). See `IsoformSwitchAnalyzeR::isoformSwitchTestSatuRn`.}
 }
 \value{
 NULL (invisibly)
@@ -206,7 +234,4 @@ NULL (invisibly)
 Executes the complete bulk RNA-seq pipeline including data import, exploratory
 data analysis, differential expression (DESeq2), functional analysis, and
 optional isoform-level analysis (DTE, DTU, IsoformSwitchAnalyzeR).
-
-Alias for \code{\link{expressom}}, matching the function name used
-throughout README.md.
 }

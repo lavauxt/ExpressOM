@@ -533,6 +533,18 @@ run_dexseq_dtu <- function(
   }
 
   sample_data <- isoform_obj$meta
+
+  # --- Keep only samples belonging to the two conditions of interest ---
+  # (mirrors run_dtu(); without this, samples from any OTHER condition level
+  # get an NA 'condition' factor below -- since factor() only knows about
+  # c(base, level) -- and DEXSeqDataSet() then aborts with "variables in
+  # design formula cannot contain NA: condition")
+  keep_samples <- sample_data[[condition]] %in% c(base, level)
+  if (sum(keep_samples) < 2) {
+    stop("Fewer than 2 samples available for comparison. Need at least one sample in each condition.")
+  }
+  sample_data <- sample_data[keep_samples, , drop = FALSE]
+  counts <- counts[, rownames(sample_data), drop = FALSE]
   sample_data$condition <- factor(sample_data[[condition]], levels = c(base, level))
 
   num_samples <- ncol(counts)
@@ -1004,16 +1016,73 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
     if (!"package:dplyr" %in% search()) attachNamespace("dplyr")
 
+    # ---- Sanity-check the fasta/gtf/count-matrix triplet BEFORE importRdata ----
+    # importRdata()'s own error message for a scale mismatch here (a Jaccard
+    # similarity check) is accurate but easy to misdiagnose as an ID-format
+    # problem. Surface the same information earlier, in terms of the actual
+    # input files, so a genuinely mismatched reference (e.g. a stale/different
+    # SQANTI3 run) is obvious immediately rather than after minutes of DTU
+    # fitting.
+    .count_fasta_entries <- function(path) {
+      tryCatch(length(Biostrings::fasta.seqlengths(path)), error = function(e) NA_integer_)
+    }
+    .count_gtf_transcripts <- function(path) {
+      # Streamed line-by-line count of GTF "transcript" feature rows (column
+      # 3) -- avoids loading a potentially very large (multi-GB, hundreds of
+      # thousands of transcripts) GTF entirely into memory just to count it.
+      tryCatch({
+        con <- file(path, open = "rt")
+        on.exit(close(con), add = TRUE)
+        n <- 0L
+        repeat {
+          lines <- readLines(con, n = 200000L, warn = FALSE)
+          if (length(lines) == 0L) break
+          n <- n + sum(grepl("\ttranscript\t", lines, fixed = TRUE))
+        }
+        if (n == 0L) NA_integer_ else n
+      }, error = function(e) NA_integer_)
+    }
+    n_fasta <- .count_fasta_entries(fasta_file[1])
+    n_gtf   <- .count_gtf_transcripts(gff_file)
+    n_count <- nrow(isoform_count_matrix)
+    if (!is.na(n_fasta) && !is.na(n_gtf) && n_fasta > 0 && n_gtf > 0) {
+      ratio <- min(n_fasta, n_gtf) / max(n_fasta, n_gtf)
+      if (ratio < 0.5) {
+        warning(
+          "isoform_fasta and isoform_gff look like they describe very different ",
+          "transcript sets (", n_fasta, " fasta sequences vs. ", n_gtf, " GTF transcripts; ",
+          "count matrix after filtering has ", n_count, " transcripts). importRdata() will ",
+          "likely fail its Jaccard-similarity check below. This almost always means the ",
+          "fasta/gtf pair (and/or the tx2gene/count matrix) were built from different ",
+          "pipeline runs -- e.g. a stale SQANTI3 output next to a newer one. Verify with, ",
+          "e.g., `grep -c '^>' isoform_fasta` vs. `grep -c $'\\ttranscript\\t' isoform_gff`, ",
+          "and make sure both come from the SAME sqanti3_rescue run as the kallisto/salmon ",
+          "quantification tx2gene was built from.",
+          immediate. = TRUE
+        )
+      }
+    }
+
     # ---- importRdata ----
+    # ignoreAfterBar/Space/Period = TRUE: the count-matrix side has already
+    # been cleaned via clean_id()/strip_ensembl_version() above, but the raw
+    # fasta_file/gff_file have not -- GENCODE-style headers commonly carry
+    # '|'-delimited fields and/or trailing space-separated descriptions, and
+    # Ensembl-style IDs carry '.<version>' suffixes. Without this tolerance on
+    # importRdata()'s side, those raw IDs won't match the already-cleaned
+    # count matrix even when they refer to the same transcripts. (This does
+    # NOT paper over a genuine reference mismatch like the one checked above --
+    # it only normalizes formatting differences for IDs that already refer to
+    # the same underlying transcripts.)
     switch_list <- IsoformSwitchAnalyzeR::importRdata(
       isoformCountMatrix   = isoform_count_matrix,
       isoformRepExpression = isoform_count_matrix,
       designMatrix         = design_matrix,
       isoformExonAnnoation = gff_file,
       isoformNtFasta       = fasta_file,
-      ignoreAfterBar       = FALSE,
-      ignoreAfterSpace     = FALSE,
-      ignoreAfterPeriod    = FALSE,
+      ignoreAfterBar       = TRUE,
+      ignoreAfterSpace     = TRUE,
+      ignoreAfterPeriod    = TRUE,
       showProgress         = TRUE
     )
     # ========================================================================
@@ -2376,244 +2445,71 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
     }
   }
   
-  # ---- 4. Create R Markdown report using absolute paths for CSV files ----
-  rmd_file <- tempfile(fileext = ".Rmd")
-  on.exit(unlink(rmd_file), add = TRUE)
-  
+  # ---- 4. Render the HTML report -------------------------------------
+  # The report is a bundled, parameterized template (inst/rmd/dte_dtu_report.Rmd)
+  # rather than an Rmd string built line-by-line here -- see
+  # .expressom_rmd_path() / .render_placeholder_template() in utils_core.R for
+  # the small sibling template used by the DGE RegionReport step.
   dte_abs_path <- normalizePath(file.path(report_dir, "DTE_results_annotated.csv"), winslash = "/")
   dtu_abs_path <- normalizePath(file.path(report_dir, "DTU_results_annotated.csv"), winslash = "/")
-  if (has_dexseq) {
-    dexseq_abs_path <- normalizePath(file.path(report_dir, "DEXSeq_results_annotated.csv"), winslash = "/")
-  }
-  
-  rmd_lines <- c(
-    "---",
-    paste0("title: \"DTE/DTU Analysis Report (", level, " vs ", base, ")\""),
-    "author: \"ExpressOM\"",
-    paste0("date: \"`r Sys.Date()`\""),
-    "output:",
-    "  html_document:",
-    "    toc: true",
-    "    toc_depth: 2",
-    "    theme: flatly",
-    "    highlight: tango",
-    "---",
-    "",
-    "```{r setup, include=FALSE}",
-    "knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)",
-    "library(DT)",
-    "library(ggplot2)",
-    "```",
-    "",
-    "## Overview",
-    "",
-    paste0("- **Comparison**: ", level, " vs ", base),
-    paste0("- **Date**: `r Sys.time()`"),
-    paste0("- **Top N shown**: ", top_n),
-    paste0("- **Genes of interest**: ", paste(genes_of_interest, collapse = ", ")),
-    "",
-    "## DTE Results (Differential Transcript Expression)",
-    "",
-    "### Volcano Plot",
-    "```{r volcano, echo=FALSE, fig.cap='Volcano plot', eval=file.exists('plots/DTE_volcano.pdf')}",
-    "knitr::include_graphics('plots/DTE_volcano.pdf')",
-    "```",
-    "",
-    "### MA Plot",
-    "```{r ma, echo=FALSE, fig.cap='MA plot', eval=file.exists('plots/DTE_MA.pdf')}",
-    "knitr::include_graphics('plots/DTE_MA.pdf')",
-    "```",
-    "",
-    "### Top Significant Transcripts",
-    "```{r topbar, echo=FALSE, fig.cap='Top DE transcripts', eval=file.exists('plots/DTE_top_barplot.pdf')}",
-    "knitr::include_graphics('plots/DTE_top_barplot.pdf')",
-    "```",
-    "",
-    "### Interactive Table (top 1000 by padj)",
-    "```{r dt_dte}",
-    paste0("dte_data <- read.csv(\"", dte_abs_path, "\", check.names = FALSE)"),
-    "dte_data <- dte_data[order(dte_data$padj), ][1:min(1000, nrow(dte_data)), ]",
-    "DT::datatable(dte_data, filter = \"top\", options = list(scrollX = TRUE))",
-    "```",
-    "",
-    "## DTU Results (Differential Transcript Usage)",
-    "",
-    "### P-value Distribution",
-    "```{r dtu_hist, echo=FALSE, fig.cap='DTU p-value histogram', eval=file.exists('plots/DTU_pvalue_hist.pdf')}",
-    "knitr::include_graphics('plots/DTU_pvalue_hist.pdf')",
-    "```",
-    "",
-    "### Interactive Table",
-    "```{r dt_dtu}",
-    paste0("dtu_data <- read.csv(\"", dtu_abs_path, "\", check.names = FALSE)"),
-    "DT::datatable(dtu_data, filter = \"top\", options = list(scrollX = TRUE))",
-    "```"
-  )
-
-  # ---- DEXSeq section (only if the complementary engine was run) ----
-  if (has_dexseq) {
-    rmd_lines <- c(rmd_lines,
-      "",
-      "## DEXSeq Results (Differential Transcript/Exon Usage)",
-      "",
-      paste0("DEXSeq treats each transcript as an \"exonic bin\" within its parent gene and ",
-             "tests for differential usage independently of the DRIMSeq-based DTU test above; ",
-             "the two are commonly compared as a cross-validation of DTU calls."),
-      "",
-      "### Interactive Table",
-      "```{r dt_dexseq}",
-      paste0("dexseq_data <- read.csv(\"", dexseq_abs_path, "\", check.names = FALSE)"),
-      "dexseq_data <- dexseq_data[order(dexseq_data$padj), ]",
-      "DT::datatable(dexseq_data, filter = \"top\", options = list(scrollX = TRUE))",
-      "```"
-    )
-  }
-
-  # ---- Isoform Switch Overview section (only if switch_list was supplied) ----
-  if (has_switch) {
-    rmd_lines <- c(rmd_lines, "", "## Isoform Switch Overview", "")
-
-    if (file.exists(file.path(plot_dir, "IsoformSwitch_overview.pdf"))) {
-      rmd_lines <- c(rmd_lines,
-        "### dIF vs. Isoform Switch Significance",
-        "```{r sw_overview, echo=FALSE, fig.cap='Isoform Switch Overview', eval=file.exists('plots/IsoformSwitch_overview.pdf')}",
-        "knitr::include_graphics('plots/IsoformSwitch_overview.pdf')",
-        "```",
-        ""
-      )
-    }
-
-    # Genome-wide functional-consequence and alternative-splicing summaries
-    # (extractConsequenceSummary / extractConsequenceEnrichment /
-    # extractSplicingSummary / extractSplicingEnrichment). Each is optional --
-    # generated only if the corresponding PDF exists, since some can be
-    # legitimately skipped for small/uniform datasets (see safe_run() calls
-    # above).
-    genome_wide_figs <- list(
-      list(file = "ConsequenceSummary.pdf",    title = "Functional Consequences (Summary)",
-           chunk = "cons_summary",
-           cap   = "Genome-wide summary of functional consequences of isoform switching"),
-      list(file = "ConsequenceEnrichment.pdf", title = "Functional Consequences (Enrichment)",
-           chunk = "cons_enrichment",
-           cap   = "Enrichment of gain vs. loss for each functional consequence"),
-      list(file = "SplicingSummary.pdf",       title = "Alternative Splicing (Summary)",
-           chunk = "splice_summary",
-           cap   = "Genome-wide summary of alternative splicing event types"),
-      list(file = "SplicingEnrichment.pdf",    title = "Alternative Splicing (Enrichment)",
-           chunk = "splice_enrichment",
-           cap   = "Enrichment of gain vs. loss for each alternative splicing event type")
-    )
-    any_genome_wide <- any(vapply(genome_wide_figs, function(f) file.exists(file.path(plot_dir, f$file)), logical(1)))
-    if (any_genome_wide) {
-      rmd_lines <- c(rmd_lines, "### Genome-wide Functional Consequences & Alternative Splicing", "")
-      for (f in genome_wide_figs) {
-        if (file.exists(file.path(plot_dir, f$file))) {
-          rel_path <- file.path("plots", f$file)
-          rmd_lines <- c(rmd_lines,
-            paste0("#### ", f$title),
-            paste0("```{r ", f$chunk, ", echo=FALSE, fig.cap='", f$cap, "', eval=file.exists('", rel_path, "')}"),
-            paste0("knitr::include_graphics('", rel_path, "')"),
-            "```",
-            ""
-          )
-        }
-      }
-    }
-
-    top_switch_dir <- file.path(plot_dir, "top_switches")
-    if (dir.exists(top_switch_dir)) {
-      top_switch_files <- list.files(top_switch_dir, pattern = "\\.pdf$", recursive = TRUE)
-      if (length(top_switch_files) > 0) {
-        rmd_lines <- c(rmd_lines, paste0("### Top ", switch_plot_top_n, " Isoform Switches"), "")
-        for (fn in top_switch_files) {
-          rel_path <- file.path("plots", "top_switches", fn)
-          fig_label <- tools::file_path_sans_ext(basename(fn))
-          rmd_lines <- c(rmd_lines,
-            paste0("#### ", fig_label),
-            paste0("```{r echo=FALSE, eval=file.exists('", rel_path, "')}"),
-            paste0("knitr::include_graphics('", rel_path, "')"),
-            "```",
-            ""
-          )
-        }
-      }
-    }
-  }
-
-  rmd_lines <- c(rmd_lines, "", "## Gene\u2011specific Plots")
-  
-  # Add gene-specific sections if requested, including any of the enhanced
-  # isoform-level visualizations that were successfully generated for that gene
-  if (!is.null(genes_of_interest) && length(genes_of_interest) > 0) {
-    for (g in genes_of_interest) {
-      gene_section_lines <- character(0)
-
-      if (file.exists(file.path(plot_dir, paste0("proportions_", g, ".pdf")))) {
-        gene_section_lines <- c(gene_section_lines,
-          "**Transcript proportions**", "",
-          paste0("```{r eval=file.exists('plots/proportions_", g, ".pdf')}"),
-          paste0("knitr::include_graphics('plots/proportions_", g, ".pdf')"),
-          "```", "")
-      }
-      if (file.exists(file.path(plot_dir, paste0("DEXSeq_", g, ".pdf")))) {
-        gene_section_lines <- c(gene_section_lines,
-          "**DEXSeq transcript usage**", "",
-          paste0("```{r eval=file.exists('plots/DEXSeq_", g, ".pdf')}"),
-          paste0("knitr::include_graphics('plots/DEXSeq_", g, ".pdf')"),
-          "```", "")
-      }
-      if (file.exists(file.path(plot_dir, paste0("SwitchPlot_", g, ".pdf")))) {
-        gene_section_lines <- c(gene_section_lines,
-          "**Isoform switch summary (structure, expression, usage)**", "",
-          paste0("```{r eval=file.exists('plots/SwitchPlot_", g, ".pdf')}"),
-          paste0("knitr::include_graphics('plots/SwitchPlot_", g, ".pdf')"),
-          "```", "")
-      }
-      if (file.exists(file.path(plot_dir, paste0("Sashimi_", g, ".pdf")))) {
-        gene_section_lines <- c(gene_section_lines,
-          "**Sashimi-style junction usage**", "",
-          paste0("```{r eval=file.exists('plots/Sashimi_", g, ".pdf')}"),
-          paste0("knitr::include_graphics('plots/Sashimi_", g, ".pdf')"),
-          "```", "")
-      }
-      if (file.exists(file.path(plot_dir, paste0("ExonUsage_", g, ".pdf")))) {
-        gene_section_lines <- c(gene_section_lines,
-          "**Exon-bin usage comparison**", "",
-          paste0("```{r eval=file.exists('plots/ExonUsage_", g, ".pdf')}"),
-          paste0("knitr::include_graphics('plots/ExonUsage_", g, ".pdf')"),
-          "```", "")
-      }
-
-      if (length(gene_section_lines) > 0) {
-        rmd_lines <- c(rmd_lines, paste0("\n### ", g), gene_section_lines)
-      }
-    }
+  dexseq_abs_path <- if (has_dexseq) {
+    normalizePath(file.path(report_dir, "DEXSeq_results_annotated.csv"), winslash = "/")
   } else {
-    rmd_lines <- c(rmd_lines, "\nNo custom genes requested.")
+    NULL
   }
-  
+
+  # Convert every report plot from PDF to PNG up front (browsers can't
+  # render a PDF through an <img> tag); the template's .fig() helper picks
+  # the .png if present and falls back to .pdf otherwise.
   plot_pdfs <- list.files(plot_dir, pattern = "\\.pdf$", recursive = TRUE, full.names = TRUE)
   converted_any <- FALSE
   for (pdf_path in plot_pdfs) {
     if (!is.null(convert_pdf_to_png(pdf_path))) converted_any <- TRUE
   }
-  if (converted_any) {
-    rmd_lines <- gsub("\\.pdf'", ".png'", rmd_lines)
-  } else if (length(plot_pdfs) > 0) {
+  if (!converted_any && length(plot_pdfs) > 0) {
     warning("Could not convert any report plots to PNG (see preceding warnings); ",
             "figures in report.html may not render since browsers cannot display ",
             "PDF files through an <img> tag. Install 'pdftools' to fix this.")
   }
 
+  rmd_file <- tempfile(fileext = ".Rmd")
+  on.exit(unlink(rmd_file), add = TRUE)
+  file.copy(.expressom_rmd_path("dte_dtu_report.Rmd"), rmd_file, overwrite = TRUE)
 
-  writeLines(rmd_lines, rmd_file)
+  rmarkdown::render(
+    rmd_file,
+    output_file  = "report.html",
+    output_dir   = report_dir,
+    quiet        = TRUE,
+    # IMPORTANT: rmarkdown::render()'s default knit working directory is the
+    # directory of the *input* .Rmd file -- since rmd_file is a tempfile()
+    # (not inside report_dir), leaving this unset means every relative path
+    # used inside the template (e.g. "plots/DTE_volcano.pdf") would resolve
+    # against the wrong directory and silently fail its file.exists() guard,
+    # so every figure would be skipped even though it was generated
+    # correctly on disk. Pinning knit_root_dir to report_dir is what makes
+    # the template's relative "plots/..." paths actually resolve.
+    knit_root_dir = normalizePath(report_dir, winslash = "/"),
+    envir        = new.env(parent = globalenv()),
+    params = list(
+      level              = level,
+      base               = base,
+      top_n              = top_n,
+      genes_of_interest  = genes_of_interest,
+      dte_csv            = dte_abs_path,
+      dtu_csv            = dtu_abs_path,
+      dexseq_csv         = dexseq_abs_path,
+      has_dexseq         = has_dexseq,
+      has_switch         = has_switch,
+      plot_dir           = normalizePath(plot_dir, winslash = "/"),
+      switch_plot_top_n  = switch_plot_top_n
+    )
+  )
 
-  rmarkdown::render(rmd_file, output_file = "report.html", output_dir = report_dir, quiet = TRUE)
-  
   # Free large objects after report generation
   rm(dte, dtu, dte_sig, dte_ma, dte_filtered, top_dte)
   gc()
-  
+
   message("DTE/DTU report generated in: ", report_dir)
   invisible(NULL)
 }

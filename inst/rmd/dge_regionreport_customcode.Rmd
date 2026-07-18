@@ -1,0 +1,36 @@
+<!--
+  Custom-code child fragment inserted into regionReport::DESeq2Report()'s
+  auto-generated report via the `customCode` argument (see the DGE block in
+  main.R). This used to be built line-by-line in R with writeLines()/paste0();
+  it is now a plain template with {{PLACEHOLDER}} tokens substituted at
+  runtime, which is both easier to read and easier to keep in sync with the
+  rest of the report styling.
+
+  Placeholders (all relative to `report_dir`, already repointed at a .png if
+  pdftools successfully converted the source .pdf -- see main.R):
+    {{PCA_FILE}}       - PCA plot (original)
+    {{PCA_CORR_FILE}}  - PCA plot (batch-corrected via limma), optional
+    {{HEATMAP_FILE}}   - Sample correlation heatmap
+    {{VOLCANO_FILE}}   - Volcano plot
+    {{MA_FILE}}        - MA plot (shrunken)
+-->
+
+```{r pca_orig, echo=FALSE, fig.cap='PCA plot (Original)', eval=file.exists('{{PCA_FILE}}')}
+  knitr::include_graphics('{{PCA_FILE}}')
+```
+
+```{r pca_corr, echo=FALSE, fig.cap='PCA plot (Batch Corrected via limma)', eval=file.exists('{{PCA_CORR_FILE}}')}
+  if (file.exists('{{PCA_CORR_FILE}}')) knitr::include_graphics('{{PCA_CORR_FILE}}')
+```
+
+```{r heatmap, echo=FALSE, fig.cap='Sample Correlation Heatmap', eval=file.exists('{{HEATMAP_FILE}}')}
+  knitr::include_graphics('{{HEATMAP_FILE}}')
+```
+
+```{r volcano, echo=FALSE, fig.cap='Volcano plot', eval=file.exists('{{VOLCANO_FILE}}')}
+  knitr::include_graphics('{{VOLCANO_FILE}}')
+```
+
+```{r maplot, echo=FALSE, fig.cap='MA plot (shrunken)', eval=file.exists('{{MA_FILE}}')}
+  knitr::include_graphics('{{MA_FILE}}')
+```

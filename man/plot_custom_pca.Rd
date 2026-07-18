@@ -10,7 +10,9 @@ plot_custom_pca(
   batch = NULL,
   title = "PCA",
   ellipse = TRUE,
-  return_plot = TRUE
+  return_plot = TRUE,
+  ntop = NULL,
+  return_gene_list = FALSE
 )
 }
 \arguments{
@@ -25,6 +27,10 @@ plot_custom_pca(
 \item{ellipse}{Logical, whether to add 95% confidence ellipses}
 
 \item{return_plot}{If TRUE, returns ggplot object; otherwise prints}
+
+\item{ntop}{Number of top variable genes to use for PCA (NULL = all genes)}
+
+\item{return_gene_list}{If TRUE, return a list with plot and gene_info; otherwise only the plot}
 }
 \description{
 Custom PCA Plot (ggplot2, fully customisable)

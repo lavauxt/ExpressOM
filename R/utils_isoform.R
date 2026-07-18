@@ -454,6 +454,15 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
   }
 
   # 3. Required tools (CPAT, SignalP, hmmscan, interproscan.sh)
+  #
+  # NOTE: "cpat"/"run_cpat.py" (CPAT3 vs CPAT2) and "signalp6"/"signalp"
+  # (SignalP v6 vs v5) are ALTERNATIVE binaries for the same underlying tool,
+  # not independent requirements -- .run_external_predictors() already treats
+  # them that way (`has_cpat3 || has_cpat2`). Each binary is still probed and
+  # recorded individually in results$tools (useful raw detail in the JSON
+  # log), but an "issue" is only reported if NEITHER alternative was found,
+  # so a working CPAT3-only or SignalP-v6-only install doesn't get flagged as
+  # broken just because the *other* generation's binary is absent.
   tools_list <- c("cpat", "run_cpat.py", "signalp6", "signalp", "hmmscan", "interproscan.sh")
   for (tool in tools_list) {
     found <- .wsl_tool_exists(tool, wsl_distro = distro, use_wsl = via_wsl,
@@ -464,8 +473,17 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
     }
     results$tools[[tool]] <- found
     if (verbose) message("  ", if (found) "\u2713" else "\u2717", " ", tool)
-    if (!found && tool %in% c("cpat", "run_cpat.py", "signalp6", "signalp", "hmmscan")) {
-      results$errors <- c(results$errors, paste0("Missing tool: ", tool))
+  }
+
+  tool_alternatives <- list(
+    "CPAT (cpat / run_cpat.py)"      = c("cpat", "run_cpat.py"),
+    "SignalP (signalp6 / signalp)"   = c("signalp6", "signalp"),
+    "hmmscan"                        = c("hmmscan")
+  )
+  for (label in names(tool_alternatives)) {
+    alts <- tool_alternatives[[label]]
+    if (!any(unlist(results$tools[alts]))) {
+      results$errors <- c(results$errors, paste0("Missing tool: ", label))
     }
   }
 

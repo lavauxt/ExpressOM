@@ -336,28 +336,19 @@ expressom <- function(count_type        = "salmon",
         }
       }
 
-      custom_script <- tempfile(fileext = ".Rmd")
-      writeLines(c(
-        paste0("```{r pca_orig, echo=FALSE, fig.cap='PCA plot (Original)', eval=file.exists('", pca_file, "')}"),
-        paste0("  knitr::include_graphics('", pca_file, "')"),
-        "```",
-        "",
-        paste0("```{r pca_corr, echo=FALSE, fig.cap='PCA plot (Batch Corrected via limma)', eval=file.exists('", pca_corr_file, "')}"),
-        paste0("  if (file.exists('", pca_corr_file, "')) knitr::include_graphics('", pca_corr_file, "')"),
-        "```",
-        "",
-        paste0("```{r heatmap, echo=FALSE, fig.cap='Sample Correlation Heatmap', eval=file.exists('", heatmap_file, "')}"),
-        paste0("  knitr::include_graphics('", heatmap_file, "')"),
-        "```",
-        "",
-        paste0("```{r volcano, echo=FALSE, fig.cap='Volcano plot', eval=file.exists('", volcano_file, "')}"),
-        paste0("  knitr::include_graphics('", volcano_file, "')"),
-        "```",
-        "",
-        paste0("```{r maplot, echo=FALSE, fig.cap='MA plot (shrunken)', eval=file.exists('", ma_file, "')}"),
-        paste0("  knitr::include_graphics('", ma_file, "')"),
-        "```"
-      ), custom_script)
+      # Rmd fragment lives in inst/rmd/dge_regionreport_customcode.Rmd (see
+      # .render_placeholder_template() in utils_core.R) rather than being
+      # built line-by-line here with writeLines()/paste0().
+      custom_script <- .render_placeholder_template(
+        "dge_regionreport_customcode.Rmd",
+        values = list(
+          PCA_FILE      = pca_file,
+          PCA_CORR_FILE = pca_corr_file,
+          HEATMAP_FILE  = heatmap_file,
+          VOLCANO_FILE  = volcano_file,
+          MA_FILE       = ma_file
+        )
+      )
 
       if (requireNamespace("regionReport", quietly = TRUE)) {
         regionReport::DESeq2Report(

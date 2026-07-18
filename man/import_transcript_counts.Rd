@@ -11,7 +11,9 @@ import_transcript_counts(
   count_type = "salmon",
   matrix_file = NULL,
   subset_sample = NULL,
-  remove_sample = NULL
+  remove_sample = NULL,
+  custom_tx2gene = NULL,
+  custom_gene_map = NULL
 )
 }
 \arguments{
@@ -28,6 +30,10 @@ import_transcript_counts(
 \item{subset_sample}{Optional filter expression}
 
 \item{remove_sample}{Optional sample IDs to exclude}
+
+\item{custom_tx2gene}{Optional path to a custom tx2gene file (TSV with columns 'tx_id' and 'gene_id')}
+
+\item{custom_gene_map}{Optional path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')}
 }
 \value{
 List with txi (transcript counts), meta, tx2gene, gene_map

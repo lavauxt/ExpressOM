@@ -2,27 +2,48 @@
 % Please edit documentation in R/mod_functional.R
 \name{run_local_enrichment}
 \alias{run_local_enrichment}
-\title{Run local enrichment analysis (replaces EnrichR)}
+\title{Run local MSigDB-based enrichment analysis (offline fallback for EnrichR)}
 \usage{
 run_local_enrichment(
   gene_list,
   universe,
   organism = "Homo sapiens",
-  category = "C3"
+  collection = "C3",
+  subcategory = NULL,
+  pvalue_cutoff = 0.05,
+  qvalue_cutoff = 0.2
 )
 }
 \arguments{
-\item{gene_list}{Vector of Significant Gene Symbols (e.g., DEGs)}
+\item{gene_list}{Vector of significant gene symbols (e.g. DEGs)}
 
-\item{universe}{Vector of ALL genes expressed in the experiment (Background)}
+\item{universe}{Vector of ALL genes expressed in the experiment (background)}
 
-\item{organism}{"Homo sapiens" or "Mus musculus"}
+\item{organism}{"Homo sapiens" or "Mus musculus" (passed to \code{msigdbr::msigdbr(species=)})}
 
-\item{category}{"H" (Hallmark), "C3" (TFT/ChIP-seq targets), or "C5" (GO)}
+\item{collection}{MSigDB collection, e.g. "H" (Hallmark), "C3" (motif/TFT targets), "C5" (GO)}
+
+\item{subcategory}{Optional MSigDB subcategory within \code{collection}
+(e.g. "TFT" within "C3"). If fetching with the subcategory fails or
+returns no gene sets, silently falls back to the full collection.}
+
+\item{pvalue_cutoff, qvalue_cutoff}{Passed to \code{clusterProfiler::enricher()}}
 }
 \value{
-A clusterProfiler result object
+A clusterProfiler \code{enrichResult} object, or \code{NULL} if no
+  gene sets were available for the requested collection/organism
 }
 \description{
-Run local enrichment analysis (replaces EnrichR)
+Single source of truth for "gene set overrepresentation via msigdbr +
+clusterProfiler::enricher()". Used both as a standalone export and as the
+offline TF-enrichment fallback inside \code{run_functional_analysis()}
+when the EnrichR API is unreachable.
+}
+\details{
+(Previously this existed as two independently-maintained, drifting copies:
+this exported function, unused anywhere in the package, still called
+\code{msigdbr::msigdbr(category = ...)}; the inline copy that actually ran
+in \code{run_functional_analysis()} had already moved to msigdbr's current
+\code{collection}/\code{subcategory} argument names. Consolidated here so
+there's one implementation to fix if msigdbr's API changes again.)
 }

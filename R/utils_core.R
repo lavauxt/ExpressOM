@@ -131,6 +131,56 @@ safe_run <- function(expr, label = "") {
   })
 }
 
+#' Locate a bundled template/Rmd file under inst/rmd/
+#'
+#' Thin wrapper around \code{system.file()} with a development-mode fallback,
+#' so templates resolve correctly both for an installed package and under
+#' \code{devtools::load_all()} (which normally shims \code{system.file()} to
+#' find \code{inst/} already, but this keeps things working even if invoked
+#' in a context where that shim isn't active -- the same class of bug noted
+#' for the SPARKS report templates: "not bundled post-install").
+#'
+#' @param filename Filename under \code{inst/rmd/} (e.g. \code{"dte_dtu_report.Rmd"})
+#' @return Absolute path to the template file
+#' @keywords internal
+.expressom_rmd_path <- function(filename) {
+  p <- system.file("rmd", filename, package = "ExpressOM")
+  if (!nzchar(p)) {
+    p <- file.path("inst", "rmd", filename)
+  }
+  if (!file.exists(p)) {
+    stop("Could not locate bundled template 'inst/rmd/", filename, "'. ",
+         "If running from a development checkout, make sure the working ",
+         "directory is the package root, or reinstall the package so ",
+         "inst/rmd/ is bundled.")
+  }
+  p
+}
+
+#' Render a {{PLACEHOLDER}}-style template to a temp file with values substituted
+#'
+#' Used for small Rmd fragments (e.g. regionReport's \code{customCode}
+#' argument) that need simple string substitution rather than a full
+#' \code{rmarkdown::render(params = ...)} pass.
+#'
+#' @param template_file Filename under \code{inst/rmd/}
+#' @param values Named list/character vector; each name's \code{{{NAME}}}
+#'   token in the template is replaced with its (character-coerced) value
+#' @param fileext File extension for the returned temp file (default ".Rmd")
+#' @return Path to a temp file containing the substituted content. Caller is
+#'   responsible for \code{unlink()}-ing it when done.
+#' @keywords internal
+.render_placeholder_template <- function(template_file, values, fileext = ".Rmd") {
+  txt <- readLines(.expressom_rmd_path(template_file), warn = FALSE)
+  txt <- paste(txt, collapse = "\n")
+  for (nm in names(values)) {
+    txt <- gsub(paste0("{{", nm, "}}"), as.character(values[[nm]]), txt, fixed = TRUE)
+  }
+  out <- tempfile(fileext = fileext)
+  writeLines(txt, out)
+  out
+}
+
 #' Load an OrgDb annotation package by name (e.g. "org.Hs.eg.db")
 #' @keywords internal
 .load_org_db <- function(org_db_name) {

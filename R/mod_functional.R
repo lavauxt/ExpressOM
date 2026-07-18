@@ -159,14 +159,40 @@
   for (pid in kegg_ids) {
     safe_run({
       withr::with_dir(dir_kegg, {
-        pathview::pathview(
-          gene.data  = gene_data,
-          pathway.id = pid,
-          species    = kegg_code,
-          gene.idtype = "KEGG",        # entrez  or KEGG ?
-          limit      = list(gene = 2, cpd = 1),
-          kegg.dir   = "."
+        # gene.idtype = "entrez": gene_data's names are NCBI Entrez Gene IDs
+        # (see all_lfc_vector in run_functional_analysis()). This is the
+        # explicit, best-tested pathview default and is *correct* --not just
+        # "usually equivalent"-- for every organism this package currently
+        # supports (human/mouse/rat all have entrez.gnodes = 1 in pathview's
+        # own species table, i.e. their native KEGG gene ID IS the Entrez
+        # Gene ID). Using "entrez" explicitly rather than "KEGG" removes any
+        # ambiguity and matches pathview's own documented recommendation
+        # (gene.idtype = "KEGG" is only needed for organisms where the two ID
+        # systems diverge, e.g. plants/bacteria using locus tags).
+        pv_out <- pathview::pathview(
+          gene.data   = gene_data,
+          pathway.id  = pid,
+          species     = kegg_code,
+          gene.idtype = "entrez",
+          limit       = list(gene = 2, cpd = 1),
+          kegg.dir    = "."
         )
+        # pathview()'s own return value tells us exactly how many of this
+        # pathway's genes actually had data to color -- surfacing that here
+        # turns a silently-blank/gray diagram into a diagnosable message
+        # instead of something that only shows up on visual inspection of
+        # the PNG.
+        gd <- tryCatch(pv_out$plot.data.gene, error = function(e) NULL)
+        if (!is.null(gd) && nrow(gd) > 0) {
+          n_matched <- sum(!is.na(gd$mol.data))
+          message("   -> ", pid, ": ", n_matched, "/", nrow(gd),
+                  " pathway genes had expression data to color.")
+          if (n_matched == 0) {
+            message("      (0 matched -- check that gene_data's Entrez IDs actually cover ",
+                    "this pathway's genes; a custom/SQANTI3-derived gene_map with many novel ",
+                    "loci can leave canonical pathway genes without a valid Entrez ID.)")
+          }
+        }
         # Remove intermediate files (optional)
         for (ext in c(".xml", ".png")) {
           f <- paste0(pid, ext)
@@ -342,45 +368,31 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
       message("      EnrichR API unreachable; falling back to local TF enrichment using MSigDB C3 (TFT).")
       msig_org <- org_info$msig_org
       message("      Using MSigDB C3 (TFT) for ", msig_org)
-      
-      m_t2g <- tryCatch({
-        msigdbr::msigdbr(species = msig_org, collection = "C3", subcategory = "TFT") %>%
-          dplyr::select(gs_name, gene_symbol)
-      }, error = function(e) {
-        message("      C3 TFT subcategory not available; using full C3 collection.")
-        msigdbr::msigdbr(species = msig_org, collection = "C3") %>%
-          dplyr::select(gs_name, gene_symbol)
-      })
-      
-      if (nrow(m_t2g) > 0) {
-        term2gene <- data.frame(term = m_t2g$gs_name, gene = m_t2g$gene_symbol, stringsAsFactors = FALSE)
-        local_res <- tryCatch({
-          clusterProfiler::enricher(
-            gene = sigOE_genes,
-            universe = allOE_genes,
-            TERM2GENE = term2gene,
-            pvalueCutoff = go_pvalue_cutoff,
-            qvalueCutoff = go_qvalue_cutoff
-          )
-        }, error = function(e) {
-          message("      Local TF enrichment failed: ", e$message)
-          NULL
-        })
-        
-        if (!is.null(local_res) && nrow(as.data.frame(local_res)) > 0) {
-          dir_tf <- safe_dir(file.path(out_dir, "Transcription_Factors"))
-          write.csv(as.data.frame(local_res), file.path(dir_tf, paste0("Local_TF_Enrichment_C3_", comp_name, ".csv")), row.names = FALSE)
-          message("      Local TF enrichment completed with ", nrow(as.data.frame(local_res)), " terms.")
-          if (nrow(local_res@result) > 5) {
-            safe_pdf(file.path(dir_tf, paste0("Local_TF_Dotplot_", comp_name, ".pdf")),
-                     width = 12, height = 10,
-                     expr = print(enrichplot::dotplot(local_res, showCategory = 20, label_format = 50)))
-          }
-        } else {
-          message("      No significant TF enrichment found locally.")
+
+      local_res <- safe_run(
+        run_local_enrichment(
+          gene_list     = sigOE_genes,
+          universe      = allOE_genes,
+          organism      = msig_org,
+          collection    = "C3",
+          subcategory   = "TFT",
+          pvalue_cutoff = go_pvalue_cutoff,
+          qvalue_cutoff = go_qvalue_cutoff
+        ),
+        label = "Local TF enrichment"
+      )
+
+      if (!is.null(local_res) && nrow(as.data.frame(local_res)) > 0) {
+        dir_tf <- safe_dir(file.path(out_dir, "Transcription_Factors"))
+        write.csv(as.data.frame(local_res), file.path(dir_tf, paste0("Local_TF_Enrichment_C3_", comp_name, ".csv")), row.names = FALSE)
+        message("      Local TF enrichment completed with ", nrow(as.data.frame(local_res)), " terms.")
+        if (nrow(local_res@result) > 5) {
+          safe_pdf(file.path(dir_tf, paste0("Local_TF_Dotplot_", comp_name, ".pdf")),
+                   width = 12, height = 10,
+                   expr = print(enrichplot::dotplot(local_res, showCategory = 20, label_format = 50)))
         }
       } else {
-        message("      No gene sets found in MSigDB C3 for organism ", msig_org)
+        message("      No significant TF enrichment found locally.")
       }
     }
   } else {
@@ -868,32 +880,63 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
 # Local enrichment analysis (replaces EnrichR for offline use)
 # ------------------------------------------------------------------------------
 
-#' Run local enrichment analysis (replaces EnrichR)
-#' @param gene_list Vector of Significant Gene Symbols (e.g., DEGs)
-#' @param universe Vector of ALL genes expressed in the experiment (Background)
-#' @param organism "Homo sapiens" or "Mus musculus"
-#' @param category "H" (Hallmark), "C3" (TFT/ChIP-seq targets), or "C5" (GO)
-#' @return A clusterProfiler result object
-run_local_enrichment <- function(gene_list, universe, organism = "Homo sapiens", category = "C3") {
+#' Run local MSigDB-based enrichment analysis (offline fallback for EnrichR)
+#'
+#' Single source of truth for "gene set overrepresentation via msigdbr +
+#' clusterProfiler::enricher()". Used both as a standalone export and as the
+#' offline TF-enrichment fallback inside \code{run_functional_analysis()}
+#' when the EnrichR API is unreachable.
+#'
+#' (Previously this existed as two independently-maintained, drifting copies:
+#' this exported function, unused anywhere in the package, still called
+#' \code{msigdbr::msigdbr(category = ...)}; the inline copy that actually ran
+#' in \code{run_functional_analysis()} had already moved to msigdbr's current
+#' \code{collection}/\code{subcategory} argument names. Consolidated here so
+#' there's one implementation to fix if msigdbr's API changes again.)
+#'
+#' @param gene_list Vector of significant gene symbols (e.g. DEGs)
+#' @param universe Vector of ALL genes expressed in the experiment (background)
+#' @param organism "Homo sapiens" or "Mus musculus" (passed to \code{msigdbr::msigdbr(species=)})
+#' @param collection MSigDB collection, e.g. "H" (Hallmark), "C3" (motif/TFT targets), "C5" (GO)
+#' @param subcategory Optional MSigDB subcategory within \code{collection}
+#'   (e.g. "TFT" within "C3"). If fetching with the subcategory fails or
+#'   returns no gene sets, silently falls back to the full collection.
+#' @param pvalue_cutoff,qvalue_cutoff Passed to \code{clusterProfiler::enricher()}
+#' @return A clusterProfiler \code{enrichResult} object, or \code{NULL} if no
+#'   gene sets were available for the requested collection/organism
+#' @export
+run_local_enrichment <- function(gene_list, universe, organism = "Homo sapiens",
+                                 collection = "C3", subcategory = NULL,
+                                 pvalue_cutoff = 0.05, qvalue_cutoff = 0.2) {
   for (pkg in c("clusterProfiler", "msigdbr")) {
     if (!requireNamespace(pkg, quietly = TRUE))
-      stop("Package '", pkg, "' is required. Install with: install.packages('", pkg, "')")
+      stop("Package '", pkg, "' is required. Install with: BiocManager::install('", pkg, "')")
   }
-  org_pkg <- ifelse(grepl("Homo", organism), "org.Hs.eg.db", "org.Mm.eg.db")
-  if (!requireNamespace(org_pkg, quietly = TRUE)) stop("Please install ", org_pkg)
-  
-  gene_entrez <- clusterProfiler::bitr(gene_list, fromType="SYMBOL", toType="ENTREZID", OrgDb=org_pkg, drop=FALSE)
-  univ_entrez <- clusterProfiler::bitr(universe, fromType="SYMBOL", toType="ENTREZID", OrgDb=org_pkg, drop=FALSE)
-  
-  msigdbr_df <- msigdbr::msigdbr(species = organism, category = category)
-  term2gene <- msigdbr_df[, c("gs_name", "entrez_gene")]
-  
-  res <- clusterProfiler::enricher(
-    gene = na.omit(gene_entrez$ENTREZID),
-    universe = na.omit(univ_entrez$ENTREZID),
-    TERM2GENE = term2gene,
-    pvalueCutoff = 0.05,
-    qvalueCutoff = 0.2
+
+  .fetch <- function(subcat) {
+    args <- list(species = organism, collection = collection)
+    if (!is.null(subcat)) args$subcategory <- subcat
+    do.call(msigdbr::msigdbr, args)
+  }
+
+  m_df <- tryCatch(.fetch(subcategory), error = function(e) NULL)
+  if ((is.null(m_df) || nrow(m_df) == 0) && !is.null(subcategory)) {
+    message("  '", collection, "' subcategory '", subcategory,
+            "' not available; using the full '", collection, "' collection.")
+    m_df <- tryCatch(.fetch(NULL), error = function(e) NULL)
+  }
+  if (is.null(m_df) || nrow(m_df) == 0) {
+    message("  No gene sets found in MSigDB '", collection, "' for organism ", organism)
+    return(NULL)
+  }
+
+  term2gene <- data.frame(term = m_df$gs_name, gene = m_df$gene_symbol, stringsAsFactors = FALSE)
+
+  clusterProfiler::enricher(
+    gene         = gene_list,
+    universe     = universe,
+    TERM2GENE    = term2gene,
+    pvalueCutoff = pvalue_cutoff,
+    qvalueCutoff = qvalue_cutoff
   )
-  return(res)
 }

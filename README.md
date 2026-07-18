@@ -167,6 +167,7 @@ If CPAT, SignalP, or Pfam/hmmscan results are missing after a run with `run_pred
 * **Pfam database found but not indexed.** `hmmscan` requires `Pfam-A.hmm` to be `hmmpress`-indexed (companion `.h3f/.h3i/.h3m/.h3p` files). `debug_wsl()` now checks this specifically and `install_isoform_databases()` performs the indexing itself (activating the `isoform_tools` conda environment first, since `hmmer` lives inside it rather than on the bare WSL PATH).
 * **Custom `CPAT_DATA` / `SIGNALP_DIR` paths not taking effect.** These are now persisted to a dedicated file (`~/.isoform_tools_env.sh`) that every predictor invocation sources, instead of `~/.bashrc` (which is never read by the non-interactive scripts this package runs).
 * **`use_wsl` not defaulting the way you'd expect.** All `use_wsl` parameters across the package now default to `TRUE` on Windows and `FALSE` elsewhere; you only need to pass it explicitly to override that.
+* **`debug_wsl()` reporting a tool as "missing" when it isn't.** `cpat`/`run_cpat.py` (CPAT3 vs. CPAT2) and `signalp6`/`signalp` (SignalP v6 vs. v5) are *alternative* binaries for the same tool, not independent requirements -- having either one is sufficient. `debug_wsl()`'s issue list now reflects that (only flags "Missing tool: CPAT" if *neither* `cpat` nor `run_cpat.py` is found, and likewise for SignalP); the per-binary ✓/✗ detail for both is still shown and still logged to `wsl_debug.json` for reference.
 
 ## Functional Analysis Methods
 
@@ -179,6 +180,19 @@ If CPAT, SignalP, or Pfam/hmmscan results are missing after a run with `run_pred
 | MSigDB (Hallmark)  | `fgsea::fgseaMultilevel`    | GSEA (Native MH/H)  |
 | SPIA               | `SPIA::spia`                | Topology Modeling   |
 | EnrichR TF         | `enrichR::enrichr`          | Fisher's Exact      |
+
+> 💡 **KEGG pathview gene coloring:** `gene.data` passed to `pathview::pathview()`
+> is keyed by Entrez Gene ID with `gene.idtype = "entrez"`, which is correct
+> (not just "usually equivalent") for all three currently-supported organisms
+> (human/mouse/rat all have KEGG-native gene IDs == Entrez Gene IDs). If a
+> generated pathway map looks entirely uncolored, it's a genuine gene-mapping
+> issue rather than a display bug -- check the console/log for the new
+> `"<pathway>: N/M pathway genes had expression data to color"` message that
+> `run_bulk_pipeline()` now prints for every KEGG pathway map, which tells you
+> directly how many of that pathway's genes had a matching Entrez ID in your
+> results. With a custom/SQANTI3-derived `gene_map`, a low match rate usually
+> means many genes are still on novel/unassigned IDs rather than canonical
+> Ensembl gene IDs and haven't been mapped to Entrez yet.
 
 ## Advanced Subgroup Analyses (Subsampling Data)
 
@@ -321,12 +335,97 @@ walkthrough, including troubleshooting and performance notes.
 > normalizes transcript IDs (stripping Ensembl-style version suffixes,
 > GENCODE-style `|`-delimited header fields, and space-separated
 > descriptions) consistently across the count matrix, the FASTA, and the
-> annotation before they're compared, and asks `importRdata()` for the same
-> tolerance (`ignoreAfterBar`/`ignoreAfterSpace`/`ignoreAfterPeriod`). If you
-> still see a "no transcripts match" / near-zero-overlap error with a custom
-> reference, it usually means the FASTA/GTF and the quantification were
-> genuinely built from different transcriptome versions rather than just a
-> naming-convention mismatch.
+> annotation before they're compared, and passes `importRdata()` the same
+> tolerance (`ignoreAfterBar`/`ignoreAfterSpace`/`ignoreAfterPeriod`, always
+> on). It also runs a fast pre-check comparing the number of sequences in
+> `isoform_fasta` against the number of `transcript` rows in `isoform_gff`
+> *before* handing off to `importRdata()`; if the two describe wildly
+> different-sized transcript sets it warns immediately, in terms of your
+> actual input files, rather than letting you wait through DTE/DTU only to
+> hit `importRdata()`'s own (accurate, but easy to misdiagnose) Jaccard
+> similarity error at the very end. If you still see a "no transcripts
+> match" / near-zero-overlap error with a custom reference, it means the
+> FASTA/GTF and the quantification were genuinely built from different
+> pipeline runs or transcriptome versions, not just a naming-convention
+> mismatch -- see the SQANTI3 guide below for the most common way this
+> happens with long-read references.
+
+### Using a Custom SQANTI3 Long-Read Reference
+
+If your `isoform_fasta`/`isoform_gff` come from an upstream SQANTI3-based
+long-read pipeline (e.g. a `sqanti.smk` Snakemake workflow run ahead of
+ExpressOM), `run_isoform_switch()` needs the **fasta, gtf, and
+quantification to all describe literally the same transcript set** --
+this is a hard requirement of `IsoformSwitchAnalyzeR::importRdata()` itself
+("*It is essential that the quantification, the GTF file and the fasta file
+all contain information on the same isoforms*" -- IsoformSwitchAnalyzeR
+vignette), not an ExpressOM-specific constraint.
+
+**Where that triplet comes from in `sqanti.smk`:** the `sqanti3_rescue` rule
+produces `pooled.rescued_rescued.fasta` and `pooled.rescued_rescued.gtf`
+together, in lockstep, from the same input classification -- so those two
+files are matched *by construction*, as long as you take them straight from
+one rescue run. The `build_kallisto_index`/`kallisto_quant` rules then build
+the kallisto index directly from that same fasta and quantify every sample
+against it, so `abundance.tsv`'s transcript IDs are also matched to that
+fasta by construction. **The most common way this breaks in practice is
+mixing files from different runs** -- e.g. re-running SQANTI3 with new
+filter/rescue settings and picking up a stale `tx2gene.tsv` or an old
+`abundance.tsv` generated against a previous fasta.
+
+**Building `tx2gene.tsv` correctly:** generate it directly from the exact
+`isoform_gff` you're passing in, not from a separate/earlier source:
+
+```bash
+# tx_id <TAB> gene_id, extracted straight from the GTF you're using as isoform_gff
+awk -F'\t' '$3 == "transcript"' pooled.rescued_rescued.gtf | \
+  sed -E 's/.*transcript_id "([^"]+)".*gene_id "([^"]+)".*/\1\t\2/' \
+  > tx2gene.tsv
+echo -e "tx_id\tgene_id" | cat - tx2gene.tsv > tmp && mv tmp tx2gene.tsv
+```
+
+(If your GTF's attribute order puts `gene_id` before `transcript_id`, adjust
+the two capture groups accordingly, or use `gffread --table transcript_id,gene_id`
+if you have it available.)
+
+**Before calling `expressom()`/`run_isoform_switch()`, verify the triplet
+actually matches** -- these three counts should be equal (or very close):
+
+```bash
+grep -c '^>' pooled.rescued_rescued.fasta                 # sequences in the fasta
+grep -c $'\ttranscript\t' pooled.rescued_rescued.gtf       # transcript rows in the gtf
+wc -l tx2gene.tsv                                          # (minus 1 for the header)
+```
+
+If `tx2gene.tsv`/`abundance.tsv` report a much larger number than the GTF (or
+vice versa), you're looking at files from two different runs, not an ID
+formatting issue -- regenerate `tx2gene.tsv` from the current GTF (above),
+and if the quantification counts also disagree, re-quantify against the
+current fasta's kallisto index before running the isoform module.
+
+**Recommended settings for a verified SQANTI3 triplet:**
+
+```R
+run_isoform_switch(
+  isoform_obj       = isoform_import,   # built with custom_tx2gene = "tx2gene.tsv" above
+  condition         = "condition",
+  level             = "MUT",
+  base              = "NONMUT",
+  fasta_file        = "pooled.rescued_rescued.fasta",
+  gff_file          = "pooled.rescued_rescued.gtf",
+  out_dir           = "results/isoform",
+  skip_fasta_filter = FALSE   # leave this FALSE for a first run against a new
+                               # reference -- it gives you ExpressOM's own clear
+                               # "N / M transcripts matched the FASTA" message
+                               # if something's off, before importRdata() runs
+)
+```
+
+`skip_fasta_filter = TRUE` is meant for cases where you've already confirmed
+the transcript sets match and just want to skip the (redundant) extra R-side
+pass for speed -- it is **not** a way to work around a genuine mismatch, since
+the underlying `importRdata()` call still has to reconcile the same three
+files either way.
 
 Independently of `run_predictors`, `run_isoform_switch()` also runs
 `IsoformSwitchAnalyzeR::analyzeAlternativeSplicing()` on every call (exon
@@ -441,6 +540,54 @@ results/
     ├── dexseq_results.rds                     # only if run_dexseq = TRUE
     └── switch_list.rds
 ```
+
+## Changelog Highlights
+
+**July 2026 -- code review pass (DEXSeq DTU crash, predictor detection, KEGG pathview, report templates):**
+
+* **Fixed:** `run_dexseq_dtu()` crashed with `variables in design formula cannot
+  contain NA: condition` whenever the sample metadata contained any condition
+  level besides the two being compared (`level`/`base`) -- it was missing the
+  same base/level sample-filtering step `run_dtu()` already had, so leftover
+  samples from other groups kept an `NA` condition factor all the way into
+  `DEXSeq::DEXSeqDataSet()`. Fixed by filtering to the comparison groups
+  before building the design.
+* **Fixed:** `debug_wsl()` could report `run_cpat.py` or `signalp` as
+  "missing" even when the working alternative (`cpat` / `signalp6`) was
+  present and fully functional -- see the WSL Troubleshooting section above.
+* **Fixed:** `run_isoform_switch()`'s `importRdata()` call always passed
+  `ignoreAfterBar/ignoreAfterSpace/ignoreAfterPeriod = FALSE`, regardless of
+  `skip_fasta_filter` -- contradicting both that parameter's own documentation
+  and this README. All three are now always enabled (they only normalize ID
+  *formatting*; genuinely mismatched references are now caught earlier by a
+  new pre-check -- see the SQANTI3 guide above).
+* **Fixed:** the DTE/DTU/IsoformSwitch HTML report (`generate_dte_dtu_report()`)
+  rendered from a temp file outside `report_dir` without pinning
+  `knit_root_dir`, so every relative `plots/...` path used by the report's
+  figures resolved against the wrong directory and could silently fail to
+  embed -- figures existed on disk but the report's `file.exists()` guards
+  never found them. `knit_root_dir` is now explicitly pinned to `report_dir`.
+* **Fixed:** KEGG pathview used `gene.idtype = "KEGG"` with a `# entrez or
+  KEGG?` comment marking it as unresolved; switched to the explicit, correct
+  `"entrez"` for all supported organisms, and pathview's own per-pathway
+  gene-match count is now logged (see the Functional Analysis Methods note
+  above).
+* **Refactored:** the two places that built R Markdown reports by
+  concatenating strings (`main.R`'s RegionReport custom-code chunk, and the
+  DTE/DTU/IsoformSwitch report in `mod_isoform.R`) are now standalone,
+  version-controllable templates under `inst/rmd/`
+  (`dge_regionreport_customcode.Rmd`, `dte_dtu_report.Rmd`), rendered with
+  `rmarkdown::render(params = ...)` / simple placeholder substitution rather
+  than hand-built `writeLines()`/`paste0()` chunks.
+* **DRY fix:** `run_local_enrichment()` (the exported "local MSigDB
+  enrichment" helper) was unused everywhere in the package and had drifted
+  out of sync with an inline copy of the same logic inside
+  `run_functional_analysis()`'s EnrichR-unreachable fallback -- the unused
+  export still called `msigdbr::msigdbr(category = ...)`, an older argument
+  name that the currently-working inline copy had already moved on from
+  (`collection =`/`subcategory =`). Consolidated into one implementation;
+  `run_functional_analysis()` now calls the exported function instead of
+  duplicating it.
 
 ## License
 

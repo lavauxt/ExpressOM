@@ -12,7 +12,8 @@ run_eda(
   base,
   main_condition = NULL,
   group_col = NULL,
-  batch_col = NULL
+  batch_col = NULL,
+  pca_ntop = 500
 )
 }
 \arguments{
@@ -31,6 +32,8 @@ run_eda(
 \item{group_col}{Optional column name to use for colouring/annotation (overrides main_condition if non-NULL)}
 
 \item{batch_col}{Optional batch column name for limma correction and before/after PCA}
+
+\item{pca_ntop}{Number of most variable genes to use for PCA (default 500; set NULL to use all)}
 }
 \description{
 Exploratory Data Analysis for DESeq2
