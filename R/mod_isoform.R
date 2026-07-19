@@ -961,10 +961,19 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     }
 
     # ---- ID cleaning function (MUST BE DEFINED BEFORE USE) ----
+    # Order matters: strip_ensembl_version() only recognizes a version suffix
+    # on a BARE id (it's anchored with ^...$), so bar/space truncation has to
+    # happen FIRST. Doing it in the previous order (version-strip, then
+    # bar/space-strip) silently failed to strip the version off any GENCODE-
+    # style compound header, e.g. "ENST00000456328.2|ENSG00000237683.5|...":
+    # the untruncated string never matches the anchored Ensembl-version
+    # pattern, so strip_ensembl_version() was a no-op, and only the
+    # subsequent bar-strip ran -- leaving "ENST00000456328.2" instead of the
+    # intended "ENST00000456328". Confirmed and fixed here.
     clean_id <- function(x) {
-      x <- strip_ensembl_version(x)
       x <- sub("\\|.*$", "", x)
       x <- sub(" .*$",   "", x)
+      x <- strip_ensembl_version(x)
       x
     }
 
@@ -1064,25 +1073,120 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     }
 
     # ---- importRdata ----
-    # ignoreAfterBar/Space/Period = TRUE: the count-matrix side has already
-    # been cleaned via clean_id()/strip_ensembl_version() above, but the raw
-    # fasta_file/gff_file have not -- GENCODE-style headers commonly carry
-    # '|'-delimited fields and/or trailing space-separated descriptions, and
-    # Ensembl-style IDs carry '.<version>' suffixes. Without this tolerance on
-    # importRdata()'s side, those raw IDs won't match the already-cleaned
-    # count matrix even when they refer to the same transcripts. (This does
-    # NOT paper over a genuine reference mismatch like the one checked above --
-    # it only normalizes formatting differences for IDs that already refer to
-    # the same underlying transcripts.)
+    # ignoreAfterBar/Space are safe to leave TRUE unconditionally: none of the
+    # ID schemes seen here (Ensembl, StringTie2, SQANTI3) ever use '|' or ' '
+    # *inside* a transcript ID itself -- only as description-field delimiters
+    # -- so truncating at the first one only ever removes description text.
+    #
+    # ignoreAfterPeriod can't be handled with a single TRUE/FALSE flag here.
+    # A SQANTI3 "rescued" fasta/gtf is typically a MIX of two ID styles in
+    # the SAME file: transcripts that were rescued/matched to a known
+    # reference keep that reference's (often versioned) Ensembl ID, while
+    # genuinely novel transcripts get StringTie2/SQANTI3-style multi-dot IDs
+    # (e.g. "PB.1.1", "MSTRG.6.1") where '.' is a structural separator, not a
+    # version suffix.
+    #   - ignoreAfterPeriod = TRUE truncates EVERY id at the first '.', so
+    #     "PB.1.1" and "PB.1.2" (two different isoforms of the same locus)
+    #     both collapse to "PB.1" -- importRdata()'s internal fixNames() then
+    #     rejects the now-duplicated ID set ("...would cause IDs to be
+    #     non-unique"). That's the crash this block used to hit.
+    #   - ignoreAfterPeriod = FALSE avoids that collision but then silently
+    #     stops stripping genuine Ensembl version suffixes too -- every
+    #     rescued transcript that kept a versioned reference ID would fail to
+    #     match the already version-stripped count matrix and get silently
+    #     dropped from the analysis, with no error at all -- a worse outcome
+    #     than the crash, since nothing would flag it.
+    # Neither single setting is correct for a mixed file. The only correct
+    # fix is to apply the SAME selective, per-ID logic as clean_id() /
+    # strip_ensembl_version() above -- which strips a version suffix only
+    # from IDs that actually look like Ensembl IDs, leaving PB./MSTRG-style
+    # IDs untouched -- directly to the fasta headers and GTF transcript_id
+    # values ourselves, so importRdata() receives IDs that already match
+    # exactly and none of its own truncation is needed.
+    clean_ref_dir <- file.path(out_dir, "cleaned_reference")
+    if (!dir.exists(clean_ref_dir)) dir.create(clean_ref_dir, recursive = TRUE)
+    fasta_file_clean <- file.path(clean_ref_dir, "isoform_fasta_ids_cleaned.fasta")
+    gff_file_clean   <- file.path(clean_ref_dir, "isoform_gff_ids_cleaned.gtf")
+
+    message("  Pre-cleaning transcript IDs in FASTA/GTF (same rule already used for the ",
+            "count matrix above) so importRdata() gets exact matches instead of guessing...")
+
+    # --- FASTA: rename headers only; Biostrings is already a hard dependency
+    # of this function, and sequences themselves are untouched. ---
+    seqs <- Biostrings::readDNAStringSet(fasta_file)
+    names(seqs) <- clean_id(names(seqs))
+    dup_fa <- unique(names(seqs)[duplicated(names(seqs))])
+    if (length(dup_fa) > 0) {
+      stop("Cleaning transcript IDs in isoform_fasta produced ", length(dup_fa),
+           " duplicate ID(s) -- e.g. ", paste(utils::head(dup_fa, 5), collapse = ", "),
+           ". The FASTA contains near-duplicate headers that only differ in the part ",
+           "clean_id() strips ('|'/space-delimited description text, or an Ensembl version ",
+           "suffix); this needs to be resolved in the source FASTA.")
+    }
+    Biostrings::writeXStringSet(seqs, filepath = fasta_file_clean)
+    rm(seqs); gc()
+
+    # --- GTF: stream line-by-line and rewrite only the transcript_id "..."
+    # attribute (every exon/CDS/transcript row that carries one), leaving
+    # coordinates, gene_id, and every other field untouched. Avoids pulling
+    # in rtracklayer/GenomicFeatures just to rename one attribute on a file
+    # that can run into the tens of millions of lines. ---
+    .rewrite_gtf_transcript_ids <- function(path_in, path_out, clean_fn) {
+      con_in  <- file(path_in,  open = "rt")
+      on.exit(close(con_in), add = TRUE)
+      con_out <- file(path_out, open = "wt")
+      on.exit(close(con_out), add = TRUE)
+
+      id_re       <- 'transcript_id "([^"]+)"'
+      any_id_seen <- FALSE
+      tx_ids_seen <- character(0)
+
+      repeat {
+        lines <- readLines(con_in, n = 200000L, warn = FALSE)
+        if (length(lines) == 0L) break
+
+        m      <- regexpr(id_re, lines)
+        has_id <- m != -1L
+        if (any(has_id)) {
+          any_id_seen <- TRUE
+          raw_ids <- sub(id_re, "\\1", regmatches(lines, m))
+          new_ids <- clean_fn(raw_ids)
+          regmatches(lines, m) <- paste0('transcript_id "', new_ids, '"')
+
+          tx_row <- has_id & grepl("\ttranscript\t", lines, fixed = TRUE)
+          if (any(tx_row)) {
+            m2 <- regexpr(id_re, lines[tx_row])
+            tx_ids_seen <- c(tx_ids_seen, sub(id_re, "\\1", regmatches(lines[tx_row], m2)))
+          }
+        }
+        writeLines(lines, con_out)
+      }
+
+      if (!any_id_seen) {
+        stop("No `transcript_id \"...\"` attributes found in ", path_in,
+             " -- expected standard GTF2-style attributes (if this is GFF3, convert to GTF first).")
+      }
+      dup <- unique(tx_ids_seen[duplicated(tx_ids_seen)])
+      if (length(dup) > 0) {
+        stop("Cleaning transcript IDs in isoform_gff produced ", length(dup),
+             " duplicate transcript ID(s) among `transcript` feature rows -- e.g. ",
+             paste(utils::head(dup, 5), collapse = ", "),
+             ". The GTF contains near-duplicate transcript records that only differ in the ",
+             "part clean_id() strips; this needs to be resolved in the source GTF before import.")
+      }
+      invisible(path_out)
+    }
+    .rewrite_gtf_transcript_ids(gff_file, gff_file_clean, clean_id)
+
     switch_list <- IsoformSwitchAnalyzeR::importRdata(
       isoformCountMatrix   = isoform_count_matrix,
       isoformRepExpression = isoform_count_matrix,
       designMatrix         = design_matrix,
-      isoformExonAnnoation = gff_file,
-      isoformNtFasta       = fasta_file,
-      ignoreAfterBar       = TRUE,
-      ignoreAfterSpace     = TRUE,
-      ignoreAfterPeriod    = TRUE,
+      isoformExonAnnoation = gff_file_clean,
+      isoformNtFasta       = fasta_file_clean,
+      ignoreAfterBar       = FALSE,
+      ignoreAfterSpace     = FALSE,
+      ignoreAfterPeriod    = FALSE,
       showProgress         = TRUE
     )
     # ========================================================================
