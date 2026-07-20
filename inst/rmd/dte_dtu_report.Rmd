@@ -89,6 +89,11 @@ DT::datatable(dte_data, filter = "top", options = list(scrollX = TRUE))
 .fig("DTU_pvalue_hist.pdf", "DTU p-value histogram")
 ```
 
+### Top Significant Transcripts
+```{r dtu-topbar, results='asis'}
+.fig("DTU_top_barplot.pdf", "Top DTU transcripts")
+```
+
 ### Interactive Table
 ```{r dt-dtu}
 dtu_data <- read.csv(params$dtu_csv, check.names = FALSE)

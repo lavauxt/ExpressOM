@@ -75,16 +75,7 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
   sample_df <- data.table::fread(sample_table, header = TRUE, data.table = FALSE)
   sample_col <- if ("Sample" %in% colnames(sample_df)) "Sample" else "sample_id"
 
-  if (!is.null(remove_sample)) {
-    sample_df <- sample_df[!(sample_df[[sample_col]] %in% remove_sample), , drop = FALSE]
-    if (nrow(sample_df) == 0) stop("All samples removed by remove_sample")
-  }
-
-  if (!is.null(subset_sample)) {
-    filter_expr <- rlang::parse_expr(subset_sample)
-    subset_indices <- eval(filter_expr, envir = sample_df)
-    sample_df <- sample_df[subset_indices, , drop = FALSE]
-  }
+  sample_df <- .apply_sample_filters(sample_df, sample_col, remove_sample, subset_sample)
 
   rownames(sample_df) <- sample_df[[sample_col]]
   edb <- getExportedValue(ensembl_package_name, ensembl_package_name)
@@ -235,6 +226,138 @@ run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05) {
   return(res_df)
 }
 
+#' Shared count-matrix preparation & filtering for DTU testing (DRIMSeq/DEXSeq)
+#'
+#' \code{run_dtu()} (DRIMSeq engine) and \code{run_dexseq_dtu()} (DEXSeq
+#' engine) both start from the same raw transcript count matrix and apply an
+#' identical sequence of sample-restriction, gene-mapping, and
+#' expression-based filters before handing off to their engine-specific
+#' fitting step. This was previously ~60 duplicated lines per function (a
+#' change to one filter silently wouldn't apply to the other engine) --
+#' consolidated here as the single source of truth. Only the two genuinely
+#' engine-specific filters -- DEXSeq's manual gene-level expression filter
+#' (DRIMSeq's own \code{dmFilter()} applies its equivalent later, per-chunk,
+#' so run_dtu() must NOT apply it here too) and DEXSeq's "genes need >= 2
+#' features" requirement -- are optional steps controlled by arguments, so
+#' each engine's prior filtering behaviour is preserved exactly.
+#'
+#' @param isoform_obj Output from import_transcript_counts()
+#' @param condition,level,base As in run_dtu()/run_dexseq_dtu()
+#' @param min_transcript_total,min_transcript_expr,min_samps_feature_expr,
+#'   min_gene_expr,min_samps_gene_expr,max_transcripts As in
+#'   run_dtu()/run_dexseq_dtu()
+#' @param apply_gene_expr_filter Logical: apply the manual gene-level
+#'   min_gene_expr/min_samps_gene_expr filter here (DEXSeq needs this;
+#'   DRIMSeq does not, since dmFilter() does it internally)
+#' @param require_multi_transcript Logical: drop genes left with only one
+#'   transcript after filtering (DEXSeq needs >= 2 features per group)
+#' @return List with \code{counts}, \code{gene_id_map}, \code{tx_ids_original},
+#'   \code{sample_data}, and the (possibly num_samples-capped)
+#'   \code{min_samps_gene_expr}/\code{min_samps_feature_expr} actually used
+#' @keywords internal
+.prepare_dtu_counts <- function(isoform_obj, condition, level, base,
+                                min_transcript_total, min_transcript_expr,
+                                min_samps_feature_expr, min_gene_expr,
+                                min_samps_gene_expr, max_transcripts,
+                                apply_gene_expr_filter = FALSE,
+                                require_multi_transcript = FALSE) {
+
+  counts <- if (isoform_obj$type == "tximport") isoform_obj$txi$counts else isoform_obj$counts
+  sample_data <- isoform_obj$meta
+
+  # --- Keep only samples belonging to the two conditions of interest ---
+  keep_samples <- sample_data[[condition]] %in% c(base, level)
+  if (sum(keep_samples) < 2) {
+    stop("Fewer than 2 samples available for comparison. Need at least one sample in each condition.")
+  }
+  sample_data <- sample_data[keep_samples, , drop = FALSE]
+  counts <- counts[, rownames(sample_data), drop = FALSE]
+  sample_data$condition <- factor(sample_data[[condition]], levels = c(base, level))
+
+  num_samples <- ncol(counts)
+  if (is.null(min_samps_gene_expr)) min_samps_gene_expr <- ceiling(num_samples * 0.5)
+  min_samps_gene_expr    <- min(min_samps_gene_expr, num_samples)
+  min_samps_feature_expr <- min(min_samps_feature_expr, num_samples)
+
+  tx2gene <- isoform_obj$tx2gene
+  # Clean transcript IDs: remove version suffixes (already done at import
+  # time in import_transcript_counts(), but re-applied here too since it's
+  # idempotent and cheap -- guards against a hand-built isoform_obj that
+  # bypassed that step).
+  rownames(counts) <- strip_ensembl_version(rownames(counts))
+  tx2gene$tx_id    <- strip_ensembl_version(tx2gene$tx_id)
+  gene_id_map <- tx2gene$gene_id[match(rownames(counts), tx2gene$tx_id)]
+
+  # Filter out transcripts with no gene mapping
+  keep_mapped <- !is.na(gene_id_map)
+  counts <- counts[keep_mapped, , drop = FALSE]
+  gene_id_map <- gene_id_map[keep_mapped]
+  tx_ids_original <- rownames(counts)
+  if (nrow(counts) == 0) stop("No transcripts could be mapped to genes after version handling.")
+  message("Mapped transcripts: ", nrow(counts))
+
+  # Filter by total expression per transcript
+  keep_tx <- rowSums(counts) >= min_transcript_total
+  counts <- counts[keep_tx, , drop = FALSE]
+  gene_id_map <- gene_id_map[keep_tx]
+  tx_ids_original <- tx_ids_original[keep_tx]
+  if (nrow(counts) == 0) stop("No transcripts passed min_transcript_total filter.")
+
+  # Gene-level expression filter -- only for engines without their own
+  # internal equivalent (mirrors DRIMSeq::dmFilter()'s min_gene_expr /
+  # min_samps_gene_expr semantics: require a minimum number of samples where
+  # the gene's TOTAL transcript expression reaches min_gene_expr).
+  if (isTRUE(apply_gene_expr_filter)) {
+    gene_expr_matrix <- rowsum(counts, group = gene_id_map)
+    keep_genes_expr  <- rownames(gene_expr_matrix)[
+      rowSums(gene_expr_matrix >= min_gene_expr) >= min_samps_gene_expr
+    ]
+    keep_tx <- gene_id_map %in% keep_genes_expr
+    counts <- counts[keep_tx, , drop = FALSE]
+    gene_id_map <- gene_id_map[keep_tx]
+    tx_ids_original <- tx_ids_original[keep_tx]
+    if (nrow(counts) == 0) stop("No genes passed the min_gene_expr / min_samps_gene_expr filter.")
+  }
+
+  # Filter by minimum proportion and number of samples with expression
+  keep_tx <- rowSums(counts > min_transcript_expr) >= min_samps_feature_expr
+  counts <- counts[keep_tx, , drop = FALSE]
+  gene_id_map <- gene_id_map[keep_tx]
+  tx_ids_original <- tx_ids_original[keep_tx]
+  if (nrow(counts) == 0) stop("No transcripts passed expression filtering.")
+
+  # Cap number of transcripts per gene
+  gene_split <- split(seq_len(nrow(counts)), gene_id_map)
+  keep_idx <- unlist(lapply(gene_split, function(idx) {
+    if (length(idx) <= max_transcripts) return(idx)
+    gene_expr <- rowMeans(counts[idx, , drop = FALSE])
+    idx[order(gene_expr, decreasing = TRUE)[seq_len(max_transcripts)]]
+  }))
+  counts <- counts[keep_idx, , drop = FALSE]
+  gene_id_map <- gene_id_map[keep_idx]
+  tx_ids_original <- tx_ids_original[keep_idx]
+
+  # DEXSeq needs >= 2 features per group to test differential usage; DRIMSeq
+  # can in principle fit a single-feature gene (it's just uninformative), so
+  # run_dtu() does not request this filter.
+  if (isTRUE(require_multi_transcript)) {
+    gene_counts_tbl <- table(gene_id_map)
+    multi_tx_genes  <- names(gene_counts_tbl)[gene_counts_tbl > 1]
+    keep_multi      <- gene_id_map %in% multi_tx_genes
+    counts          <- counts[keep_multi, , drop = FALSE]
+    gene_id_map     <- gene_id_map[keep_multi]
+    tx_ids_original <- tx_ids_original[keep_multi]
+    if (nrow(counts) == 0) stop("No multi-transcript genes remained after filtering.")
+  }
+
+  message("Final transcripts after filtering: ", nrow(counts))
+  message("Genes retained: ", length(unique(gene_id_map)))
+
+  list(counts = counts, gene_id_map = gene_id_map, tx_ids_original = tx_ids_original,
+       sample_data = sample_data, min_samps_gene_expr = min_samps_gene_expr,
+       min_samps_feature_expr = min_samps_feature_expr)
+}
+
 #' Run DTU (Differential Transcript Usage) using DRIMSeq with improved filtering
 #'
 #' @param isoform_obj Output from import_transcript_counts()
@@ -249,7 +372,16 @@ run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05) {
 #' @param max_transcripts Maximum number of transcripts per gene to keep (default: 300)
 #' @param min_transcript_total Minimum total counts across all samples for a transcript (default: 10)
 #' @param bpparam Optional BiocParallel parameter object for DRIMSeq operations
-#' @return List with dtu_results
+#' @return List with \code{dtu_results}, a TRANSCRIPT-level (feature-level)
+#'   data.frame with columns \code{gene_id}, \code{feature_id}, \code{lr},
+#'   \code{df}, \code{pvalue}, and a genome-wide-recomputed \code{adj_pvalue},
+#'   plus \code{gene_symbol}/\code{entrezid}. Uses
+#'   \code{DRIMSeq::results(d, level = "feature")} rather than DRIMSeq's
+#'   default gene-level result: (1) that's the whole point of a
+#'   *transcript*-usage test, and (2) \code{run_isoform_switch()}'s
+#'   \code{test_engine = "DRIMSeq"} path requires a \code{feature_id} column
+#'   that only the feature-level result has -- without this, that path could
+#'   never succeed (see \code{required_cols} check there).
 #' @export
 run_dtu <- function(
   isoform_obj,
@@ -273,87 +405,23 @@ run_dtu <- function(
   bp_param <- if (is.null(bpparam)) BiocParallel::SerialParam() else bpparam
   BiocParallel::register(bp_param)
 
-  counts <- if (isoform_obj$type == "tximport") {
-    isoform_obj$txi$counts
-  } else {
-    isoform_obj$counts
-  }
-
-  sample_data <- isoform_obj$meta
-
-  # --- Keep only samples belonging to the two conditions of interest ---
-  keep_samples <- sample_data[[condition]] %in% c(base, level)
-  if (sum(keep_samples) < 2) {
-    stop("Fewer than 2 samples available for comparison. Need at least one sample in each condition.")
-  }
-  sample_data <- sample_data[keep_samples, , drop = FALSE]
-  counts <- counts[, rownames(sample_data), drop = FALSE]
-  # Ensure condition is a factor with base as reference
-  sample_data$condition <- factor(sample_data[[condition]], levels = c(base, level))
-
-  num_samples <- ncol(counts)
-
-  if (is.null(min_samps_gene_expr)) {
-    min_samps_gene_expr <- ceiling(num_samples * 0.5)
-  }
-
-  min_samps_gene_expr <- min(min_samps_gene_expr, num_samples)
-  min_samps_feature_expr <- min(min_samps_feature_expr, num_samples)
-
-  tx2gene <- isoform_obj$tx2gene
-
-  # Clean transcript IDs: remove version suffixes (already done in import, but safe)
-  rownames(counts) <- strip_ensembl_version(rownames(counts))
-  tx2gene$tx_id <- strip_ensembl_version(tx2gene$tx_id)
-
-  gene_id_map <- tx2gene$gene_id[match(rownames(counts), tx2gene$tx_id)]
-
-  # Filter out transcripts with no gene mapping
-  keep_mapped <- !is.na(gene_id_map)
-  counts <- counts[keep_mapped, , drop = FALSE]
-  gene_id_map <- gene_id_map[keep_mapped]
-  tx_ids_original <- rownames(counts)
-
-  if (nrow(counts) == 0) {
-    stop("No transcripts could be mapped to genes after version handling.")
-  }
-
-  message("Mapped transcripts: ", nrow(counts))
-
-  # Filter by total expression per transcript
-  keep_tx <- rowSums(counts) >= min_transcript_total
-  counts <- counts[keep_tx, , drop = FALSE]
-  gene_id_map <- gene_id_map[keep_tx]
-  tx_ids_original <- tx_ids_original[keep_tx]
-
-  if (nrow(counts) == 0) {
-    stop("No transcripts passed min_transcript_total filter.")
-  }
-
-  # Filter by minimum proportion and number of samples with expression
-  keep_tx <- rowSums(counts > min_transcript_expr) >= min_samps_feature_expr
-  counts <- counts[keep_tx, , drop = FALSE]
-  gene_id_map <- gene_id_map[keep_tx]
-  tx_ids_original <- tx_ids_original[keep_tx]
-
-  if (nrow(counts) == 0) {
-    stop("No transcripts passed expression filtering.")
-  }
-
-  # Cap number of transcripts per gene
-  gene_split <- split(seq_len(nrow(counts)), gene_id_map)
-  keep_idx <- unlist(lapply(gene_split, function(idx) {
-    if (length(idx) <= max_transcripts) return(idx)
-    gene_expr <- rowMeans(counts[idx, , drop = FALSE])
-    idx[order(gene_expr, decreasing = TRUE)[seq_len(max_transcripts)]]
-  }))
-
-  counts <- counts[keep_idx, , drop = FALSE]
-  gene_id_map <- gene_id_map[keep_idx]
-  tx_ids_original <- tx_ids_original[keep_idx]
-
-  message("Final transcripts after capping: ", nrow(counts))
-  message("Genes retained: ", length(unique(gene_id_map)))
+  prep <- .prepare_dtu_counts(
+    isoform_obj, condition, level, base,
+    min_transcript_total   = min_transcript_total,
+    min_transcript_expr    = min_transcript_expr,
+    min_samps_feature_expr = min_samps_feature_expr,
+    min_gene_expr           = min_gene_expr,
+    min_samps_gene_expr     = min_samps_gene_expr,
+    max_transcripts         = max_transcripts,
+    apply_gene_expr_filter   = FALSE,  # DRIMSeq's own dmFilter() applies this per-chunk below
+    require_multi_transcript = FALSE
+  )
+  counts             <- prep$counts
+  gene_id_map        <- prep$gene_id_map
+  tx_ids_original    <- prep$tx_ids_original
+  sample_data        <- prep$sample_data
+  min_samps_gene_expr    <- prep$min_samps_gene_expr
+  min_samps_feature_expr <- prep$min_samps_feature_expr
 
   unique_genes <- unique(gene_id_map)
   gene_chunks <- split(unique_genes,
@@ -430,7 +498,16 @@ run_dtu <- function(
       d <- DRIMSeq::dmPrecision(d, design = design, BPPARAM = bp_param)
       d <- DRIMSeq::dmFit(d, design = design, BPPARAM = bp_param)
       d <- DRIMSeq::dmTest(d, coef = paste0("condition", level), BPPARAM = bp_param)
-      DRIMSeq::results(d)
+      # level = "feature": DRIMSeq's default (level = "gene") returns ONE ROW
+      # PER GENE with no feature_id column at all -- silently discarding the
+      # transcript-level detail that is the entire point of a *transcript*
+      # usage test, and leaving run_isoform_switch()'s test_engine = "DRIMSeq"
+      # path (which requires feature_id, see required_cols check there)
+      # unable to ever succeed. Confirmed against DRIMSeq's own
+      # dmDStest-class docs: results_gene has gene_id/lr/df/pvalue/adj_pvalue;
+      # results_feature adds feature_id and is only returned by
+      # results(d, level = "feature").
+      DRIMSeq::results(d, level = "feature")
     }, error = function(e) {
       message("Chunk ", i, " failed: ", e$message)
       NULL
@@ -456,6 +533,8 @@ run_dtu <- function(
   if (is.na(pcol)) {
     stop("No p-value column found in results.")
   }
+  # Recomputed genome-wide (across all chunks) at the TRANSCRIPT level now,
+  # rather than DRIMSeq's own per-chunk, gene-level adj_pvalue.
   dtu_results$adj_pvalue <- p.adjust(dtu_results[[pcol]], method = "BH")
   
   # --- Add gene symbol and Entrez ID to results ---
@@ -526,84 +605,25 @@ run_dexseq_dtu <- function(
   bp_param <- if (is.null(bpparam)) BiocParallel::SerialParam() else bpparam
   BiocParallel::register(bp_param)
 
-  counts <- if (isoform_obj$type == "tximport") {
-    isoform_obj$txi$counts
-  } else {
-    isoform_obj$counts
-  }
-
-  sample_data <- isoform_obj$meta
-
-  # --- Keep only samples belonging to the two conditions of interest ---
-  # (mirrors run_dtu(); without this, samples from any OTHER condition level
-  # get an NA 'condition' factor below -- since factor() only knows about
-  # c(base, level) -- and DEXSeqDataSet() then aborts with "variables in
-  # design formula cannot contain NA: condition")
-  keep_samples <- sample_data[[condition]] %in% c(base, level)
-  if (sum(keep_samples) < 2) {
-    stop("Fewer than 2 samples available for comparison. Need at least one sample in each condition.")
-  }
-  sample_data <- sample_data[keep_samples, , drop = FALSE]
-  counts <- counts[, rownames(sample_data), drop = FALSE]
-  sample_data$condition <- factor(sample_data[[condition]], levels = c(base, level))
-
-  num_samples <- ncol(counts)
-  if (is.null(min_samps_gene_expr)) min_samps_gene_expr <- ceiling(num_samples * 0.5)
-  min_samps_gene_expr    <- min(min_samps_gene_expr, num_samples)
-  min_samps_feature_expr <- min(min_samps_feature_expr, num_samples)
-
-  tx2gene <- isoform_obj$tx2gene
-  gene_id_map <- tx2gene$gene_id[match(rownames(counts), tx2gene$tx_id)]
-
-  keep_mapped <- !is.na(gene_id_map)
-  counts <- counts[keep_mapped, , drop = FALSE]
-  gene_id_map <- gene_id_map[keep_mapped]
-  tx_ids_original <- rownames(counts)
-  if (nrow(counts) == 0) stop("No transcripts could be mapped to genes after version handling.")
-
-  keep_tx <- rowSums(counts) >= min_transcript_total
-  counts <- counts[keep_tx, , drop = FALSE]
-  gene_id_map <- gene_id_map[keep_tx]
-  tx_ids_original <- tx_ids_original[keep_tx]
-  if (nrow(counts) == 0) stop("No transcripts passed min_transcript_total filter.")
-
-  # Gene-level expression filter, mirroring DRIMSeq::dmFilter()'s min_gene_expr /
-  # min_samps_gene_expr semantics: require a minimum number of samples where the
-  # gene's TOTAL transcript expression reaches min_gene_expr.
-  gene_expr_matrix <- rowsum(counts, group = gene_id_map)
-  keep_genes_expr  <- rownames(gene_expr_matrix)[
-    rowSums(gene_expr_matrix >= min_gene_expr) >= min_samps_gene_expr
-  ]
-  keep_tx <- gene_id_map %in% keep_genes_expr
-  counts <- counts[keep_tx, , drop = FALSE]
-  gene_id_map <- gene_id_map[keep_tx]
-  tx_ids_original <- tx_ids_original[keep_tx]
-  if (nrow(counts) == 0) stop("No genes passed the min_gene_expr / min_samps_gene_expr filter.")
-
-  keep_tx <- rowSums(counts > min_transcript_expr) >= min_samps_feature_expr
-  counts <- counts[keep_tx, , drop = FALSE]
-  gene_id_map <- gene_id_map[keep_tx]
-  tx_ids_original <- tx_ids_original[keep_tx]
-  if (nrow(counts) == 0) stop("No transcripts passed expression filtering.")
-
-  gene_split <- split(seq_len(nrow(counts)), gene_id_map)
-  keep_idx <- unlist(lapply(gene_split, function(idx) {
-    if (length(idx) <= max_transcripts) return(idx)
-    gene_expr <- rowMeans(counts[idx, , drop = FALSE])
-    idx[order(gene_expr, decreasing = TRUE)[seq_len(max_transcripts)]]
-  }))
-  counts <- counts[keep_idx, , drop = FALSE]
-  gene_id_map <- gene_id_map[keep_idx]
-  tx_ids_original <- tx_ids_original[keep_idx]
-
-  # DEXSeq needs >= 2 features per group to test differential usage
-  gene_counts_tbl <- table(gene_id_map)
-  multi_tx_genes  <- names(gene_counts_tbl)[gene_counts_tbl > 1]
-  keep_multi      <- gene_id_map %in% multi_tx_genes
-  counts          <- counts[keep_multi, , drop = FALSE]
-  gene_id_map     <- gene_id_map[keep_multi]
-  tx_ids_original <- tx_ids_original[keep_multi]
-  if (nrow(counts) == 0) stop("No multi-transcript genes remained after filtering.")
+  # (mirrors run_dtu(); without restricting to base/level samples first, any
+  # OTHER condition level gets an NA 'condition' factor below -- since
+  # factor() only knows about c(base, level) -- and DEXSeqDataSet() then
+  # aborts with "variables in design formula cannot contain NA: condition")
+  prep <- .prepare_dtu_counts(
+    isoform_obj, condition, level, base,
+    min_transcript_total   = min_transcript_total,
+    min_transcript_expr    = min_transcript_expr,
+    min_samps_feature_expr = min_samps_feature_expr,
+    min_gene_expr           = min_gene_expr,
+    min_samps_gene_expr     = min_samps_gene_expr,
+    max_transcripts         = max_transcripts,
+    apply_gene_expr_filter   = TRUE,  # DEXSeq has no built-in equivalent of dmFilter()
+    require_multi_transcript = TRUE   # DEXSeq needs >= 2 features per group to test
+  )
+  counts             <- prep$counts
+  gene_id_map        <- prep$gene_id_map
+  tx_ids_original    <- prep$tx_ids_original
+  sample_data        <- prep$sample_data
 
   message("DEXSeq DTU: ", nrow(counts), " transcripts across ",
           length(unique(gene_id_map)), " genes.")
@@ -768,7 +788,11 @@ plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL, sp
 #' Run IsoformSwitchAnalyzeR analysis using isoformSwitchAnalysisCombined
 #'
 #' @param dte_results (unused, kept for compatibility)
-#' @param dtu_results (unused, kept for compatibility)
+#' @param dtu_results Required (and used) when \code{test_engine = "DRIMSeq"}:
+#'   the \code{list(dtu_results = ...)} returned by \code{run_dtu()}, whose
+#'   \code{feature_id} column is fed into IsoformSwitchAnalyzeR as
+#'   pre-computed DTU p-values. Not used when \code{test_engine = "DEXSeq"}
+#'   (that path calls \code{isoformSwitchTestDEXSeq()} itself instead).
 #' @param isoform_obj Imported isoform data (from import_transcript_counts)
 #' @param condition Column name in metadata containing groups
 #' @param level Foreground level for contrast
@@ -1178,17 +1202,53 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     }
     .rewrite_gtf_transcript_ids(gff_file, gff_file_clean, clean_id)
 
-    switch_list <- IsoformSwitchAnalyzeR::importRdata(
-      isoformCountMatrix   = isoform_count_matrix,
-      isoformRepExpression = isoform_count_matrix,
-      designMatrix         = design_matrix,
-      isoformExonAnnoation = gff_file_clean,
-      isoformNtFasta       = fasta_file_clean,
-      ignoreAfterBar       = FALSE,
-      ignoreAfterSpace     = FALSE,
-      ignoreAfterPeriod    = FALSE,
-      showProgress         = TRUE
-    )
+    # estimateDifferentialGeneRange and detectAndCorrectUnwantedEffects both
+    # trigger an internal SVA (surrogate-variable) fit inside importRdata()
+    # itself (see IsoformSwitchAnalyzeR's NEWS: "importRdata() now
+    # automatically corrects abundance and isoform fractions for unwanted
+    # covariates...found via sva"). That internal fit has repeated,
+    # longstanding edge-case bugs upstream where a discovered surrogate
+    # variable's numeric value ends up baked into a design-matrix COLUMN NAME
+    # (e.g. "sv1-0.127953077968942"), which is not a syntactically valid R
+    # name and crashes limma::makeContrasts() deep inside importRdata()'s
+    # internal estimateDifferentialRange() step.
+    # ExpressOM's own design_matrix above is always just sampleID+condition
+    # (no batch/cofactor column is exposed to run_isoform_switch() yet), so
+    # detectAndCorrectUnwantedEffects would only ever be "correcting" for a
+    # covariate discovered by that fragile automatic path -- never a
+    # user-supplied one -- and estimateDifferentialGeneRange is, by
+    # IsoformSwitchAnalyzeR's own documentation, just a rough pilot estimate
+    # that "cannot be trusted" and that ExpressOM never reads back out of
+    # switch_list anyway. Both are switched off: this sidesteps the crash
+    # entirely and skips two computations whose result was never used, which
+    # also speeds up import on larger datasets.
+    # detectAndCorrectUnwantedEffects is only added if the installed
+    # IsoformSwitchAnalyzeR actually exposes it (older versions don't have
+    # the argument at all), so this stays compatible either way.
+    importrdata_extra_args <- list(estimateDifferentialGeneRange = FALSE)
+    if ("detectAndCorrectUnwantedEffects" %in% names(formals(IsoformSwitchAnalyzeR::importRdata))) {
+      importrdata_extra_args$detectAndCorrectUnwantedEffects <- FALSE
+    }
+
+    # See .muffle_across_deprecation() in utils_core.R: importRdata() runs
+    # its own internal dplyr::filter(across()) calls across the whole
+    # genome-wide isoform/exon annotation, which on a large reference can
+    # raise hundreds of thousands of dplyr-lifecycle deprecation warnings
+    # that have nothing to do with ExpressOM's own code.
+    switch_list <- .muffle_across_deprecation(do.call(IsoformSwitchAnalyzeR::importRdata, c(
+      list(
+        isoformCountMatrix   = isoform_count_matrix,
+        isoformRepExpression = isoform_count_matrix,
+        designMatrix         = design_matrix,
+        isoformExonAnnoation = gff_file_clean,
+        isoformNtFasta       = fasta_file_clean,
+        ignoreAfterBar       = FALSE,
+        ignoreAfterSpace     = FALSE,
+        ignoreAfterPeriod    = FALSE,
+        showProgress         = TRUE
+      ),
+      importrdata_extra_args
+    )))
     # ========================================================================
     message("Isoform data import completed.")
 
@@ -1348,13 +1408,13 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     switch_list <- tryCatch({
       message("Annotating alternative splicing events (exon skipping, intron retention, ",
               "alt. 5'/3' splice sites, alt. TSS/TES)...")
-      sl <- IsoformSwitchAnalyzeR::analyzeAlternativeSplicing(
+      sl <- .muffle_across_deprecation(IsoformSwitchAnalyzeR::analyzeAlternativeSplicing(
         switch_list,
         onlySwitchingGenes = TRUE,
         alpha     = 0.05,
         dIFcutoff = 0.1,
         quiet     = FALSE
-      )
+      ))
       message("  Alternative splicing annotation completed.")
       sl
     }, error = function(e) {
@@ -2387,7 +2447,37 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
     ggplot2::labs(title = "DTU p-value distribution", x = "p-value", y = "Count") +
     ggplot2::theme_minimal()
   ggplot2::ggsave(file.path(plot_dir, "DTU_pvalue_hist.pdf"), p_hist, width = 6, height = 4)
-  
+
+  # 3d-bis. Top significant DTU transcripts barplot (by adjusted p-value)
+  # Companion to the DTE top-barplot above. DRIMSeq's feature-level test
+  # statistic ('lr', a likelihood-ratio stat) is unsigned -- there's no
+  # DTE-style log2FoldChange to rank by -- so -log10(adj. p-value) stands in
+  # as both the ranking measure and the bar height. Falls back to
+  # dtu$gene_label if a `feature_id` column isn't present (e.g. an older
+  # cached checkpoint from before run_dtu() started requesting
+  # feature-level DRIMSeq results).
+  dtu_label_col <- if ("feature_id" %in% colnames(dtu)) "feature_id" else NULL
+  dtu_sig <- dtu[!is.na(dtu$adj_pvalue) & dtu$adj_pvalue < 0.05, ]
+  if (nrow(dtu_sig) > 0) {
+    dtu_ordered <- dtu_sig[order(dtu_sig$adj_pvalue), ]
+    top_dtu <- head(dtu_ordered, top_n)
+    top_dtu$dtu_label <- if (!is.null(dtu_label_col)) {
+      paste0(top_dtu$gene_symbol, " (", top_dtu[[dtu_label_col]], ")")
+    } else {
+      top_dtu$gene_label
+    }
+    top_dtu$neg_log10_padj <- -log10(top_dtu$adj_pvalue)
+    p_dtu_bar <- ggplot2::ggplot(top_dtu, ggplot2::aes(x = reorder(dtu_label, neg_log10_padj), y = neg_log10_padj)) +
+      ggplot2::geom_col(fill = "darkgreen") +
+      ggplot2::coord_flip() +
+      ggplot2::labs(title = paste("Top", top_n, "significant DTU transcripts"),
+           x = "", y = "-log10(adj. p-value)") +
+      ggplot2::theme_minimal()
+    ggplot2::ggsave(file.path(plot_dir, "DTU_top_barplot.pdf"), p_dtu_bar, width = 10, height = max(6, top_n*0.3))
+  } else {
+    message("No significant DTU transcripts found (adj_pvalue < 0.05); skipping DTU top barplot.")
+  }
+
   # 3e. For each gene of interest, plot transcript proportions
   if (!is.null(genes_of_interest)) {
     counts <- if (isoform_obj$type == "tximport") isoform_obj$txi$counts else isoform_obj$counts

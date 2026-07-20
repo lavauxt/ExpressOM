@@ -71,6 +71,7 @@ Suggests:
     IsoformSwitchAnalyzeR (>= 2.6.0),
     htmlwidgets,
     knitr,
+    limma,
     org.Hs.eg.db,
     org.Mm.eg.db,
     pcaExplorer,

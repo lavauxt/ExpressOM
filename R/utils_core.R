@@ -95,6 +95,95 @@ strip_ensembl_version <- function(x) {
   gene_map
 }
 
+#' Apply remove_sample / subset_sample filters to an imported sample table
+#'
+#' Single source of truth for the "drop explicitly excluded samples, then
+#' apply an optional filter expression" logic used by both import_counts()
+#' (gene-level, mod_dge.R) and import_transcript_counts() (isoform-level,
+#' mod_isoform.R). These were previously two independently-maintained copies
+#' that had already drifted apart: the isoform copy silently dropped both the
+#' progress messages and the tryCatch() around subset_sample, so a typo'd
+#' subset_sample expression there raised R's raw eval() error instead of the
+#' friendlier "Failed to evaluate subset_sample condition" message the DGE
+#' path gives. Neither copy guarded against subset_sample matching zero rows
+#' (only remove_sample did); that gap is closed here for both callers.
+#'
+#' @param sample_df Data frame read from the sample table (before rownames are set)
+#' @param sample_col Name of the column holding sample IDs ("Sample" or "sample_id")
+#' @param remove_sample Optional character vector of sample IDs to drop
+#' @param subset_sample Optional string, evaluated as an expression in the
+#'   data frame's environment (e.g. "cell_type == 'T_cells'")
+#' @return The filtered data frame
+#' @keywords internal
+.apply_sample_filters <- function(sample_df, sample_col, remove_sample = NULL, subset_sample = NULL) {
+  if (!is.null(remove_sample)) {
+    message("   -> Excluding requested samples: ", paste(remove_sample, collapse = ", "))
+    keep_indices <- !(sample_df[[sample_col]] %in% remove_sample)
+    sample_df    <- sample_df[keep_indices, , drop = FALSE]
+    if (nrow(sample_df) == 0) stop("The remove_sample constraint removed all available samples from your metadata!")
+  }
+
+  if (!is.null(subset_sample)) {
+    message("   -> Applying subset condition: ", subset_sample)
+    sample_df <- tryCatch({
+      filter_expr    <- rlang::parse_expr(subset_sample)
+      subset_indices <- eval(filter_expr, envir = sample_df)
+      sample_df[subset_indices, , drop = FALSE]
+    }, error = function(e) {
+      stop("Failed to evaluate subset_sample condition. Error: ", e$message)
+    })
+    if (nrow(sample_df) == 0) stop("The subset_sample condition matched zero samples.")
+  }
+
+  sample_df
+}
+
+#' Per-row z-score matrix, guarding against division by zero
+#'
+#' Single source of truth for the "z = (x - row_mean) / row_sd, with a
+#' zero-variance row held at z = 0 instead of NaN" computation shared by
+#' plot_sample_zscore(), plot_geneset_zscore_avg(), and
+#' plot_gene_zscore_individual() in mod_plots.R (previously three separately
+#' hand-copied instances of the same four lines).
+#'
+#' @param expr_mat Numeric matrix, genes/features as rows, samples as columns
+#' @return Matrix of the same dimensions, row-wise z-scored
+#' @keywords internal
+.zscore_matrix <- function(expr_mat) {
+  row_means             <- rowMeans(expr_mat)
+  row_sds               <- apply(expr_mat, 1, stats::sd)
+  row_sds[row_sds == 0] <- 1
+  (expr_mat - row_means) / row_sds
+}
+
+#' Run an expression while muffling one specific, known-noisy lifecycle warning
+#'
+#' IsoformSwitchAnalyzeR's own internal code (there is no dplyr::across() call
+#' anywhere in ExpressOM itself) uses the deprecated
+#' \code{dplyr::filter(dplyr::across())} pattern without supplying
+#' \code{.cols}, which since dplyr 1.1.0 emits one lifecycle-deprecation
+#' warning per row it's evaluated on. On a genome-wide isoform/exon
+#' annotation, a single \code{importRdata()} or
+#' \code{analyzeAlternativeSplicing()} call can therefore raise hundreds of
+#' thousands of warnings -- collecting, formatting, and (interactively)
+#' printing that many condition objects is not free, and it buries any other,
+#' genuinely actionable warning in noise. This muffles ONLY warnings matching
+#' that one message pattern; every other warning (including ExpressOM's own)
+#' still propagates normally, so it's safe to wrap broadly.
+#'
+#' @param expr Expression to evaluate
+#' @keywords internal
+.muffle_across_deprecation <- function(expr) {
+  withCallingHandlers(
+    expr,
+    warning = function(w) {
+      if (grepl("across\\(\\).*\\.cols", conditionMessage(w))) {
+        invokeRestart("muffleWarning")
+      }
+    }
+  )
+}
+
 #' Safely create a directory
 #' @keywords internal
 safe_dir <- function(path) {

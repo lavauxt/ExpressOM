@@ -82,23 +82,7 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
   sample_df  <- data.table::fread(sample_table, header = TRUE, data.table = FALSE)
   sample_col <- if ("Sample" %in% colnames(sample_df)) "Sample" else "sample_id"
 
-  if (!is.null(remove_sample)) {
-    message("   -> Excluding requested samples: ", paste(remove_sample, collapse = ", "))
-    keep_indices <- !(sample_df[[sample_col]] %in% remove_sample)
-    sample_df    <- sample_df[keep_indices, , drop = FALSE]
-    if (nrow(sample_df) == 0) stop("The remove_sample constraint removed all available samples from your metadata!")
-  }
-
-  if (!is.null(subset_sample)) {
-    message("   -> Applying subset condition: ", subset_sample)
-    sample_df <- tryCatch({
-      filter_expr    <- rlang::parse_expr(subset_sample)
-      subset_indices <- eval(filter_expr, envir = sample_df)
-      sample_df[subset_indices, , drop = FALSE]
-    }, error = function(e) {
-      stop("Failed to evaluate subset_sample condition. Error: ", e$message)
-    })
-  }
+  sample_df <- .apply_sample_filters(sample_df, sample_col, remove_sample, subset_sample)
 
   rownames(sample_df) <- sample_df[[sample_col]]
   edb     <- getExportedValue(ensembl_package_name, ensembl_package_name)

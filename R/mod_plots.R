@@ -469,10 +469,7 @@ plot_sample_zscore <- function(dds, selected_genes, condition_col, level, base, 
   meta_data$sample   <- rownames(meta_data)
   valid_samples      <- meta_data$sample[meta_data[[condition_col]] %in% c(base, level)]
   expr_mat           <- norm_counts[present_genes, valid_samples, drop = FALSE]
-  row_means          <- rowMeans(expr_mat)
-  row_sds            <- apply(expr_mat, 1, stats::sd)
-  row_sds[row_sds == 0] <- 1
-  z_mat              <- (expr_mat - row_means) / row_sds
+  z_mat              <- .zscore_matrix(expr_mat)
   df_long            <- as.data.frame(z_mat)
   df_long$gene       <- rownames(df_long)
   plot_df            <- tidyr::pivot_longer(df_long, cols = -gene, names_to = "sample", values_to = "z_score")
@@ -601,10 +598,7 @@ plot_geneset_zscore_avg <- function(dds, gene_sets, condition_col, level, base,
       return(list(avg_z = NULL, present = present_genes, missing = missing_genes))
     }
     expr_mat              <- norm_counts[present_genes, valid_samples, drop = FALSE]
-    row_means             <- rowMeans(expr_mat)
-    row_sds               <- apply(expr_mat, 1, stats::sd)
-    row_sds[row_sds == 0] <- 1
-    z_mat                 <- (expr_mat - row_means) / row_sds
+    z_mat                 <- .zscore_matrix(expr_mat)
     list(avg_z = colMeans(z_mat, na.rm = TRUE), present = present_genes, missing = missing_genes)
   }
 
@@ -778,10 +772,7 @@ plot_gene_zscore_individual <- function(dds, gene_sets, condition_col, level, ba
   }
 
   expr_mat              <- norm_counts[present_genes, valid_samples, drop = FALSE]
-  row_means             <- rowMeans(expr_mat)
-  row_sds               <- apply(expr_mat, 1, stats::sd)
-  row_sds[row_sds == 0] <- 1
-  z_mat                 <- (expr_mat - row_means) / row_sds
+  z_mat                 <- .zscore_matrix(expr_mat)
 
   df_long      <- as.data.frame(z_mat)
   df_long$gene <- rownames(df_long)
@@ -908,13 +899,22 @@ plotP_fork <- function(x, threshold = 0.01) {
   tr_red <- threshold / nrow(na.omit(x))
   if (combinemethod == "fisher") {
     val_red  <- .getP2(tr_red, "fisher") / 2
-    line_red <- data.frame(x = c(0, val_red), y = c(val_red, 0))
-    p <- p + ggplot2::geom_path(data = line_red, ggplot2::aes(x = x, y = y), color = "red", linewidth = 1)
+    if (is.finite(val_red)) {
+      line_red <- data.frame(x = c(0, val_red), y = c(val_red, 0))
+      p <- p + ggplot2::geom_path(data = line_red, ggplot2::aes(x = x, y = y), color = "red", linewidth = 1)
+    } else {
+      message("   -> plotP_fork: could not compute a finite FDR threshold value; skipping that line.")
+    }
   } else {
-    somep1 <- exp(seq(from = min(log(ph)), to = max(log(ph)), length = 200))
-    somep2 <- pnorm(qnorm(tr_red) * sqrt(2) - qnorm(somep1))
-    p <- p + ggplot2::geom_line(data = data.frame(x = -log(somep1), y = -log(somep2)),
-                                ggplot2::aes(x = x, y = y), color = "red", linewidth = 1)
+    somep1  <- exp(seq(from = min(log(ph)), to = max(log(ph)), length = 200))
+    somep2  <- pnorm(qnorm(tr_red) * sqrt(2) - qnorm(somep1))
+    line_df <- data.frame(x = -log(somep1), y = -log(somep2))
+    line_df <- line_df[is.finite(line_df$x) & is.finite(line_df$y), ]
+    if (nrow(line_df) > 0) {
+      p <- p + ggplot2::geom_line(data = line_df, ggplot2::aes(x = x, y = y), color = "red", linewidth = 1)
+    } else {
+      message("   -> plotP_fork: could not compute a finite FDR threshold curve; skipping that line.")
+    }
   }
 
   tr_blue_old <- tr_red
@@ -922,13 +922,22 @@ plotP_fork <- function(x, threshold = 0.01) {
   if (is.infinite(tr_blue) || tr_blue <= tr_blue_old) tr_blue <- tr_blue_old * 1.03
   if (combinemethod == "fisher") {
     val_blue  <- .getP2(tr_blue, "fisher") / 2
-    line_blue <- data.frame(x = c(0, val_blue), y = c(val_blue, 0))
-    p <- p + ggplot2::geom_path(data = line_blue, ggplot2::aes(x = x, y = y), color = "blue", linewidth = 1)
+    if (is.finite(val_blue)) {
+      line_blue <- data.frame(x = c(0, val_blue), y = c(val_blue, 0))
+      p <- p + ggplot2::geom_path(data = line_blue, ggplot2::aes(x = x, y = y), color = "blue", linewidth = 1)
+    } else {
+      message("   -> plotP_fork: could not compute a finite FWER threshold value; skipping that line.")
+    }
   } else {
-    somep1 <- exp(seq(from = min(log(ph)), to = max(log(ph)), length = 200))
-    somep2 <- pnorm(qnorm(tr_blue) * sqrt(2) - qnorm(somep1))
-    p <- p + ggplot2::geom_line(data = data.frame(x = -log(somep1), y = -log(somep2)),
-                                ggplot2::aes(x = x, y = y), color = "blue", linewidth = 1)
+    somep1  <- exp(seq(from = min(log(ph)), to = max(log(ph)), length = 200))
+    somep2  <- pnorm(qnorm(tr_blue) * sqrt(2) - qnorm(somep1))
+    line_df <- data.frame(x = -log(somep1), y = -log(somep2))
+    line_df <- line_df[is.finite(line_df$x) & is.finite(line_df$y), ]
+    if (nrow(line_df) > 0) {
+      p <- p + ggplot2::geom_line(data = line_df, ggplot2::aes(x = x, y = y), color = "blue", linewidth = 1)
+    } else {
+      message("   -> plotP_fork: could not compute a finite FWER threshold curve; skipping that line.")
+    }
   }
 
   p <- p + ggrepel::geom_text_repel(
