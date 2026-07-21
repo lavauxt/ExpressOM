@@ -166,7 +166,14 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
     names(file_list) <- sample_df[[sample_col]]
 
     txi <- tximport::tximport(file_list, type = count_type, txOut = TRUE, countsFromAbundance = "lengthScaledTPM")
-    rownames(txi$counts) <- strip_ensembl_version(rownames(txi$counts))
+    # clean_transcript_id() (not the bare strip_ensembl_version()) -- kallisto/
+    # salmon target_ids can be GENCODE-style pipe-delimited compound headers
+    # ("ENST00000456328.2|ENSG00000223972.5|..."), and strip_ensembl_version()
+    # alone is a silent no-op on those (see clean_transcript_id() in
+    # utils_core.R). Without this, rownames(txi$counts) never matches
+    # tx2gene$tx_id and .prepare_dtu_counts() fails with "No transcripts
+    # could be mapped to genes after version handling."
+    rownames(txi$counts) <- clean_transcript_id(rownames(txi$counts))
     meta <- sample_df[colnames(txi$counts), , drop = FALSE]
     return(list(txi = txi, meta = meta, tx2gene = tx2gene, gene_map = gene_map, type = "tximport"))
 
@@ -179,7 +186,7 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
     count_mat <- as.matrix(counts_df[, valid_samples, drop = FALSE])
     mode(count_mat) <- "numeric"
     count_mat[is.na(count_mat)] <- 0
-    rownames(count_mat) <- strip_ensembl_version(rownames(count_mat))
+    rownames(count_mat) <- clean_transcript_id(rownames(count_mat))
     meta <- sample_df[valid_samples, , drop = FALSE]
     return(list(counts = count_mat, meta = meta, tx2gene = tx2gene, gene_map = gene_map, type = "matrix"))
   }
@@ -280,12 +287,17 @@ run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05) {
   min_samps_feature_expr <- min(min_samps_feature_expr, num_samples)
 
   tx2gene <- isoform_obj$tx2gene
-  # Clean transcript IDs: remove version suffixes (already done at import
-  # time in import_transcript_counts(), but re-applied here too since it's
+  # Clean transcript IDs: remove version suffixes AND any pipe/space-
+  # delimited compound-header text (already done at import time in
+  # import_transcript_counts(), but re-applied here too since it's
   # idempotent and cheap -- guards against a hand-built isoform_obj that
-  # bypassed that step).
-  rownames(counts) <- strip_ensembl_version(rownames(counts))
-  tx2gene$tx_id    <- strip_ensembl_version(tx2gene$tx_id)
+  # bypassed that step). Must use clean_transcript_id(), not the bare
+  # strip_ensembl_version() -- the latter is a silent no-op on GENCODE-style
+  # compound IDs like "ENST00000456328.2|ENSG00000223972.5|...", which
+  # previously left this match() 100% unmatched with no partial-mismatch
+  # warning to flag it.
+  rownames(counts) <- clean_transcript_id(rownames(counts))
+  tx2gene$tx_id    <- clean_transcript_id(tx2gene$tx_id)
   gene_id_map <- tx2gene$gene_id[match(rownames(counts), tx2gene$tx_id)]
 
   # Filter out transcripts with no gene mapping
@@ -985,21 +997,15 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     }
 
     # ---- ID cleaning function (MUST BE DEFINED BEFORE USE) ----
-    # Order matters: strip_ensembl_version() only recognizes a version suffix
-    # on a BARE id (it's anchored with ^...$), so bar/space truncation has to
-    # happen FIRST. Doing it in the previous order (version-strip, then
-    # bar/space-strip) silently failed to strip the version off any GENCODE-
-    # style compound header, e.g. "ENST00000456328.2|ENSG00000237683.5|...":
-    # the untruncated string never matches the anchored Ensembl-version
-    # pattern, so strip_ensembl_version() was a no-op, and only the
-    # subsequent bar-strip ran -- leaving "ENST00000456328.2" instead of the
-    # intended "ENST00000456328". Confirmed and fixed here.
-    clean_id <- function(x) {
-      x <- sub("\\|.*$", "", x)
-      x <- sub(" .*$",   "", x)
-      x <- strip_ensembl_version(x)
-      x
-    }
+    # Delegates to clean_transcript_id() in utils_core.R -- the single
+    # source of truth for the bar/space-then-version-strip ordering (see that
+    # function's docs for why the order matters and what silently broke
+    # before: strip_ensembl_version() alone is a no-op on GENCODE-style
+    # compound headers like "ENST00000456328.2|ENSG00000237683.5|...").
+    # import_transcript_counts() and .prepare_dtu_counts() now use the same
+    # helper, so IDs arriving here are typically already clean; this call
+    # stays as a defensive no-op for any hand-built isoform_obj.
+    clean_id <- clean_transcript_id
 
     # Pre-filter: keep only transcripts present in the FASTA file (unless skipped)
     if (!skip_fasta_filter) {

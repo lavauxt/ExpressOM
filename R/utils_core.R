@@ -21,6 +21,33 @@ strip_ensembl_version <- function(x) {
   x
 }
 
+#' Clean a transcript/gene ID for exact-match purposes
+#'
+#' \code{strip_ensembl_version()}'s pattern is anchored (\code{^...$}), so it
+#' only recognizes a version suffix on a BARE id and is a silent no-op on any
+#' compound header where extra fields remain attached after the version
+#' number -- e.g. a GENCODE-style pipe-delimited FASTA header
+#' ("ENST00000456328.2|ENSG00000223972.5|..."), or a SQANTI3-rescued
+#' reference mixing reference-matched and novel transcript IDs. Bar- and
+#' space-delimited description text has to be truncated FIRST, then
+#' \code{strip_ensembl_version()} runs on what's left. Doing it in the
+#' opposite order silently fails to strip the version at all (see the
+#' identical fix and write-up in \code{run_isoform_switch()}'s local
+#' \code{clean_id()}, mod_isoform.R). This is the single source of truth for
+#' that ordering -- used anywhere a transcript ID coming from a
+#' quantification file (kallisto/salmon target_id, tx2gene, custom ID maps)
+#' needs to be normalized before matching.
+#'
+#' @param x Character vector of identifiers
+#' @return Character vector, same length as \code{x}
+#' @keywords internal
+#' @export
+clean_transcript_id <- function(x) {
+  x <- sub("\\|.*$", "", x)
+  x <- sub(" .*$",   "", x)
+  strip_ensembl_version(x)
+}
+
 #' Fill missing Entrez IDs in a gene_map using clusterProfiler::bitr
 #'
 #' Shared by both the DGE (\code{import_counts()}) and isoform
