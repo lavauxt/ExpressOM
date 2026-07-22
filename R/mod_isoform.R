@@ -1007,6 +1007,24 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     # stays as a defensive no-op for any hand-built isoform_obj.
     clean_id <- clean_transcript_id
 
+    # Persist the cleaned IDs onto the matrix itself -- not just into a local
+    # variable used for the FASTA-membership test below. Every downstream
+    # step in this function (the tx2gene/single-transcript-gene filter right
+    # below, and the exact fasta/gtf ID match against
+    # fasta_file_clean/gff_file_clean further down) reads
+    # rownames(count_matrix) directly and assumes it's already clean.
+    # Without this, that assumption silently fails whenever the incoming
+    # isoform_obj isn't already clean -- e.g. an isoform_import.rds
+    # checkpoint saved before clean_transcript_id() existed in
+    # import_transcript_counts(). rownames(count_matrix) %in% tx2gene$tx_clean
+    # then matches nothing, "Kept 0 transcripts from 0 genes" "succeeds"
+    # with no error, and the resulting empty isoformRepExpression surfaces
+    # many steps later as importRdata()'s unrelated-looking "contains
+    # negative values" error (min()/max() of an empty vector return Inf/-Inf,
+    # which is exactly the "no non-missing arguments" warning pair seen
+    # right before that error).
+    rownames(count_matrix) <- clean_id(rownames(count_matrix))
+
     # Pre-filter: keep only transcripts present in the FASTA file (unless skipped)
     if (!skip_fasta_filter) {
       message("Pre-filtering transcripts to match FASTA file...")
@@ -1167,13 +1185,33 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       con_out <- file(path_out, open = "wt")
       on.exit(close(con_out), add = TRUE)
 
-      id_re       <- 'transcript_id "([^"]+)"'
+      id_re      <- 'transcript_id "([^"]+)"'
+      # Real Ensembl GTFs store gene_id/transcript_id/exon_id BARE and keep
+      # the version in a SEPARATE "*_version" attribute, e.g.:
+      #   gene_id "ENSG00000223972"; gene_version "5"; transcript_id
+      #   "ENST00000456328"; transcript_version "2"; ...
+      # (confirmed against actual Ensembl GTF output -- this is not the same
+      # convention as the FASTA headers or kallisto/salmon target_ids, which
+      # DO carry the version directly, e.g. "ENST00000456328.2".)
+      # IsoformSwitchAnalyzeR's GTF import reconstructs the versioned
+      # "transcript_id.transcript_version" form for matching -- the sensible
+      # default for an unmodified Ensembl GTF paired with a versioned
+      # Ensembl FASTA/quantification. But it means cleaning transcript_id
+      # alone is a no-op here (it's already bare) while transcript_version
+      # is left untouched, so a versioned ID gets reconstructed right back
+      # on import -- one that our version-stripped count matrix can never
+      # match (0 overlap, regardless of how clean transcript_id itself is).
+      # Removing the *_version attributes entirely removes anything left
+      # for that reconstruction to draw on.
+      version_re  <- '\\s*(gene|transcript|exon)_version "[^"]*";'
       any_id_seen <- FALSE
       tx_ids_seen <- character(0)
 
       repeat {
         lines <- readLines(con_in, n = 200000L, warn = FALSE)
         if (length(lines) == 0L) break
+
+        lines <- gsub(version_re, "", lines, perl = TRUE)
 
         m      <- regexpr(id_re, lines)
         has_id <- m != -1L
