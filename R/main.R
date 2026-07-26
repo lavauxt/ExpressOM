@@ -529,6 +529,17 @@ expressom <- function(count_type        = "salmon",
         message("Step A: Isoform import loaded from checkpoint. Skipping.")
       }
 
+      # ---- Step A2: Transcript-level PCA -----------------------------------
+      # Companion to the gene-level PCA in run_eda(); descriptive/exploratory
+      # only, so it doesn't participate in the DTE/DTU checkpoint chain --
+      # cheap enough (single vst() + prcomp()) to simply re-run whenever this
+      # step is reached, rather than adding another .rds to track.
+      safe_run(
+        run_isoform_pca(isoform_import, main_condition, level, base,
+                        out_dir = iso_dir, batch_col = batch_col),
+        label = "Transcript-level PCA"
+      )
+
       # ---- Step B: DTE ----------------------------------------------------
       if (is.null(dte_res)) {
         message("Step B: Running DTE (Differential Transcript Expression)...")
@@ -606,7 +617,21 @@ expressom <- function(count_type        = "salmon",
       if (!dir.exists(iso_dir)) dir.create(iso_dir, recursive = TRUE)
       saveRDS(dte_res,    file.path(iso_dir, "dte_results.rds"))
       saveRDS(dtu_res,    file.path(iso_dir, "dtu_results.rds"))
-      saveRDS(switch_res, file.path(iso_dir, "switch_list.rds"))
+      # run_isoform_switch() already serialized this exact object to
+      # iso_save_dir/switch_list.rds (its own "Final save" step, which
+      # resume_from also depends on -- see its docs -- so that write can't
+      # simply be removed). switch_list.rds can be a large object (sequences,
+      # ORF/domain/signal-peptide annotations), so saveRDS()-ing it a SECOND
+      # time here just to have a copy in iso_dir was pure duplicated work for
+      # an identical result; file.copy() gets the same end state (the file
+      # is where the rest of this folder's outputs are, not only buried in
+      # "saved/") without re-serializing.
+      switch_rds_src <- file.path(iso_save_dir, "switch_list.rds")
+      if (!is.null(switch_res) && file.exists(switch_rds_src)) {
+        file.copy(switch_rds_src, file.path(iso_dir, "switch_list.rds"), overwrite = TRUE)
+      } else if (!is.null(switch_res)) {
+        saveRDS(switch_res, file.path(iso_dir, "switch_list.rds"))
+      }
       if (!is.null(dexseq_res)) saveRDS(dexseq_res, file.path(iso_dir, "dexseq_results.rds"))
 
       message("Isoform analysis complete. Results saved in: ", iso_dir)

@@ -31,7 +31,16 @@ convert_pdf_to_png <- function(pdf_file, dpi = 200) {
 
   png_file <- sub("\\.pdf$", ".png", pdf_file)
 
-  tryCatch({
+  # pdftools::pdf_convert() silently ignores the exact `filenames` value
+  # whenever the source PDF has more than one page: for a single-page PDF it
+  # writes exactly `png_file`, but for a multi-page one (e.g. switchPlot()'s
+  # multi-panel output) it instead writes "<name>_1.png", "<name>_2.png", ...
+  # and returns the vector of paths it actually created. The previous code
+  # ignored that return value and only ever checked file.exists(png_file) --
+  # always FALSE for a multi-page source, so every such figure was silently
+  # treated as "couldn't convert" and never embedded, regardless of whether
+  # pdftools was installed or the conversion itself worked fine.
+  produced <- tryCatch({
     pdftools::pdf_convert(
       pdf = pdf_file,
       filenames = png_file,
@@ -40,17 +49,17 @@ convert_pdf_to_png <- function(pdf_file, dpi = 200) {
     )
   }, error = function(e) {
     warning("Failed to convert ", pdf_file, " to PNG: ", conditionMessage(e))
+    character(0)
   })
 
-  if (file.exists(png_file)) {
-    return(normalizePath(
-      png_file,
-      winslash = "/",
-      mustWork = FALSE
-    ))
+  existing <- produced[file.exists(produced)]
+  if (length(existing) == 0) return(NULL)
+  if (length(existing) > 1) {
+    message("   -> ", basename(pdf_file), " has ", length(existing),
+            " pages; using page 1 (", basename(existing[1]), ") for report embedding.")
   }
 
-  return(NULL)
+  normalizePath(existing[1], winslash = "/", mustWork = FALSE)
 }
 
 #' Import transcript-level counts for isoform analysis
@@ -201,7 +210,7 @@ import_transcript_counts <- function(data_dir, sample_table, ensembl_package_nam
 #' @param padj_cutoff Adjusted p-value threshold
 #' @return Data frame of DTE results
 #' @export
-run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05) {
+run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05, bpparam = NULL) {
   if (!requireNamespace("DESeq2", quietly = TRUE)) {
     stop("DESeq2 is required for DTE analysis. Please install it.")
   }
@@ -216,21 +225,140 @@ run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05) {
   dds[[condition]] <- relevel(dds[[condition]], base)
   keep <- rowSums(DESeq2::counts(dds)) >= 10
   dds <- dds[keep, ]
-  dds <- DESeq2::DESeq(dds, test = "Wald")
+  # parallel=TRUE is a no-op unless BPPARAM specifies >1 worker, so this is
+  # always safe to pass; on large transcript-level datasets (far more rows
+  # than gene-level DGE) DESeq2's per-row GLM fitting is the dominant cost
+  # and benefits from the same multi-core BiocParallel param already
+  # threaded through run_dtu() / run_dexseq_dtu() for consistency.
+  bp_param <- if (is.null(bpparam)) BiocParallel::SerialParam() else bpparam
+  dds <- DESeq2::DESeq(dds, test = "Wald", parallel = TRUE, BPPARAM = bp_param)
   res <- DESeq2::results(dds, contrast = c(condition, level, base))
   
   res_df <- as.data.frame(res)
   res_df$transcript_id <- rownames(res_df)
-  # Direct merge using already version‑free tx2gene (no stripping needed)
-  res_df <- merge(res_df, isoform_obj$tx2gene, by.x = "transcript_id", by.y = "tx_id", all.x = TRUE)
+
+  # Defensively re-clean both sides of the join, mirroring
+  # .prepare_dtu_counts()'s identical guard (see the comment there): IDs are
+  # already cleaned once at import_transcript_counts() time, but this makes
+  # run_dte() idempotent-safe against the same failure modes DTU already
+  # guards against -- a hand-built/resumed isoform_obj, or a checkpointed
+  # isoform_import.rds predating a cleaning fix -- rather than being the one
+  # analysis path that silently trusts un-re-verified IDs. Without this,
+  # rownames(dds) can still carry a raw GENCODE pipe-delimited FASTA header
+  # (tximport takes salmon's quant.sf "Name" field verbatim, which is the
+  # *entire* header when the index was built from a standard GENCODE cDNA
+  # FASTA), the merge below matches nothing, gene_id/gene_symbol come out
+  # NA for every affected row, and every plot/table built from dte_results
+  # downstream (DTE_top_barplot, the DTE volcano, DTE_results_annotated.csv)
+  # displays that raw header instead of a transcript ID.
+  res_df$transcript_id   <- clean_transcript_id(res_df$transcript_id)
+  tx2gene_clean           <- isoform_obj$tx2gene
+  tx2gene_clean$tx_id     <- clean_transcript_id(tx2gene_clean$tx_id)
+  res_df <- merge(res_df, tx2gene_clean, by.x = "transcript_id", by.y = "tx_id", all.x = TRUE)
   
   # --- Add gene symbol and Entrez ID ---
   res_df$gene_symbol <- isoform_obj$gene_map$symbol[match(res_df$gene_id, isoform_obj$gene_map$ensembl)]
   res_df$entrezid <- isoform_obj$gene_map$entrezid[match(res_df$gene_id, isoform_obj$gene_map$ensembl)]
+  # Display-safe column: never bare "NA" (paste0(NA, ...) would otherwise
+  # render literally as "NA") for transcripts with no resolvable gene
+  # symbol -- falls back to the (now-clean) transcript_id. gene_symbol
+  # itself is left as a real NA, since that's the semantically accurate
+  # annotation for a genuinely novel/unannotated locus.
+  res_df$gene <- .coalesce_gene_label(res_df$gene_symbol, res_df$transcript_id)
   
   res_df$signif <- !is.na(res_df$padj) & res_df$padj < padj_cutoff &
                    !is.na(res_df$log2FoldChange) & abs(res_df$log2FoldChange) > 1
   return(res_df)
+}
+
+#' Transcript-level PCA (companion to run_eda()'s gene-level PCA)
+#'
+#' Runs the same PCA plot + per-sample-scores + gene(transcript)-loadings
+#' table as \code{run_eda()}, but on transcript-level counts, by reusing
+#' \code{plot_custom_pca()} / \code{.write_pca_scores()} directly rather
+#' than duplicating that logic for a second feature type.
+#'
+#' Uses \code{DESeq2::vst()} rather than \code{rlog()} for the
+#' variance-stabilizing transform, unlike the gene-level PCA in
+#' \code{run_eda()}: a transcript-level count matrix is typically several
+#' times larger (tens of thousands of transcripts vs. ~20k genes), and
+#' \code{rlog()}'s per-feature Bayesian shrinkage fit does not scale well to
+#' that size, whereas \code{vst()}'s closed-form dispersion-trend fit gives
+#' near-identical results for datasets this size in a fraction of the time
+#' (this is DESeq2's own documented recommendation once sample/feature count
+#' is large -- \code{rlog()} is kept mainly for small-n compatibility).
+#'
+#' @param isoform_obj Output from import_transcript_counts()
+#' @param condition Column name in isoform_obj$meta to colour PCA points by;
+#'   pass NULL for an ungrouped PCA
+#' @param level,base Optional comparison labels, used only for output file
+#'   naming (e.g. "PCA_transcripts_Treated_vs_Control.pdf"); pass NULL for
+#'   an all-samples PCA not tied to one comparison
+#' @param out_dir Output directory (a "Plots" subdirectory is created if needed)
+#' @param batch_col Optional column in isoform_obj$meta for a shape aesthetic.
+#'   No batch *correction* is attempted at the transcript level (unlike the
+#'   optional limma step in run_eda()) -- pass a pre-corrected isoform_obj if
+#'   you need that.
+#' @param pca_ntop Number of most variable transcripts to use (default 500;
+#'   NULL uses all transcripts that passed the expression filter)
+#' @return Invisibly, the list returned by plot_custom_pca() (plot, gene_info,
+#'   pca_scores)
+#' @export
+run_isoform_pca <- function(isoform_obj, condition, level = NULL, base = NULL,
+                            out_dir, batch_col = NULL, pca_ntop = 500) {
+  if (!requireNamespace("DESeq2", quietly = TRUE)) {
+    stop("DESeq2 is required for transcript-level PCA. Please install it.")
+  }
+  if (isoform_obj$type == "tximport") {
+    dds <- DESeq2::DESeqDataSetFromTximport(isoform_obj$txi, colData = isoform_obj$meta, design = ~1)
+  } else {
+    dds <- DESeq2::DESeqDataSetFromMatrix(countData = round(isoform_obj$counts),
+                                          colData = isoform_obj$meta, design = ~1)
+  }
+  keep <- rowSums(DESeq2::counts(dds)) >= 10
+  dds  <- dds[keep, ]
+  if (nrow(dds) < 2) {
+    message("   -> Fewer than 2 transcripts pass the expression filter; skipping transcript-level PCA.")
+    return(invisible(NULL))
+  }
+
+  vsd <- DESeq2::vst(dds, blind = TRUE)
+
+  plot_dir <- file.path(out_dir, "Plots")
+  if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
+
+  comp_label <- if (!is.null(level) && !is.null(base)) paste0(level, "_vs_", base) else "AllSamples"
+  cond_arg   <- if (!is.null(condition) && condition %in% colnames(isoform_obj$meta)) condition else NULL
+
+  res <- plot_custom_pca(vsd, condition = cond_arg, batch = batch_col,
+                        title = paste0("Transcript-level PCA",
+                                       if (!is.null(cond_arg)) paste0(" (", cond_arg, ")") else ""),
+                        return_plot = TRUE, return_gene_list = TRUE, ntop = pca_ntop)
+
+  pdf(file.path(plot_dir, paste0("PCA_transcripts_", comp_label, ".pdf")), width = 9, height = 7)
+  print(res$plot)
+  dev.off()
+
+  if (!is.null(res$gene_info) && nrow(res$gene_info) > 0) {
+    # plot_custom_pca()'s loadings table names its identifier column "gene"
+    # regardless of feature type; rename for clarity since these rows are
+    # transcripts, and clean the ID the same way every other transcript_id
+    # in this pipeline is cleaned (rownames(dds) here are already clean --
+    # inherited from isoform_obj -- but re-cleaning is idempotent and cheap,
+    # the same defensive guard used throughout the isoform module).
+    tx_info <- res$gene_info
+    tx_info$gene <- clean_transcript_id(tx_info$gene)
+    colnames(tx_info)[colnames(tx_info) == "gene"] <- "transcript_id"
+    write.table(tx_info,
+                file = file.path(plot_dir, paste0("PCA_transcripts_", comp_label, ".tsv")),
+                sep = "\t", row.names = FALSE, quote = FALSE)
+    message("   -> Saved top variable transcripts used in PCA to: ",
+            file.path(plot_dir, paste0("PCA_transcripts_", comp_label, ".tsv")))
+  }
+  .write_pca_scores(res$pca_scores, plot_dir, paste0("PCA_transcripts_", comp_label))
+
+  message("Transcript-level PCA completed. Plots saved in: ", plot_dir)
+  invisible(res)
 }
 
 #' Shared count-matrix preparation & filtering for DTU testing (DRIMSeq/DEXSeq)
@@ -552,6 +680,11 @@ run_dtu <- function(
   # --- Add gene symbol and Entrez ID to results ---
   dtu_results$gene_symbol <- isoform_obj$gene_map$symbol[match(dtu_results$gene_id, isoform_obj$gene_map$ensembl)]
   dtu_results$entrezid <- isoform_obj$gene_map$entrezid[match(dtu_results$gene_id, isoform_obj$gene_map$ensembl)]
+  # Display-safe column -- see .coalesce_gene_label() / run_dte()'s $gene for
+  # why this exists: falls back to feature_id (transcript) rather than
+  # gene_id here since that's what generate_dte_dtu_report()'s DTU barplot
+  # actually labels points by.
+  dtu_results$gene <- .coalesce_gene_label(dtu_results$gene_symbol, dtu_results$feature_id)
 
   return(list(dtu_results = dtu_results))
 }
@@ -730,6 +863,8 @@ run_dexseq_dtu <- function(
   colnames(results_df)[colnames(results_df) == "featureID"] <- "transcript_id"
   colnames(results_df)[colnames(results_df) == "groupID"]   <- "gene_id"
   results_df$gene_symbol <- isoform_obj$gene_map$symbol[match(results_df$gene_id, isoform_obj$gene_map$ensembl)]
+  # Display-safe column -- see .coalesce_gene_label() / run_dte()'s $gene.
+  results_df$gene <- .coalesce_gene_label(results_df$gene_symbol, results_df$transcript_id)
 
   n_sig_genes <- sum(gene_qvals < 0.05, na.rm = TRUE)
   message("DEXSeq DTU complete: ", length(unique(results_df$gene_id)), " genes tested, ",
@@ -1585,6 +1720,32 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
   if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 
   # --------------------------------------------------------------------------
+  # Persistent, structured status log for this predictor run.
+  #
+  # .wsl_exec_script() already logs every actual SHELL command's exit code
+  # and stdout/stderr to wsl_commands.log -- but the R-level glue *around*
+  # those calls (sequence extraction, and each analyze*() import of a tool's
+  # result file back into switch_list) previously had no persistent record
+  # at all, only message()s that scroll away in a long/automated run. That
+  # gap is exactly where "protein prediction didn't happen, and there's
+  # nothing to check" reports come from: a tool can run fine as a shell
+  # command (exit 0, result file present) while its R-level import into
+  # switch_list silently fails (e.g. an ID mismatch between switch_list and
+  # the result file) or never gets attempted. Every step below -- success or
+  # failure -- is appended here so that's diagnosable after the fact instead
+  # of only in real-time console output.
+  # --------------------------------------------------------------------------
+  predictor_log_path <- file.path(log_dir, "predictor_status.log")
+  .log_predictor_status <- function(step, status, detail = "") {
+    cat(sprintf("[%s] %-28s %-8s %s\n", format(Sys.time(), "%Y-%m-%d %H:%M:%S"), step, status, detail),
+        file = predictor_log_path, append = TRUE)
+    invisible(NULL)
+  }
+  cat(sprintf("\n===== Predictor run started %s =====\n", format(Sys.time())),
+      file = predictor_log_path, append = TRUE)
+  message("Predictor status log: ", predictor_log_path)
+
+  # --------------------------------------------------------------------------
   # 0. Decide how many CPU threads hmmscan / InterProScan may use. Auto-detect
   #    when not supplied, leaving one core free for the R session itself.
   # --------------------------------------------------------------------------
@@ -1725,8 +1886,18 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
     }, error = function(e) {
       message("  Could not extract sequences from SwitchList: ", e$message)
       message("  CPAT will use the provided fasta_file; SignalP / Pfam may be skipped.")
+      .log_predictor_status("extractSequence", "FAILED", e$message)
     })
   }
+  # nt/aa sequence counts -- a non-zero NT count with a zero/missing AA count
+  # is the single clearest sign that ORF analysis never populated
+  # switch_list$orfAnalysis (e.g. isoformSwitchAnalysisPart2() failed and
+  # Step 2 fell back to sl_tested further up this file): CPAT can still run
+  # off NT sequences alone, but SignalP/Pfam need AA and will be skipped.
+  n_nt <- if (file.exists(nt_fa_local)) length(grep("^>", readLines(nt_fa_local, warn = FALSE))) else 0L
+  n_aa <- if (file.exists(aa_fa_local)) length(grep("^>", readLines(aa_fa_local, warn = FALSE))) else 0L
+  .log_predictor_status("extractSequence", if (n_aa > 0) "OK" else "PARTIAL",
+                        sprintf("%d NT sequences, %d AA sequences (AA=0 means SignalP/Pfam will be skipped below)", n_nt, n_aa))
 
   # Input selection per tool
   cpat_fa_local <- if (file.exists(nt_fa_local)) nt_fa_local else fasta_file
@@ -1750,8 +1921,10 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
   if (!nzchar(hexamer_local) || !file.exists(hexamer_local)) {
     message("  Hexamer table not found in ISA package. Skipping CPAT.")
+    .log_predictor_status("CPAT", "SKIPPED", "hexamer table not found in ISA package")
   } else if (is.null(logit_local)) {
     message("  Logit model not found. Run install_isoform_databases() first. Skipping CPAT.")
+    .log_predictor_status("CPAT", "SKIPPED", "logit model not found (run install_isoform_databases())")
   } else {
     hexamer_w      <- w2l(hexamer_local)
     logit_w        <- logit_local  # already a valid path in execution env
@@ -1763,6 +1936,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
     if (!has_cpat3 && !has_cpat2) {
       message("  Neither 'cpat' nor 'run_cpat.py' found. Skipping.")
+      .log_predictor_status("CPAT", "SKIPPED", "neither 'cpat' nor 'run_cpat.py' found on PATH/conda env")
     } else {
       cpat_exe    <- if (has_cpat3) "cpat" else "run_cpat.py"
       # Correct CPAT flag order: -g <NT fasta>  -x <hexamer>  -d <logit model>  -o <prefix>
@@ -1782,19 +1956,39 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
                      else           paste0(cpat_prefix_l, ".r")
 
       if (cpat_status == 0L && file.exists(cpat_result)) {
-        switch_list <- tryCatch(
-          IsoformSwitchAnalyzeR::analyzeCPAT(
+        cpat_import_ok <- FALSE
+        switch_list <- tryCatch({
+          sl <- IsoformSwitchAnalyzeR::analyzeCPAT(
             switchAnalyzeRlist       = switch_list,
             pathToAllCPATresultFiles = cpat_result,
             codingCutoff             = NULL,
             removeNoncodinORFs       = TRUE,
             quiet                    = FALSE
-          ),
-          error = function(e) { message("  analyzeCPAT(): ", e$message); switch_list }
-        )
-        message("  CPAT results imported successfully.")
+          )
+          cpat_import_ok <- TRUE
+          sl
+        }, error = function(e) {
+          message("  analyzeCPAT(): ", e$message)
+          switch_list
+        })
+        # This message previously printed unconditionally right after the
+        # tryCatch above, even when analyzeCPAT() had just failed and been
+        # caught by the error handler -- so a failed import (switch_list
+        # left completely unchanged) still reported as a success right below
+        # its own error message, with nothing to indicate they contradicted
+        # each other. cpat_import_ok now tracks what actually happened.
+        if (cpat_import_ok) {
+          message("  CPAT results imported successfully.")
+          .log_predictor_status("CPAT", "OK", paste("result file:", cpat_result))
+        } else {
+          message("  CPAT import failed; coding-potential annotation NOT added to switch_list.")
+          .log_predictor_status("CPAT", "IMPORT_FAILED",
+                                "shell command succeeded and result file exists, but analyzeCPAT() errored -- see message above")
+        }
       } else {
         message("  CPAT failed or result file not found (", basename(cpat_result), "). Skipping.")
+        .log_predictor_status("CPAT", "FAILED",
+                              sprintf("exit code %s, result file exists: %s", cpat_status, file.exists(cpat_result)))
       }
     }
   }
@@ -1806,6 +2000,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
   if (is.null(sp_fa_w)) {
     message("  No AA FASTA available (ORF analysis may not have run). Skipping SignalP.")
+    .log_predictor_status("SignalP", "SKIPPED", "no AA FASTA extracted (see extractSequence status above)")
   } else {
     sp_out_dir_l <- file.path(out_dir, "signalp_out")
     dir.create(sp_out_dir_l, recursive = TRUE, showWarnings = FALSE)
@@ -1855,20 +2050,40 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
     } else {
       message("  Neither signalp6 nor signalp found in PATH / conda env. Skipping.")
+      .log_predictor_status("SignalP", "SKIPPED", "neither signalp6 nor signalp found on PATH/conda env")
     }
 
     if (!is.null(sp_result_file)) {
-      switch_list <- tryCatch(
-        IsoformSwitchAnalyzeR::analyzeSignalIP(
+      sp_import_ok <- FALSE
+      switch_list <- tryCatch({
+        sl <- IsoformSwitchAnalyzeR::analyzeSignalIP(
           switchAnalyzeRlist      = switch_list,
           pathToSignalPresultFile = sp_result_file,
           quiet                   = FALSE
-        ),
-        error = function(e) { message("  analyzeSignalIP(): ", e$message); switch_list }
-      )
-      message("  SignalP results imported successfully.")
+        )
+        sp_import_ok <- TRUE
+        sl
+      }, error = function(e) {
+        message("  analyzeSignalIP(): ", e$message)
+        switch_list
+      })
+      # See the identical fix on the CPAT import above: this message used to
+      # print unconditionally, even right after analyzeSignalIP() had just
+      # failed and switch_list was left unchanged.
+      if (sp_import_ok) {
+        message("  SignalP results imported successfully.")
+        .log_predictor_status("SignalP", "OK", paste("result file:", sp_result_file))
+      } else {
+        message("  SignalP import failed; signal-peptide annotation NOT added to switch_list.")
+        .log_predictor_status("SignalP", "IMPORT_FAILED",
+                              "shell command succeeded and result file exists, but analyzeSignalIP() errored -- see message above")
+      }
     } else if (sp_attempted && !is.na(sp_status) && sp_status != 0L) {
       message("  SignalP execution failed (exit ", sp_status, "). Skipping.")
+      .log_predictor_status("SignalP", "FAILED", paste("exit code", sp_status))
+    } else if (sp_attempted) {
+      message("  SignalP exited successfully but no expected result file was found. Skipping.")
+      .log_predictor_status("SignalP", "FAILED", "exit code 0 but no expected output file found -- check output format/version")
     }
   }
 
@@ -1880,6 +2095,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
   if (is.null(pfam_fa_w)) {
     message("  No AA FASTA available. Skipping Pfam.")
+    .log_predictor_status("Pfam", "SKIPPED", "no AA FASTA extracted (see extractSequence status above)")
   } else {
     pfam_done <- FALSE
 
@@ -1898,30 +2114,57 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       ips_status <- run_tool(ips_cmd)
 
       if (ips_status == 0L && file.exists(iprscan_xml_l)) {
-        switch_list <- tryCatch(
-          IsoformSwitchAnalyzeR::analyzeInterProScan(
+        ips_import_ok <- FALSE
+        switch_list <- tryCatch({
+          sl <- IsoformSwitchAnalyzeR::analyzeInterProScan(
             switchAnalyzeRlist           = switch_list,
             pathToInterProScanResultFile = iprscan_xml_l,
             quiet                        = FALSE
-          ),
-          error = function(e) { message("  analyzeInterProScan(): ", e$message); switch_list }
-        )
-        pfam_done <- TRUE
-        message("  InterProScan Pfam results imported successfully.")
+          )
+          ips_import_ok <- TRUE
+          sl
+        }, error = function(e) {
+          message("  analyzeInterProScan(): ", e$message)
+          switch_list
+        })
+        # pfam_done previously was set TRUE (and "imported successfully"
+        # printed) unconditionally right after this tryCatch, even when
+        # analyzeInterProScan() had just failed and been caught by the error
+        # handler above -- switch_list left completely unchanged. Since
+        # pfam_done gates the hmmscan fallback below (`if (!pfam_done)`), that
+        # meant a failed InterProScan *import* (as opposed to a failed
+        # InterProScan *run*, already handled by the ips_status/file.exists
+        # check) silently skipped hmmscan too, leaving switch_list with NO
+        # Pfam domain annotation at all while every message claimed success.
+        pfam_done <- ips_import_ok
+        if (ips_import_ok) {
+          message("  InterProScan Pfam results imported successfully.")
+          .log_predictor_status("Pfam-InterProScan", "OK", paste("result file:", iprscan_xml_l))
+        } else {
+          message("  InterProScan import failed; trying hmmscan fallback...")
+          .log_predictor_status("Pfam-InterProScan", "IMPORT_FAILED",
+                                "shell command succeeded and result file exists, but analyzeInterProScan() errored -- see message above; falling through to hmmscan")
+        }
       } else {
         message("  InterProScan failed (exit ", ips_status, "). Trying hmmscan fallback...")
+        .log_predictor_status("Pfam-InterProScan", "FAILED",
+                              sprintf("exit code %s, result file exists: %s", ips_status, file.exists(iprscan_xml_l)))
       }
+    } else {
+      .log_predictor_status("Pfam-InterProScan", "SKIPPED", "interproscan.sh not found on PATH/conda env")
     }
 
     # 7b. hmmscan fallback (requires Pfam-A.hmm indexed with hmmpress)
     if (!pfam_done) {
       if (!tool_ok("hmmscan")) {
         message("  hmmscan not found. Skipping Pfam analysis.")
+        .log_predictor_status("Pfam-hmmscan", "SKIPPED", "hmmscan not found on PATH/conda env")
       } else {
         pfam_db_w <- .find_pfam_db(wsl_distro, via_wsl, active_conda)
 
         if (is.null(pfam_db_w)) {
           message("  Pfam-A.hmm not found. Run install_isoform_databases() first. Skipping.")
+          .log_predictor_status("Pfam-hmmscan", "SKIPPED", "Pfam-A.hmm not found (run install_isoform_databases())")
         } else {
           pfam_tbl_l <- file.path(out_dir, "pfam_domtblout.txt")
           pfam_tbl_w <- w2l(pfam_tbl_l)
@@ -1938,22 +2181,57 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
           hm_status <- run_tool(hm_cmd)
 
           if (hm_status == 0L && file.exists(pfam_tbl_l)) {
-            switch_list <- tryCatch(
-              IsoformSwitchAnalyzeR::analyzePFAM(
+            hm_import_ok <- FALSE
+            switch_list <- tryCatch({
+              sl <- IsoformSwitchAnalyzeR::analyzePFAM(
                 switchAnalyzeRlist   = switch_list,
                 pathToPFAMresultFile = pfam_tbl_l,
                 quiet                = FALSE
-              ),
-              error = function(e) { message("  analyzePFAM(): ", e$message); switch_list }
-            )
-            message("  hmmscan Pfam results imported successfully.")
+              )
+              hm_import_ok <- TRUE
+              sl
+            }, error = function(e) {
+              message("  analyzePFAM(): ", e$message)
+              switch_list
+            })
+            # Same false-success fix as above: only report/log success when
+            # analyzePFAM() actually succeeded.
+            if (hm_import_ok) {
+              message("  hmmscan Pfam results imported successfully.")
+              .log_predictor_status("Pfam-hmmscan", "OK", paste("result file:", pfam_tbl_l))
+            } else {
+              message("  hmmscan import failed; Pfam domain annotation NOT added to switch_list.")
+              .log_predictor_status("Pfam-hmmscan", "IMPORT_FAILED",
+                                    "shell command succeeded and result file exists, but analyzePFAM() errored -- see message above")
+            }
           } else {
             message("  hmmscan failed (exit ", hm_status, "). Skipping Pfam.")
+            .log_predictor_status("Pfam-hmmscan", "FAILED",
+                                  sprintf("exit code %s, result file exists: %s", hm_status, file.exists(pfam_tbl_l)))
           }
         }
       }
     }
   }
+
+  # --------------------------------------------------------------------------
+  # 8. Final summary: what actually ended up in switch_list, independent of
+  #    what each step above *attempted*. This is the single place that
+  #    answers "did protein prediction actually happen" -- both to the
+  #    console and to predictor_status.log -- rather than needing to
+  #    reconstruct it from scattered per-tool messages.
+  # --------------------------------------------------------------------------
+  n_orf    <- if (!is.null(switch_list$orfAnalysis))            nrow(switch_list$orfAnalysis) else 0L
+  n_domain <- if (!is.null(switch_list$domainAnalysis))         length(unique(switch_list$domainAnalysis$isoform_id)) else 0L
+  n_sigp   <- if (!is.null(switch_list$signalPeptideAnalysis))  length(unique(switch_list$signalPeptideAnalysis$isoform_id)) else 0L
+  n_cds    <- if (!is.null(switch_list$isoformFeatures) && "codingPotential" %in% colnames(switch_list$isoformFeatures))
+                sum(!is.na(switch_list$isoformFeatures$codingPotential)) else 0L
+  summary_msg <- sprintf(
+    "ORF analysis: %d transcripts with an ORF entry | Coding potential (CPAT): %d annotated | Domains (Pfam): %d transcripts annotated | Signal peptide: %d transcripts annotated",
+    n_orf, n_cds, n_domain, n_sigp
+  )
+  message("\n--- Predictor summary ---\n  ", summary_msg)
+  .log_predictor_status("SUMMARY", if (n_domain > 0 || n_sigp > 0 || n_cds > 0) "OK" else "EMPTY", summary_msg)
 
   return(switch_list)
 }
@@ -2413,21 +2691,39 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
   
   # ---- 1. Annotate DTE results ----
   dte <- dte_results
-  dte$gene_label <- paste0(dte$gene_symbol, " (", dte$transcript_id, ")")
+  # transcript_id/gene here are already clean+coalesced by run_dte() itself;
+  # re-deriving with .coalesce_gene_label() rather than trusting dte$gene
+  # directly guards the same way .prepare_dtu_counts() does against a stale
+  # checkpoint predating that fix (see run_dte()'s comment for the full
+  # explanation of why an un-re-verified gene_symbol/transcript_id here was
+  # previously showing up as literal "NA (raw|pipe|delimited|header)" in
+  # DTE_top_barplot and the DTE volcano).
+  dte$transcript_id <- clean_transcript_id(dte$transcript_id)
+  dte$gene_label <- .format_gene_tx_label(
+    .coalesce_gene_label(dte$gene_symbol, dte$transcript_id), dte$transcript_id
+  )
   dte$signif_label <- ifelse(dte$signif, "Significant", "Not significant")
   
   # ---- 2. Annotate DTU results with gene symbols ----
   dtu <- dtu_results$dtu_results
   gene_map <- isoform_obj$gene_map[, c("ensembl", "symbol")]
   colnames(gene_map) <- c("gene_id", "gene_symbol")
-  dtu <- merge(dtu, gene_map, by = "gene_id", all.x = TRUE)
+  # If run_dtu()/run_dexseq_dtu() already resolved gene_symbol upstream,
+  # re-merging here would silently blank it out again for anything gene_map
+  # doesn't cover by Ensembl ID -- only fill in if not already present.
+  if (!"gene_symbol" %in% colnames(dtu)) {
+    dtu <- merge(dtu, gene_map, by = "gene_id", all.x = TRUE)
+  }
 
   missing_sym <- is.na(dtu$gene_symbol) | dtu$gene_symbol == ""
   if (any(missing_sym)) {
     already_a_symbol <- dtu$gene_id[missing_sym] %in% gene_map$gene_symbol
     dtu$gene_symbol[missing_sym][already_a_symbol] <- dtu$gene_id[missing_sym][already_a_symbol]
   }
-  dtu$gene_label <- paste0(dtu$gene_symbol, " (", dtu$gene_id, ")")
+  # Display-safe label -- see .coalesce_gene_label(): a real gene_symbol NA
+  # is expected for a genuinely novel/unannotated gene, but nothing
+  # user-facing should ever print the literal text "NA" for it.
+  dtu$gene_label <- .format_gene_tx_label(.coalesce_gene_label(dtu$gene_symbol, dtu$gene_id), dtu$gene_id)
   
   # Save annotated tables as CSV
   write.csv(dte, file.path(report_dir, "DTE_results_annotated.csv"), row.names = FALSE)
@@ -2455,6 +2751,23 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
          x = "log2 Fold Change", y = "-log10(adj. p-value)") +
     ggplot2::theme_minimal() +
     ggplot2::theme(legend.title = ggplot2::element_blank())
+  # Label the most extreme significant points with their gene so individual
+  # points are identifiable -- previously this plot only had a
+  # significant/not-significant colour legend, with no way to tell which
+  # gene any given dot was.
+  if (requireNamespace("ggrepel", quietly = TRUE)) {
+    dte_to_label <- head(dte_sig[dte_sig$signif, ][order(dte_sig[dte_sig$signif, ]$padj), ], 20)
+    if (nrow(dte_to_label) > 0) {
+      p_volcano <- p_volcano + ggrepel::geom_text_repel(
+        data = dte_to_label,
+        mapping = ggplot2::aes(x = log2FoldChange, y = -log10(padj), label = gene_label),
+        inherit.aes = FALSE, size = 2.8, max.overlaps = 30,
+        segment.size = 0.3, color = "black", seed = 42
+      )
+    }
+  } else {
+    message("   -> ggrepel not installed; DTE_volcano.pdf will show points without gene labels.")
+  }
   ggplot2::ggsave(file.path(plot_dir, "DTE_volcano.pdf"), p_volcano, width = 8, height = 6)
   
   # 3b. DTE MA plot (filter zero baseMean to avoid log10 infinite values)
@@ -2496,20 +2809,22 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
   # Companion to the DTE top-barplot above. DRIMSeq's feature-level test
   # statistic ('lr', a likelihood-ratio stat) is unsigned -- there's no
   # DTE-style log2FoldChange to rank by -- so -log10(adj. p-value) stands in
-  # as both the ranking measure and the bar height. Falls back to
-  # dtu$gene_label if a `feature_id` column isn't present (e.g. an older
-  # cached checkpoint from before run_dtu() started requesting
-  # feature-level DRIMSeq results).
-  dtu_label_col <- if ("feature_id" %in% colnames(dtu)) "feature_id" else NULL
+  # as both the ranking measure and the bar height. Prefers the
+  # transcript-level `feature_id` when present (the actual DTU unit being
+  # tested); falls back to gene_id if it isn't (e.g. an older cached
+  # checkpoint from before run_dtu() started requesting feature-level
+  # DRIMSeq results) -- either way the label is built through the same
+  # coalesce/format helpers as everywhere else, so a gene with no resolvable
+  # symbol shows its (clean) id once instead of a bare/duplicated one.
+  dtu_label_col <- if ("feature_id" %in% colnames(dtu)) "feature_id" else "gene_id"
   dtu_sig <- dtu[!is.na(dtu$adj_pvalue) & dtu$adj_pvalue < 0.05, ]
   if (nrow(dtu_sig) > 0) {
     dtu_ordered <- dtu_sig[order(dtu_sig$adj_pvalue), ]
     top_dtu <- head(dtu_ordered, top_n)
-    top_dtu$dtu_label <- if (!is.null(dtu_label_col)) {
-      paste0(top_dtu$gene_symbol, " (", top_dtu[[dtu_label_col]], ")")
-    } else {
-      top_dtu$gene_label
-    }
+    top_dtu$dtu_label <- .format_gene_tx_label(
+      .coalesce_gene_label(top_dtu$gene_symbol, top_dtu[[dtu_label_col]]),
+      top_dtu[[dtu_label_col]]
+    )
     top_dtu$neg_log10_padj <- -log10(top_dtu$adj_pvalue)
     p_dtu_bar <- ggplot2::ggplot(top_dtu, ggplot2::aes(x = reorder(dtu_label, neg_log10_padj), y = neg_log10_padj)) +
       ggplot2::geom_col(fill = "darkgreen") +
@@ -2521,6 +2836,53 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
   } else {
     message("No significant DTU transcripts found (adj_pvalue < 0.05); skipping DTU top barplot.")
   }
+
+  # 3d-ter. Cross-engine significant-gene concordance.
+  #
+  # DTE, DTU, and (when run) DEXSeq each test a genuinely different
+  # hypothesis (overall expression change; relative isoform usage change;
+  # exon-bin usage change) and are shown throughout this report as separate,
+  # independent sections -- there was previously no single place that showed
+  # how much they actually agree on *which genes* are implicated. A gene
+  # significant in all three is a much stronger candidate than one only
+  # DEXSeq calls; this makes that visible without cross-referencing three
+  # separate tables by hand.
+  safe_run({
+    sig_sets <- list(
+      DTE = unique(dte$gene_id[!is.na(dte$gene_id) & dte$signif]),
+      DTU = unique(dtu$gene_id[!is.na(dtu$gene_id) & !is.na(dtu$adj_pvalue) & dtu$adj_pvalue < 0.05])
+    )
+    if (has_dexseq && "gene_qvalue" %in% colnames(dexseq_results$results_df)) {
+      dex <- dexseq_results$results_df
+      sig_sets$DEXSeq <- unique(dex$gene_id[!is.na(dex$gene_id) & !is.na(dex$gene_qvalue) & dex$gene_qvalue < 0.05])
+    }
+    sig_sets <- sig_sets[lengths(sig_sets) > 0]
+
+    if (length(sig_sets) >= 2) {
+      all_genes  <- unique(unlist(sig_sets, use.names = FALSE))
+      membership <- vapply(sig_sets, function(s) all_genes %in% s, logical(length(all_genes)))
+      combo <- apply(membership, 1, function(row) paste(names(sig_sets)[row], collapse = " + "))
+      combo_counts <- as.data.frame(table(combination = combo), stringsAsFactors = FALSE)
+      colnames(combo_counts) <- c("combination", "n_genes")
+      combo_counts <- combo_counts[order(-combo_counts$n_genes), ]
+      combo_counts$combination <- factor(combo_counts$combination, levels = combo_counts$combination)
+
+      p_concordance <- ggplot2::ggplot(combo_counts, ggplot2::aes(x = combination, y = n_genes)) +
+        ggplot2::geom_col(fill = "darkslateblue") +
+        ggplot2::geom_text(ggplot2::aes(label = n_genes), vjust = -0.4, size = 3.5) +
+        ggplot2::labs(title = "Significant gene concordance across engines",
+                      subtitle = paste(sprintf("%s: %d genes", names(sig_sets), lengths(sig_sets)), collapse = "   |   "),
+                      x = NULL, y = "Number of genes") +
+        ggplot2::theme_minimal() +
+        ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 30, hjust = 1))
+      ggplot2::ggsave(file.path(plot_dir, "Engine_concordance.pdf"), p_concordance,
+                      width = max(7, 1.3 * nrow(combo_counts)), height = 6)
+      message("   -> Engine concordance (significant genes): ",
+              paste(sprintf("%s=%d", names(sig_sets), lengths(sig_sets)), collapse = ", "))
+    } else {
+      message("   -> Skipping engine concordance plot: fewer than 2 engines have any significant genes to compare.")
+    }
+  }, label = "Cross-engine (DTE/DTU/DEXSeq) concordance plot")
 
   # 3e. For each gene of interest, plot transcript proportions
   if (!is.null(genes_of_interest)) {
@@ -2578,6 +2940,27 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
                         x = "dIF (Isoform Fraction change)",
                         y = "-log10(Isoform Switch q-value)") +
           ggplot2::theme_minimal()
+        # Label the top switching genes -- previously this plot's only
+        # legend was the significance colour key, with no way to tell which
+        # gene any given point was.
+        if (requireNamespace("ggrepel", quietly = TRUE)) {
+          gene_col <- if ("gene_name" %in% colnames(feat_sw_plot)) "gene_name" else "gene_id"
+          feat_sw_plot$.label <- .coalesce_gene_label(feat_sw_plot[[gene_col]], feat_sw_plot$gene_id)
+          feat_sig <- feat_sw_plot[!is.na(feat_sw_plot$isoform_switch_q_value) &
+                                      feat_sw_plot$isoform_switch_q_value < 0.05 &
+                                      abs(feat_sw_plot$dIF) > 0.1, ]
+          feat_to_label <- head(feat_sig[order(feat_sig$isoform_switch_q_value), ], 20)
+          if (nrow(feat_to_label) > 0) {
+            p_switch_overview <- p_switch_overview + ggrepel::geom_text_repel(
+              data = feat_to_label,
+              mapping = ggplot2::aes(x = dIF, y = -log10(isoform_switch_q_value), label = .label),
+              inherit.aes = FALSE, size = 2.8, max.overlaps = 30,
+              segment.size = 0.3, color = "black", seed = 42
+            )
+          }
+        } else {
+          message("   -> ggrepel not installed; IsoformSwitch_overview.pdf will show points without gene labels.")
+        }
         ggplot2::ggsave(file.path(plot_dir, "IsoformSwitch_overview.pdf"),
                         p_switch_overview, width = 7, height = 6)
       }
@@ -2585,53 +2968,60 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
 
     # 3f-bis. Genome-wide functional-consequence and alternative-splicing
     # summary plots.
-
+    #
+    # IsoformSwitchAnalyzeR's extractConsequenceSummary() / -Enrichment() /
+    # extractSplicingSummary() / -Enrichment() do NOT return a ggplot object
+    # to capture -- with returnResult = FALSE they return invisible(NULL),
+    # and with returnResult = TRUE they return the underlying results
+    # data.frame, never the plot itself. plot = TRUE instead makes them draw
+    # directly (as a side effect, via print()) to whatever graphics device
+    # is current at call time. The previous code assigned the return value
+    # to p_*, checked inherits(p_*, "ggplot") -- always FALSE -- and so
+    # never called ggsave(); meanwhile the actual plot silently went to
+    # whatever device happened to be open (often nothing in a batch run, or
+    # a leftover device from earlier code), so *_summary.pdf / *_enrichment.pdf
+    # were never written, or written empty. Fixed the same way switchPlot()
+    # is already handled a few hundred lines up in this file: open our own
+    # pdf() device first via safe_pdf() so the function's internal print()
+    # lands exactly where we want it, regardless of its return value.
     safe_run(
-      {
-        p_cons <- IsoformSwitchAnalyzeR::extractConsequenceSummary(
+      safe_pdf(file.path(plot_dir, "ConsequenceSummary.pdf"), width = 9, height = 6, expr = {
+        IsoformSwitchAnalyzeR::extractConsequenceSummary(
           switch_list, consequencesToAnalyze = "all",
           plot = TRUE, returnResult = FALSE
         )
-        if (!is.null(p_cons) && inherits(p_cons, "ggplot"))
-          ggplot2::ggsave(file.path(plot_dir, "ConsequenceSummary.pdf"), p_cons, width = 9, height = 6)
-      },
+      }),
       label = "Genome-wide consequence summary plot (extractConsequenceSummary)"
     )
 
     safe_run(
-      {
-        p_cons_enr <- IsoformSwitchAnalyzeR::extractConsequenceEnrichment(
+      safe_pdf(file.path(plot_dir, "ConsequenceEnrichment.pdf"), width = 9, height = 6, expr = {
+        IsoformSwitchAnalyzeR::extractConsequenceEnrichment(
           switch_list, consequencesToAnalyze = "all",
           plot = TRUE, returnResult = FALSE
         )
-        if (!is.null(p_cons_enr) && inherits(p_cons_enr, "ggplot"))
-          ggplot2::ggsave(file.path(plot_dir, "ConsequenceEnrichment.pdf"), p_cons_enr, width = 9, height = 6)
-      },
+      }),
       label = "Genome-wide consequence enrichment plot (extractConsequenceEnrichment)"
     )
 
     if (!is.null(switch_list[["AlternativeSplicingAnalysis"]])) {
       safe_run(
-        {
-          p_spl <- IsoformSwitchAnalyzeR::extractSplicingSummary(
+        safe_pdf(file.path(plot_dir, "SplicingSummary.pdf"), width = 9, height = 6, expr = {
+          IsoformSwitchAnalyzeR::extractSplicingSummary(
             switch_list, splicingToAnalyze = "all",
             plot = TRUE, returnResult = FALSE
           )
-          if (!is.null(p_spl) && inherits(p_spl, "ggplot"))
-            ggplot2::ggsave(file.path(plot_dir, "SplicingSummary.pdf"), p_spl, width = 9, height = 6)
-        },
+        }),
         label = "Genome-wide alternative splicing summary plot (extractSplicingSummary)"
       )
 
       safe_run(
-        {
-          p_spl_enr <- IsoformSwitchAnalyzeR::extractSplicingEnrichment(
+        safe_pdf(file.path(plot_dir, "SplicingEnrichment.pdf"), width = 9, height = 6, expr = {
+          IsoformSwitchAnalyzeR::extractSplicingEnrichment(
             switch_list, splicingToAnalyze = "all",
             plot = TRUE, returnResult = FALSE
           )
-          if (!is.null(p_spl_enr) && inherits(p_spl_enr, "ggplot"))
-            ggplot2::ggsave(file.path(plot_dir, "SplicingEnrichment.pdf"), p_spl_enr, width = 9, height = 6)
-        },
+        }),
         label = "Genome-wide alternative splicing enrichment plot (extractSplicingEnrichment)"
       )
     } else {

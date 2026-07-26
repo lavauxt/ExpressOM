@@ -145,6 +145,29 @@
   if (length(kegg_ids) > top_genes) kegg_ids <- kegg_ids[seq_len(top_genes)]
   # Ensure IDs start with species code
   kegg_ids <- ifelse(grepl("^[a-zA-Z]", kegg_ids), kegg_ids, paste0(kegg_code, kegg_ids))
+
+  # KEGG's "Global and overview maps" (01100-series) are reference maps that
+  # aggregate hundreds of pathways into one diagram. pathview() is well
+  # documented to choke on these: they're enormous, many nodes have no
+  # per-pathway layout coordinates in the KGML pathview actually needs (that
+  # metadata is only reliably present for the regular, single-pathway maps),
+  # and a render that dies partway through is the single most common source
+  # of "some pathway crash" reports for this function. There's nothing
+  # gene-expression-specific to recover by retrying them, so they're skipped
+  # up front rather than attempted-then-caught -- cheaper, and the message
+  # below makes it explicit which IDs were never even attempted vs. which
+  # ones were tried and failed.
+  overview_map_ids <- c("01100", "01110", "01120", "01200", "01210",
+                        "01212", "01230", "01232", "01240", "01250")
+  overview_pattern <- paste0("^", kegg_code, "(", paste(overview_map_ids, collapse = "|"), ")$")
+  is_overview <- grepl(overview_pattern, kegg_ids)
+  if (any(is_overview)) {
+    message("   -> Skipping ", sum(is_overview), " KEGG global/overview map(s) ",
+            "(known to crash pathview's per-node layout): ",
+            paste(kegg_ids[is_overview], collapse = ", "))
+    kegg_ids <- kegg_ids[!is_overview]
+  }
+  if (length(kegg_ids) == 0) return(invisible(NULL))
   
   # Prepare gene.data: a named numeric vector of log2FoldChanges with Entrez IDs as names
   gene_data <- expression_vector[!is.na(expression_vector)]
@@ -155,9 +178,18 @@
   
   # Attach pathview namespace if not already attached
   if (!"package:pathview" %in% search()) try(attachNamespace("pathview"), silent = TRUE)
-  
+
+  succeeded <- character(0)
+  failed    <- character(0)
+
   for (pid in kegg_ids) {
-    safe_run({
+    # Devices open *before* this pathway's attempt -- anything left over
+    # afterwards is pathview()'s (pathview manages its own png() device
+    # internally and doesn't always clean up on error), and is force-closed
+    # below so a mid-render crash on this pathway can't leave a stray open
+    # device for the *next* pathway's pathview() call to draw into.
+    devs_before <- grDevices::dev.list()
+    result <- safe_run({
       withr::with_dir(dir_kegg, {
         # gene.idtype = "entrez": gene_data's names are NCBI Entrez Gene IDs
         # (see all_lfc_vector in run_functional_analysis()). This is the
@@ -198,9 +230,24 @@
           f <- paste0(pid, ext)
           if (file.exists(f)) file.remove(f)
         }
+        TRUE
       })
     }, label = paste("KEGG pathview", pid))
+
+    # Force-close anything left open beyond what existed before this
+    # iteration, whether it succeeded or not -- see comment above devs_before.
+    devs_after <- grDevices::dev.list()
+    stray <- setdiff(devs_after, devs_before)
+    for (d in stray) grDevices::dev.off(d)
+
+    if (isTRUE(result)) succeeded <- c(succeeded, pid) else failed <- c(failed, pid)
   }
+
+  message("   -> KEGG pathview: ", length(succeeded), "/", length(kegg_ids),
+          " pathway map(s) rendered successfully",
+          if (length(failed) > 0) paste0("; failed (skipped, others unaffected): ",
+                                          paste(failed, collapse = ", ")) else "", ".")
+  invisible(list(succeeded = succeeded, failed = failed))
 }
 
 #' Run GSEA for Gene Ontology (BP, MF, CC)
@@ -688,6 +735,13 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 #' @description Performs Gene Set Enrichment Analysis using both `fgsea` and `clusterProfiler` using external GMT files (e.g., from MSigDB) or downloading via msigdbr.
 #' @param res_tbl The full results table from `export_significant_results()` containing 'gene' and 'log2FoldChange'.
 #' @param gmt_file Path to a local `.gmt` file, a character vector/list of multiple `.gmt` files, or MSigDB category names (e.g., "H", "C2") to download via msigdbr.
+#'   A category may include a subcategory suffix separated by ":", e.g.
+#'   `"C2:CP:KEGG"` (KEGG pathways within curated gene sets), `"C5:GO:BP"`
+#'   (GO Biological Process within ontology gene sets), `"C3:TFT:GTRD"`
+#'   (transcription factor targets). Only the first ":" is treated as the
+#'   category/subcategory separator, since msigdbr's own subcategory codes
+#'   already contain one (e.g. "CP:KEGG"). Falls back to the full,
+#'   unfiltered category if the requested subcategory isn't found.
 #' @param edb Ensembl Database (used to detect species for msigdbr).
 #' @param out_dir Output directory for fgsea results.
 #' @param comp_name Comparison name (e.g. "Treated_vs_Control") for file naming.
@@ -709,8 +763,14 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
       
       valid_collections <- c("H", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9",
                              "MH", "M1", "M2", "M3", "M5", "M7", "M8", "HALLMARK")
-      
-      input_cat <- toupper(gmt_item)
+
+      # "<category>:<subcategory>" syntax, e.g. "C2:CP:KEGG" -- only the
+      # FIRST colon is the category/subcategory separator, since msigdbr's
+      # own subcategory codes already contain one (e.g. "CP:KEGG", "GO:BP").
+      raw_input     <- toupper(gmt_item)
+      has_subcat    <- grepl(":", raw_input)
+      input_cat     <- if (has_subcat) sub(":.*$", "", raw_input) else raw_input
+      input_subcat  <- if (has_subcat) sub("^[^:]+:", "", raw_input) else NULL
       
       if (!is.null(gmt_item) && input_cat %in% valid_collections) {    
               if (input_cat %in% c("MH", "HALLMARK")) {
@@ -720,29 +780,35 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
               } else {
                 msig_cat <- input_cat
               }
-        gmt_name <- paste0("msigdbr_", input_cat)
-        message("-> Fetching MSigDB category [", input_cat, "] (mapped to ", msig_cat, ") via msigdbr for ", msig_org, "...")
+        gmt_name <- paste0("msigdbr_", input_cat, if (!is.null(input_subcat)) paste0("_", gsub(":", "_", input_subcat)) else "")
+        message("-> Fetching MSigDB category [", input_cat, "]",
+                if (!is.null(input_subcat)) paste0(" subcategory [", input_subcat, "]") else "",
+                " (mapped to ", msig_cat, ") via msigdbr for ", msig_org, "...")
         } else {
           message("Provided GMT file '", gmt_item, "' not recognized as MSigDB category. Falling back to Hallmark...")
           msig_cat <- "H"
+          input_subcat <- NULL
           gmt_name <- "hallmark_msigdbr"
       }
       
-      .msigdbr_fetch <- function(species, cat) {
+      .msigdbr_fetch <- function(species, cat, subcat = NULL) {
         fmls <- names(formals(msigdbr::msigdbr))
-        if ("collection" %in% fmls) {
-          msigdbr::msigdbr(species = species, collection = cat) %>%
-            dplyr::select(gs_name, gene_symbol)
-        } else {
-          msigdbr::msigdbr(species = species, category = cat) %>%
-            dplyr::select(gs_name, gene_symbol)
-        }
+        # Both the modern ("collection") and legacy ("category") msigdbr
+        # argument names use "subcategory" for the sub-collection filter --
+        # see run_local_enrichment()'s .fetch(), which already established
+        # this against the installed msigdbr version.
+        args <- list(species = species)
+        if ("collection" %in% fmls) args$collection <- cat else args$category <- cat
+        if (!is.null(subcat)) args$subcategory <- subcat
+        do.call(msigdbr::msigdbr, args) %>% dplyr::select(gs_name, gene_symbol)
       }
 
       m_t2g <- tryCatch(
-        .msigdbr_fetch(msig_org, msig_cat),
+        .msigdbr_fetch(msig_org, msig_cat, input_subcat),
         error = function(e) {
-          message("   -> msigdbr collection '", msig_cat, "' not available, falling back to 'H'")
+          message("   -> msigdbr collection '", msig_cat,
+                  if (!is.null(input_subcat)) paste0(" / subcategory '", input_subcat, "'") else "",
+                  "' not available, falling back to 'H'")
           tryCatch(
             .msigdbr_fetch(msig_org, "H"),
             error = function(e2) {
@@ -751,6 +817,17 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
           )
         }
       )
+      # A subcategory that parses fine but simply doesn't exist for this
+      # collection/organism (e.g. a typo, or a subcategory that's only
+      # defined for human when msig_org is mouse) returns a valid *empty*
+      # data.frame rather than an error -- the tryCatch above wouldn't catch
+      # this, so it's handled separately: retry without the subcategory
+      # filter instead of silently proceeding with zero gene sets.
+      if (!is.null(input_subcat) && nrow(m_t2g) == 0) {
+        message("   -> msigdbr subcategory '", input_subcat, "' returned 0 gene sets for '",
+                msig_cat, "' / ", msig_org, "; using the full '", msig_cat, "' collection instead.")
+        m_t2g <- tryCatch(.msigdbr_fetch(msig_org, msig_cat), error = function(e) m_t2g)
+      }
       
       pathways.GSEA <- m_t2g
       pathways.fgsea <- split(x = m_t2g$gene_symbol, f = m_t2g$gs_name)

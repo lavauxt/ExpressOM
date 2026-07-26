@@ -48,6 +48,52 @@ clean_transcript_id <- function(x) {
   strip_ensembl_version(x)
 }
 
+#' Build a display-safe gene label, falling back to the ID when no symbol is known
+#'
+#' \code{paste0(symbol, ...)} silently stringifies a missing symbol as the
+#' literal text "NA" (\code{paste0()} coerces \code{NA} to \code{"NA"} on
+#' concatenation), so any label built directly from an unjoined/unannotated
+#' \code{gene_symbol} column ends up displaying "NA" instead of something a
+#' person can actually identify a row by -- indistinguishable from a real
+#' gene named "NA". This is the single source of truth for what to show
+#' instead: fall back to a cleaned version of \code{id} itself, exactly the
+#' pattern already used in mod_dge.R's \code{export_significant_results()}
+#' (\code{res_tbl$gene <- ifelse(is.na(symbol) | symbol == "", ensembl,
+#' symbol)}), generalized here so DTE/DTU/DEXSeq/switch tables and plots use
+#' the same rule instead of each re-deriving (or forgetting to derive) it.
+#' A missing symbol is expected and NOT a bug for genuinely novel/unannotated
+#' loci (e.g. SQANTI3/StringTie-assembled transcripts with no Ensembl gene);
+#' this only controls how that case is *displayed*.
+#'
+#' @param symbol Character vector of gene symbols, possibly containing NA/""
+#' @param id Character vector (same length as \code{symbol}) of a stable
+#'   identifier to fall back to, e.g. Ensembl gene/transcript ID
+#' @return Character vector, same length as the inputs: \code{symbol} where
+#'   known, \code{id} otherwise
+#' @keywords internal
+#' @export
+.coalesce_gene_label <- function(symbol, id) {
+  ifelse(is.na(symbol) | symbol == "", id, symbol)
+}
+
+#' Build a "SYMBOL (id)" label without a redundant repeat when there's no symbol
+#'
+#' Meant to be used on the output of \code{.coalesce_gene_label()}: when a
+#' gene has a real symbol, this renders "SYMBOL (id)" (e.g. "IGLL5
+#' (ENST00001131995)"); when it doesn't and \code{gene} has already fallen
+#' back to \code{id} itself, this avoids the redundant "ENST00001131995
+#' (ENST00001131995)" and just shows the id once.
+#'
+#' @param gene Character vector, typically \code{.coalesce_gene_label(symbol, id)}
+#' @param id Character vector (same length as \code{gene}) of the identifier
+#'   that was used as the fallback
+#' @return Character vector, same length as the inputs
+#' @keywords internal
+#' @export
+.format_gene_tx_label <- function(gene, id) {
+  ifelse(gene == id, id, paste0(gene, " (", id, ")"))
+}
+
 #' Fill missing Entrez IDs in a gene_map using clusterProfiler::bitr
 #'
 #' Shared by both the DGE (\code{import_counts()}) and isoform

@@ -1,5 +1,38 @@
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+#' Write a PCA sample-scores table (+ companion percent-variance file)
+#'
+#' Shared by both the gene-level PCA (run_eda(), via plot_custom_pca()) and
+#' the transcript-level PCA (run_isoform_pca()) so the two stay consistent.
+#' Writes the actual per-sample coordinate on every PC -- previously the
+#' only PCA table written to disk was the gene-loadings/variance table
+#' (which genes went into the PCA and their variance), with no per-sample
+#' values at all.
+#'
+#' @param pca_scores data.frame from plot_custom_pca()'s `pca_scores` return
+#'   element (or NULL, in which case this is a no-op), with a "percentVar"
+#'   attribute set
+#' @param plot_dir Output directory
+#' @param file_stub File name prefix, e.g. "PCA_Treated_vs_Control" -- writes
+#'   "<file_stub>_sample_scores.tsv" and "<file_stub>_variance_explained.tsv"
+#' @keywords internal
+.write_pca_scores <- function(pca_scores, plot_dir, file_stub) {
+  if (is.null(pca_scores) || nrow(pca_scores) == 0) return(invisible(NULL))
+
+  scores_path <- file.path(plot_dir, paste0(file_stub, "_sample_scores.tsv"))
+  write.table(pca_scores, file = scores_path, sep = "\t", row.names = FALSE, quote = FALSE)
+  message("   -> Saved per-sample PCA scores (all PCs) to: ", scores_path)
+
+  pct_var <- attr(pca_scores, "percentVar")
+  if (!is.null(pct_var)) {
+    var_path <- file.path(plot_dir, paste0(file_stub, "_variance_explained.tsv"))
+    write.table(data.frame(PC = names(pct_var), PercentVariance = as.numeric(pct_var)),
+                file = var_path, sep = "\t", row.names = FALSE, quote = FALSE)
+    message("   -> Saved percent variance explained per PC to: ", var_path)
+  }
+  invisible(NULL)
+}
+
 #' Exploratory Data Analysis for DESeq2
 #'
 #' @param dds DESeqDataSet object
@@ -74,6 +107,7 @@ run_eda <- function(dds, edb, out_dir, level, base,
     message("   -> Saved top variable genes used in PCA to: ",
             file.path(plot_dir, paste0("PCA_", comp_label, ".tsv")))
   }
+  .write_pca_scores(res_orig$pca_scores, plot_dir, paste0("PCA_", comp_label))
 
   # --- Batch correction + PCA after ---
   if (!is.null(batch_col) && batch_col %in% colnames(SummarizedExperiment::colData(dds)) &&
@@ -111,6 +145,7 @@ run_eda <- function(dds, edb, out_dir, level, base,
           message("   -> Saved top variable genes used in batch-corrected PCA to: ",
                   file.path(plot_dir, paste0("PCA_BatchCorrected_", comp_label, ".tsv")))
         }
+        .write_pca_scores(res_corr$pca_scores, plot_dir, paste0("PCA_BatchCorrected_", comp_label))
       }
     }
   }
@@ -214,6 +249,16 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
                          title = paste(level, "vs", base)))
     )
   })
+
+  # plot_top_genes_heatmap() is a complete, working function (clustered
+  # heatmap of the top-N DE genes' normalised counts, labelled by symbol) but
+  # had zero call sites anywhere in the package -- built and then never wired
+  # in. The per-gene boxplot above shows the same top genes one at a time;
+  # this adds the clustered-heatmap view (sample-sample structure among just
+  # the DE genes) that boxplots can't show.
+  plot_top_genes_heatmap(dds, results_data, main_condition, level, base,
+                         top_n = top_genes, padj_cutoff = padj_cutoff,
+                         plot_dir = plot_dir, batch_col = batch_col)
 }
 
 
@@ -266,6 +311,17 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
   pca_df     <- data.frame(PC1 = pca$x[, 1], PC2 = pca$x[, 2], coldata)
   pca_df$sample_label <- rownames(pca_df)
 
+  # Per-sample scores on EVERY PC (not just the PC1/PC2 used for plotting),
+  # for anyone who wants the actual coordinate values rather than just the
+  # gene-loadings/variance table below (which only ever reported which
+  # genes went into the PCA and their variance, never a per-sample value).
+  # One row per sample; sample_label + all available coldata columns come
+  # first so this is self-contained without needing a separate join back to
+  # the original metadata.
+  pca_scores <- data.frame(sample_label = rownames(pca$x), coldata,
+                           pca$x, row.names = NULL, check.names = FALSE)
+  attr(pca_scores, "percentVar") <- stats::setNames(percentVar, colnames(pca$x))
+
   # ---- Handle NULL or missing condition ----
   if (is.null(condition) || !(condition %in% colnames(pca_df))) {
     pca_df$Group <- "All Samples"
@@ -300,7 +356,7 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
     ggplot2::labs(title = title)
 
   if (return_gene_list) {
-    return(list(plot = p, gene_info = gene_info))
+    return(list(plot = p, gene_info = gene_info, pca_scores = pca_scores))
   } else {
     if (return_plot) return(p) else { print(p); invisible(p) }
   }
