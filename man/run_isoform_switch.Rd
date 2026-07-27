@@ -30,7 +30,11 @@ run_isoform_switch(
 \arguments{
 \item{dte_results}{(unused, kept for compatibility)}
 
-\item{dtu_results}{(unused, kept for compatibility)}
+\item{dtu_results}{Required (and used) when \code{test_engine = "DRIMSeq"}:
+the \code{list(dtu_results = ...)} returned by \code{run_dtu()}, whose
+\code{feature_id} column is fed into IsoformSwitchAnalyzeR as
+pre-computed DTU p-values. Not used when \code{test_engine = "DEXSeq"}
+(that path calls \code{isoformSwitchTestDEXSeq()} itself instead).}
 
 \item{isoform_obj}{Imported isoform data (from import_transcript_counts)}
 

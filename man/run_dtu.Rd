@@ -45,7 +45,16 @@ run_dtu(
 \item{bpparam}{Optional BiocParallel parameter object for DRIMSeq operations}
 }
 \value{
-List with dtu_results
+List with \code{dtu_results}, a TRANSCRIPT-level (feature-level)
+  data.frame with columns \code{gene_id}, \code{feature_id}, \code{lr},
+  \code{df}, \code{pvalue}, and a genome-wide-recomputed \code{adj_pvalue},
+  plus \code{gene_symbol}/\code{entrezid}. Uses
+  \code{DRIMSeq::results(d, level = "feature")} rather than DRIMSeq's
+  default gene-level result: (1) that's the whole point of a
+  *transcript*-usage test, and (2) \code{run_isoform_switch()}'s
+  \code{test_engine = "DRIMSeq"} path requires a \code{feature_id} column
+  that only the feature-level result has -- without this, that path could
+  never succeed (see \code{required_cols} check there).
 }
 \description{
 Run DTU (Differential Transcript Usage) using DRIMSeq with improved filtering

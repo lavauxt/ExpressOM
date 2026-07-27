@@ -4,7 +4,14 @@
 \alias{run_dte}
 \title{Run DTE (Differential Transcript Expression) using DESeq2}
 \usage{
-run_dte(isoform_obj, condition, level, base, padj_cutoff = 0.05)
+run_dte(
+  isoform_obj,
+  condition,
+  level,
+  base,
+  padj_cutoff = 0.05,
+  bpparam = NULL
+)
 }
 \arguments{
 \item{isoform_obj}{Output from import_transcript_counts()}
