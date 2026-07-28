@@ -355,7 +355,12 @@ run_isoform_pca <- function(isoform_obj, condition, level = NULL, base = NULL,
     message("   -> Saved top variable transcripts used in PCA to: ",
             file.path(plot_dir, paste0("PCA_transcripts_", comp_label, ".tsv")))
   }
-  .write_pca_scores(res$pca_scores, plot_dir, paste0("PCA_transcripts_", comp_label))
+  tx_values <- res$gene_values
+  if (!is.null(tx_values) && nrow(tx_values) > 0) {
+    tx_values$gene <- clean_transcript_id(tx_values$gene)
+    colnames(tx_values)[colnames(tx_values) == "gene"] <- "transcript_id"
+  }
+  .write_pca_scores(res$pca_scores, plot_dir, paste0("PCA_transcripts_", comp_label), gene_values = tx_values)
 
   message("Transcript-level PCA completed. Plots saved in: ", plot_dir)
   invisible(res)
@@ -1472,6 +1477,17 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
       attachNamespace("dplyr")
     }
 
+    # outputPlots = FALSE on every branch below: isoformSwitchAnalysisCombined()
+    # / isoformSwitchAnalysisPart2() default to outputPlots = TRUE, which (with
+    # pathToOutput = out_dir, as set here) silently writes ISA's own switch
+    # plots directly under out_dir using its own comparison-named subfolder
+    # (e.g. "IsoformSwitch/CONTROL_vs_NONMUT") -- a third, uncontrolled copy,
+    # generated before predictor (CPAT/SignalP/Pfam) annotations even exist,
+    # in addition to the two intentional copies this pipeline already
+    # produces later: Step 3.5's predictor-refreshed set (out_dir/plots/
+    # switch_plots_with_predictors/) and the report's own top_switches/
+    # folder. Disabling it here removes that redundant/uncontrolled third
+    # copy without losing anything -- both later copies supersede it.
     switch_list <- switch(
       test_engine,
       DEXSeq = {
@@ -1481,7 +1497,8 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
             switchAnalyzeRlist = switch_list,
             genomeObject       = genome_object,
             pathToOutput       = out_dir,
-            n                  = 50
+            n                  = 50,
+            outputPlots        = FALSE
           )
           message("Combined analysis (DEXSeq) completed.")
           sl
@@ -1529,7 +1546,8 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
             genomeObject       = genome_object,
             pathToOutput       = out_dir,
             n                  = 50,
-            dtuResults         = drim_df
+            dtuResults         = drim_df,
+            outputPlots        = FALSE
           )
           message("Combined analysis (DRIMSeq) completed.")
           sl
@@ -1567,7 +1585,8 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
               switchAnalyzeRlist = sl_tested,
               genomeObject       = genome_object,
               pathToOutput       = out_dir,
-              n                  = 50
+              n                  = 50,
+              outputPlots        = FALSE
             )
             message("satuRn analysis completed.")
             sl_final
@@ -1837,7 +1856,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
   # Check tool availability (conda-aware)
   tool_ok <- function(t) {
-    .wsl_tool_exists(t, wsl_distro, via_wsl, active_conda, "isoform_tools")
+    .wsl_tool_exists(t, wsl_distro, via_wsl, active_conda, "isoform_tools", log_dir = log_dir)
   }
 
   # Convert a Windows path to a WSL path (identity on Linux/Mac)
@@ -1917,7 +1936,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
 
   hexamer_local <- system.file("extdata", paste0(organism, "_Hexamer.tsv"),
                                 package = "IsoformSwitchAnalyzeR")
-  logit_local   <- .find_cpat_logit_model(organism, wsl_distro, via_wsl, active_conda)
+  logit_local   <- .find_cpat_logit_model(organism, wsl_distro, via_wsl, active_conda, log_dir = log_dir)
 
   if (!nzchar(hexamer_local) || !file.exists(hexamer_local)) {
     message("  Hexamer table not found in ISA package. Skipping CPAT.")
@@ -2160,7 +2179,7 @@ run_isoform_switch <- function(dte_results = NULL, dtu_results = NULL,
         message("  hmmscan not found. Skipping Pfam analysis.")
         .log_predictor_status("Pfam-hmmscan", "SKIPPED", "hmmscan not found on PATH/conda env")
       } else {
-        pfam_db_w <- .find_pfam_db(wsl_distro, via_wsl, active_conda)
+        pfam_db_w <- .find_pfam_db(wsl_distro, via_wsl, active_conda, log_dir = log_dir)
 
         if (is.null(pfam_db_w)) {
           message("  Pfam-A.hmm not found. Run install_isoform_databases() first. Skipping.")
@@ -3089,15 +3108,57 @@ generate_dte_dtu_report <- function(dte_results, dtu_results, isoform_obj,
   # Convert every report plot from PDF to PNG up front (browsers can't
   # render a PDF through an <img> tag); the template's .fig() helper picks
   # the .png if present and falls back to .pdf otherwise.
+  #
+  # This block ALSO writes plot_manifest.csv, independent of anything the
+  # Rmd template itself does with these files: a per-figure record of
+  # whether the source PDF is suspiciously small/empty and whether PNG
+  # conversion succeeded. This exists because "the report shows no
+  # plots/data" can happen at several different, easily-confused layers --
+  # (a) the figure was never generated, (b) it was generated but the PDF is
+  # genuinely empty, (c) the PDF is fine but PNG conversion failed, or (d)
+  # both PDF and PNG are fine but the *template*'s own embedding logic
+  # doesn't pick them up -- and only this file distinguishes between them
+  # without having to open the (multi-MB, mostly-base64) report.html by
+  # hand. If every row here shows a reasonable size and "converted = yes"
+  # but the report is still blank, the problem is inside dte_dtu_report.Rmd
+  # itself, not in anything this function controls.
   plot_pdfs <- list.files(plot_dir, pattern = "\\.pdf$", recursive = TRUE, full.names = TRUE)
-  converted_any <- FALSE
-  for (pdf_path in plot_pdfs) {
-    if (!is.null(convert_pdf_to_png(pdf_path))) converted_any <- TRUE
+  manifest <- data.frame(
+    pdf_path       = plot_pdfs,
+    size_bytes     = vapply(plot_pdfs, function(f) file.info(f)$size, numeric(1)),
+    png_converted  = FALSE,
+    stringsAsFactors = FALSE
+  )
+  for (i in seq_along(plot_pdfs)) {
+    if (!is.null(convert_pdf_to_png(plot_pdfs[i]))) manifest$png_converted[i] <- TRUE
   }
-  if (!converted_any && length(plot_pdfs) > 0) {
-    warning("Could not convert any report plots to PNG (see preceding warnings); ",
-            "figures in report.html may not render since browsers cannot display ",
-            "PDF files through an <img> tag. Install 'pdftools' to fix this.")
+  manifest$likely_empty <- manifest$size_bytes < 2000  # a valid single-page PDF is essentially never this small
+  manifest_path <- file.path(report_dir, "plot_manifest.csv")
+  write.csv(manifest, manifest_path, row.names = FALSE)
+
+  n_empty <- sum(manifest$likely_empty)
+  n_unconverted <- sum(!manifest$png_converted)
+  if (n_empty > 0) {
+    message("   -> WARNING: ", n_empty, " plot PDF(s) are suspiciously small (<2KB, likely empty). See ",
+            manifest_path, " for which ones.")
+  }
+  if (n_unconverted > 0 && nrow(manifest) > 0) {
+    note_path <- file.path(report_dir, "README_IF_PLOTS_MISSING.txt")
+    note_lines <- c(
+      sprintf("%d of %d plot PDF(s) could not be converted to PNG.", n_unconverted, nrow(manifest)),
+      "report.html embeds figures as PNG (browsers cannot display PDF through an <img> tag);",
+      "any figure that didn't convert will not show up in the HTML report even though its",
+      "PDF exists in plots/ and can be opened directly.",
+      "",
+      "Most common cause: the 'pdftools' R package is not installed. Run:",
+      "  install.packages('pdftools')",
+      "and re-generate the report (no need to re-run DTE/DTU/switch analysis).",
+      "",
+      "See plot_manifest.csv in this folder for the exact per-file status."
+    )
+    writeLines(note_lines, note_path)
+    warning("Could not convert ", n_unconverted, " of ", nrow(manifest), " report plot(s) to PNG; ",
+            "figures in report.html may not render. See ", note_path, " and ", manifest_path, ".")
   }
 
   rmd_file <- tempfile(fileext = ".Rmd")

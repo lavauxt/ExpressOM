@@ -77,7 +77,7 @@
 #' @param use_wsl    Route through WSL? (only effective on Windows.)
 #' @return Path to conda.sh inside the execution environment, or NULL.
 #' @keywords internal
-.find_conda_sh <- function(wsl_distro = "Ubuntu", use_wsl = TRUE) {
+.find_conda_sh <- function(wsl_distro = "Ubuntu", use_wsl = TRUE, log_dir = NULL) {
   csh <- .wsl_exec_script(
     paste(
       'for c in "$(conda info --base 2>/dev/null)/etc/profile.d/conda.sh"',
@@ -86,7 +86,7 @@
       'do [ -f "$c" ] && echo "$c" && break; done'
     ),
     wsl_distro = wsl_distro, use_wsl = use_wsl, intern = TRUE, ignore_stderr = TRUE,
-    log_dir = NULL
+    log_dir = log_dir
   )
   csh <- trimws(csh[nzchar(trimws(csh))])
   if (length(csh) > 0) csh[1] else NULL
@@ -260,13 +260,14 @@
                               wsl_distro = "Ubuntu",
                               use_wsl    = TRUE,
                               conda_sh   = NULL,
-                              conda_env  = "isoform_tools") {
+                              conda_env  = "isoform_tools",
+                              log_dir    = NULL) {
   status <- .wsl_exec_script(
     bash_body     = sprintf("command -v %s >/dev/null 2>&1", shQuote(tool_name, type = "sh")),
     wsl_distro    = wsl_distro, use_wsl = use_wsl,
     conda_sh      = conda_sh,  conda_env = conda_env,
     intern        = FALSE,     ignore_stderr = TRUE,
-    log_dir       = NULL
+    log_dir       = log_dir
   )
   isTRUE(status == 0L)
 }
@@ -276,7 +277,8 @@
 .find_pfam_db <- function(wsl_distro = "Ubuntu",
                            use_wsl    = TRUE,
                            conda_sh   = NULL,
-                           conda_env  = "isoform_tools") {
+                           conda_env  = "isoform_tools",
+                           log_dir    = NULL) {
   result <- .wsl_exec_script(
     bash_body = c(
       'if [ -n "$PFAM_DB" ] && [ -f "$PFAM_DB" ]; then echo "$PFAM_DB"; exit 0; fi',
@@ -285,7 +287,7 @@
     wsl_distro = wsl_distro, use_wsl = use_wsl,
     conda_sh   = conda_sh, conda_env = conda_env,
     intern = TRUE, ignore_stderr = TRUE,
-    log_dir = NULL
+    log_dir = log_dir
   )
   result <- trimws(result[nzchar(trimws(result))])
   if (length(result) > 0) result[1] else NULL
@@ -301,7 +303,8 @@
                                     wsl_distro = "Ubuntu",
                                     use_wsl    = TRUE,
                                     conda_sh   = NULL,
-                                    conda_env  = "isoform_tools") {
+                                    conda_env  = "isoform_tools",
+                                    log_dir    = NULL) {
   fname <- paste0(organism, "_logitModel.RData")
 
   # 1. IsoformSwitchAnalyzeR ships the models in its extdata
@@ -332,7 +335,7 @@
     wsl_distro = wsl_distro, use_wsl = use_wsl,
     conda_sh   = conda_sh, conda_env = conda_env,
     intern = TRUE, ignore_stderr = TRUE,
-    log_dir = NULL
+    log_dir = log_dir
   )
   result <- trimws(result[nzchar(trimws(result))])
   if (length(result) > 0) result[1] else NULL
@@ -404,22 +407,51 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
     errors           = character()
   )
 
+  # Resolved up front (previously computed only at the very end of this
+  # function, AFTER both early-return paths below) so that wsl_debug.json
+  # actually gets written no matter how far this check gets -- previously,
+  # in exactly the "WSL isn't working at all" case, this function returned
+  # before ever reaching the logging code, leaving nothing but an ephemeral
+  # console message() (which needs verbose = TRUE, and is easy to miss or
+  # lose in a long/non-interactive run) and no persistent trace whatsoever.
+  effective_log_dir <- if (!is.null(log_dir)) log_dir
+                        else if (!is.null(out_dir)) file.path(out_dir, "Log")
+                        else NULL
+  if (!is.null(effective_log_dir) && !dir.exists(effective_log_dir)) {
+    dir.create(effective_log_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  .finish <- function(results) {
+    if (!is.null(effective_log_dir)) {
+      log_file <- file.path(effective_log_dir, "wsl_debug.json")
+      jsonlite::write_json(results, log_file, pretty = TRUE, auto_unbox = TRUE)
+      if (verbose) message("  \u2192 Log written to ", log_file)
+    } else if (verbose) {
+      message("  (no out_dir/log_dir supplied to debug_wsl() -- wsl_debug.json not written; ",
+              "pass one of those to get a persistent record of this check)")
+    }
+    if (verbose && length(results$errors) > 0) {
+      message("Predictor environment check found ", length(results$errors), " issue(s):")
+      for (e in results$errors) message("  - ", e)
+    }
+    invisible(results)
+  }
+
   # 1. Confirm the wsl executable exists (Windows+WSL path only), then confirm
   #    the execution shell (WSL distro, or local bash) actually responds.
   if (via_wsl && !nzchar(Sys.which("wsl"))) {
     results$errors <- c(results$errors, "'wsl' executable not found on PATH")
     if (verbose) message("  \u2717 wsl executable not found")
-    return(invisible(results))
+    return(.finish(results))
   }
 
   probe <- .wsl_exec_script("echo OK", wsl_distro = distro, use_wsl = via_wsl,
-                            intern = TRUE, ignore_stderr = TRUE)
+                            intern = TRUE, ignore_stderr = TRUE, log_dir = effective_log_dir)
   if (length(probe) == 0 || !any(grepl("OK", probe))) {
     results$errors <- c(results$errors,
                         if (via_wsl) "WSL not responding or distro not found"
                         else "Could not execute a bash script natively (is 'bash' on PATH?)")
     if (verbose) message("  \u2717 execution environment not responding")
-    return(invisible(results))
+    return(.finish(results))
   }
   results$wsl_available <- TRUE
   if (verbose) message("  \u2713 execution environment reachable")
@@ -427,14 +459,15 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
   # 2. Conda installation and environment
   conda_check <- .wsl_exec_script("command -v conda || echo 'not found'",
                                   wsl_distro = distro, use_wsl = via_wsl,
-                                  intern = TRUE, ignore_stderr = TRUE)
+                                  intern = TRUE, ignore_stderr = TRUE, log_dir = effective_log_dir)
   if (any(grepl("conda", conda_check)) && !any(grepl("^not found$", trimws(conda_check)))) {
     results$conda_available <- TRUE
     if (verbose) message("  \u2713 conda found")
 
     env_check <- .wsl_exec_script(
       sprintf("conda env list 2>/dev/null | grep -q '%s' && echo 'exists'", conda_env),
-      wsl_distro = distro, use_wsl = via_wsl, intern = TRUE, ignore_stderr = TRUE
+      wsl_distro = distro, use_wsl = via_wsl, intern = TRUE, ignore_stderr = TRUE,
+      log_dir = effective_log_dir
     )
     if (length(env_check) > 0 && any(grepl("exists", env_check))) {
       results$conda_env_exists <- TRUE
@@ -450,7 +483,7 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
 
   conda_sh_guess <- NULL
   if (results$conda_env_exists) {
-    conda_sh_guess <- .find_conda_sh(wsl_distro = distro, use_wsl = via_wsl)
+    conda_sh_guess <- .find_conda_sh(wsl_distro = distro, use_wsl = via_wsl, log_dir = effective_log_dir)
   }
 
   # 3. Required tools (CPAT, SignalP, hmmscan, interproscan.sh)
@@ -466,10 +499,10 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
   tools_list <- c("cpat", "run_cpat.py", "signalp6", "signalp", "hmmscan", "interproscan.sh")
   for (tool in tools_list) {
     found <- .wsl_tool_exists(tool, wsl_distro = distro, use_wsl = via_wsl,
-                              conda_sh = NULL, conda_env = conda_env)
+                              conda_sh = NULL, conda_env = conda_env, log_dir = effective_log_dir)
     if (!found && !is.null(conda_sh_guess)) {
       found <- .wsl_tool_exists(tool, wsl_distro = distro, use_wsl = via_wsl,
-                                conda_sh = conda_sh_guess, conda_env = conda_env)
+                                conda_sh = conda_sh_guess, conda_env = conda_env, log_dir = effective_log_dir)
     }
     results$tools[[tool]] <- found
     if (verbose) message("  ", if (found) "\u2713" else "\u2717", " ", tool)
@@ -489,7 +522,8 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
 
   # 4. Additional databases (Pfam, CPAT models)
   pfam_path <- .find_pfam_db(wsl_distro = distro, use_wsl = via_wsl,
-                             conda_sh = conda_sh_guess, conda_env = conda_env)
+                             conda_sh = conda_sh_guess, conda_env = conda_env,
+                             log_dir = effective_log_dir)
   results$pfam_db_found <- !is.null(pfam_path)
   if (verbose) message("  ", if (results$pfam_db_found) "\u2713" else "\u2717", " Pfam-A.hmm")
 
@@ -500,7 +534,7 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
               pfam_path, pfam_path, pfam_path, pfam_path),
       wsl_distro = distro, use_wsl = via_wsl,
       conda_sh = conda_sh_guess, conda_env = conda_env,
-      intern = TRUE, ignore_stderr = TRUE
+      intern = TRUE, ignore_stderr = TRUE, log_dir = effective_log_dir
     )
     results$pfam_db_indexed <- any(grepl("INDEXED", idx_check))
     if (verbose) message("  ", if (results$pfam_db_indexed) "\u2713" else "\u2717",
@@ -512,26 +546,12 @@ debug_wsl <- function(distro = "Ubuntu", out_dir = NULL, log_dir = NULL,
       results$errors <- c(results$errors, paste0("Pfam-A.hmm found at ", pfam_path, " but not hmmpress-indexed"))
   }
 
-  cpat_logit_human <- .find_cpat_logit_model("Human", distro, via_wsl, conda_sh_guess, conda_env)
-  cpat_logit_mouse <- .find_cpat_logit_model("Mouse", distro, via_wsl, conda_sh_guess, conda_env)
+  cpat_logit_human <- .find_cpat_logit_model("Human", distro, via_wsl, conda_sh_guess, conda_env, log_dir = effective_log_dir)
+  cpat_logit_mouse <- .find_cpat_logit_model("Mouse", distro, via_wsl, conda_sh_guess, conda_env, log_dir = effective_log_dir)
   results$cpat_models_found <- !is.null(cpat_logit_human) && !is.null(cpat_logit_mouse)
   if (verbose) message("  ", if (results$cpat_models_found) "\u2713" else "\u2717", " CPAT logit models")
 
-  effective_log_dir <- if (!is.null(log_dir)) log_dir
-                        else if (!is.null(out_dir)) file.path(out_dir, "Log")
-                        else NULL
-  if (!is.null(effective_log_dir)) {
-    if (!dir.exists(effective_log_dir)) dir.create(effective_log_dir, recursive = TRUE)
-    log_file <- file.path(effective_log_dir, "wsl_debug.json")
-    jsonlite::write_json(results, log_file, pretty = TRUE, auto_unbox = TRUE)
-    if (verbose) message("  \u2192 Log written to ", log_file)
-  }
-  if (verbose && length(results$errors) > 0) {
-    message("Predictor environment check found ", length(results$errors), " issue(s):")
-    for (e in results$errors) message("  - ", e)
-  }
-
-  invisible(results)
+  .finish(results)
 }
 
 #' Install SignalP from a Windows directory into WSL

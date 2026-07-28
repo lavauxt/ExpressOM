@@ -1,34 +1,45 @@
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
-#' Write a PCA sample-scores table (+ companion percent-variance file)
+#' Write PCA output tables: per-sample scores, percent variance, and
+#' per-sample values for the genes/transcripts that went into the PCA
 #'
 #' Shared by both the gene-level PCA (run_eda(), via plot_custom_pca()) and
 #' the transcript-level PCA (run_isoform_pca()) so the two stay consistent.
-#' Writes the actual per-sample coordinate on every PC -- previously the
-#' only PCA table written to disk was the gene-loadings/variance table
-#' (which genes went into the PCA and their variance), with no per-sample
-#' values at all.
+#' Previously the only PCA table written to disk was the gene-loadings/
+#' variance table (which genes went into the PCA and their variance), with
+#' no per-sample values of any kind -- neither each sample's PC coordinates
+#' nor each gene's actual expression value in each sample.
 #'
 #' @param pca_scores data.frame from plot_custom_pca()'s `pca_scores` return
-#'   element (or NULL, in which case this is a no-op), with a "percentVar"
-#'   attribute set
+#'   element (or NULL, in which case that file is skipped), with a
+#'   "percentVar" attribute set
+#' @param gene_values data.frame from plot_custom_pca()'s `gene_values`
+#'   return element (or NULL, in which case that file is skipped)
 #' @param plot_dir Output directory
 #' @param file_stub File name prefix, e.g. "PCA_Treated_vs_Control" -- writes
-#'   "<file_stub>_sample_scores.tsv" and "<file_stub>_variance_explained.tsv"
+#'   "<file_stub>_sample_scores.tsv", "<file_stub>_variance_explained.tsv",
+#'   and "<file_stub>_top_gene_values.tsv"
 #' @keywords internal
-.write_pca_scores <- function(pca_scores, plot_dir, file_stub) {
-  if (is.null(pca_scores) || nrow(pca_scores) == 0) return(invisible(NULL))
+.write_pca_scores <- function(pca_scores, plot_dir, file_stub, gene_values = NULL) {
+  if (!is.null(pca_scores) && nrow(pca_scores) > 0) {
+    scores_path <- file.path(plot_dir, paste0(file_stub, "_sample_scores.tsv"))
+    write.table(pca_scores, file = scores_path, sep = "\t", row.names = FALSE, quote = FALSE)
+    message("   -> Saved per-sample PCA scores (all PCs) to: ", scores_path)
 
-  scores_path <- file.path(plot_dir, paste0(file_stub, "_sample_scores.tsv"))
-  write.table(pca_scores, file = scores_path, sep = "\t", row.names = FALSE, quote = FALSE)
-  message("   -> Saved per-sample PCA scores (all PCs) to: ", scores_path)
+    pct_var <- attr(pca_scores, "percentVar")
+    if (!is.null(pct_var)) {
+      var_path <- file.path(plot_dir, paste0(file_stub, "_variance_explained.tsv"))
+      write.table(data.frame(PC = names(pct_var), PercentVariance = as.numeric(pct_var)),
+                  file = var_path, sep = "\t", row.names = FALSE, quote = FALSE)
+      message("   -> Saved percent variance explained per PC to: ", var_path)
+    }
+  }
 
-  pct_var <- attr(pca_scores, "percentVar")
-  if (!is.null(pct_var)) {
-    var_path <- file.path(plot_dir, paste0(file_stub, "_variance_explained.tsv"))
-    write.table(data.frame(PC = names(pct_var), PercentVariance = as.numeric(pct_var)),
-                file = var_path, sep = "\t", row.names = FALSE, quote = FALSE)
-    message("   -> Saved percent variance explained per PC to: ", var_path)
+  if (!is.null(gene_values) && nrow(gene_values) > 0) {
+    values_path <- file.path(plot_dir, paste0(file_stub, "_top_gene_values.tsv"))
+    write.table(gene_values, file = values_path, sep = "\t", row.names = FALSE, quote = FALSE)
+    message("   -> Saved per-sample values for the ", nrow(gene_values),
+            " gene(s)/transcript(s) used in this PCA to: ", values_path)
   }
   invisible(NULL)
 }
@@ -107,7 +118,7 @@ run_eda <- function(dds, edb, out_dir, level, base,
     message("   -> Saved top variable genes used in PCA to: ",
             file.path(plot_dir, paste0("PCA_", comp_label, ".tsv")))
   }
-  .write_pca_scores(res_orig$pca_scores, plot_dir, paste0("PCA_", comp_label))
+  .write_pca_scores(res_orig$pca_scores, plot_dir, paste0("PCA_", comp_label), gene_values = res_orig$gene_values)
 
   # --- Batch correction + PCA after ---
   if (!is.null(batch_col) && batch_col %in% colnames(SummarizedExperiment::colData(dds)) &&
@@ -145,7 +156,7 @@ run_eda <- function(dds, edb, out_dir, level, base,
           message("   -> Saved top variable genes used in batch-corrected PCA to: ",
                   file.path(plot_dir, paste0("PCA_BatchCorrected_", comp_label, ".tsv")))
         }
-        .write_pca_scores(res_corr$pca_scores, plot_dir, paste0("PCA_BatchCorrected_", comp_label))
+        .write_pca_scores(res_corr$pca_scores, plot_dir, paste0("PCA_BatchCorrected_", comp_label), gene_values = res_corr$gene_values)
       }
     }
   }
@@ -322,6 +333,15 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
                            pca$x, row.names = NULL, check.names = FALSE)
   attr(pca_scores, "percentVar") <- stats::setNames(percentVar, colnames(pca$x))
 
+  # The actual per-sample transformed value (rlog/vst, whatever `mat` holds)
+  # for each of the genes that went into this PCA -- one row per gene (same
+  # genes/order as gene_info above, i.e. the top `ntop` most variable when
+  # that was requested), one column per sample. gene_info alone only ever
+  # said *which* genes and their variance; this is the actual number you'd
+  # need to look up, say, "what was gene X's value in sample Y".
+  gene_values <- data.frame(gene = rownames(mat), as.data.frame(mat, check.names = FALSE),
+                            row.names = NULL, check.names = FALSE)
+
   # ---- Handle NULL or missing condition ----
   if (is.null(condition) || !(condition %in% colnames(pca_df))) {
     pca_df$Group <- "All Samples"
@@ -356,7 +376,7 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
     ggplot2::labs(title = title)
 
   if (return_gene_list) {
-    return(list(plot = p, gene_info = gene_info, pca_scores = pca_scores))
+    return(list(plot = p, gene_info = gene_info, pca_scores = pca_scores, gene_values = gene_values))
   } else {
     if (return_plot) return(p) else { print(p); invisible(p) }
   }
