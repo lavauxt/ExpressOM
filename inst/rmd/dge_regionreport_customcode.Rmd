@@ -1,16 +1,31 @@
+<!--
+Custom-code child fragment inserted into regionReport::DESeq2Report()'s
+auto-generated report via the `customCode` argument.
+
+Placeholders are substituted at runtime by ExpressOM:
+
+{{PCA_FILE}}       - PCA plot
+{{PCA_CORR_FILE}}  - PCA plot after batch correction, optional
+{{HEATMAP_FILE}}   - Sample correlation heatmap
+{{VOLCANO_FILE}}   - Volcano plot
+{{MA_FILE}}        - MA plot, shrunken
+
+This version:
+- does nothing for empty optional paths,
+- warns cleanly for missing non-empty paths,
+- embeds PNG/JPG/SVG images directly,
+- provides a download link for PDFs, because browsers usually cannot render
+  PDF files through an HTML <img> tag.
+-->
+
 ```{r expressom_custom_setup, include=FALSE}
-.expressom_fig <- function(path, caption = "", required = FALSE) {
+.expressom_fig <- function(path, caption = "") {
   if (is.null(path) || length(path) == 0 || !nzchar(path)) {
-    if (required) {
-      cat(sprintf("\n*Figure not provided: %s*\n\n", caption))
-    }
     return(invisible(FALSE))
   }
 
   if (!file.exists(path)) {
-    if (required) {
-      cat(sprintf("\n*Figure not found: `%s`*\n\n", path))
-    }
+    cat(sprintf("\n*Figure not found: `%s`*\n\n", path))
     return(invisible(FALSE))
   }
 
@@ -33,33 +48,13 @@
 ```
 
 ```{r expressom_custom_figures, results='asis'}
-.expressom_fig(
-  "{{PCA_FILE}}",
-  "PCA plot",
-  required = TRUE
-)
+.expressom_fig("{{PCA_FILE}}", "PCA plot")
 
-.expressom_fig(
-  "{{PCA_CORR_FILE}}",
-  "PCA plot after batch correction",
-  required = FALSE
-)
+.expressom_fig("{{PCA_CORR_FILE}}", "PCA plot after batch correction")
 
-.expressom_fig(
-  "{{HEATMAP_FILE}}",
-  "Sample correlation heatmap",
-  required = TRUE
-)
+.expressom_fig("{{HEATMAP_FILE}}", "Sample correlation heatmap")
 
-.expressom_fig(
-  "{{VOLCANO_FILE}}",
-  "Volcano plot",
-  required = TRUE
-)
+.expressom_fig("{{VOLCANO_FILE}}", "Volcano plot")
 
-.expressom_fig(
-  "{{MA_FILE}}",
-  "MA plot (shrunken)",
-  required = TRUE
-)
+.expressom_fig("{{MA_FILE}}", "MA plot (shrunken)")
 ```

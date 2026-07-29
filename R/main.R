@@ -370,132 +370,216 @@ expressom <- function(count_type        = "salmon",
       ## --------------------------------------------------------------
       ## RegionReport
       ## --------------------------------------------------------------
-      report_dir <- file.path(out_dir, "RegionReport")
-      if (!dir.exists(report_dir)) dir.create(report_dir, recursive = TRUE)
+      ## --------------------------------------------------------------
+## RegionReport
+## --------------------------------------------------------------
+report_dir <- file.path(out_dir, "RegionReport")
 
-      plot_dir_rel <- "../Plots"
-      plot_dir_abs <- file.path(out_dir, "Plots")
+if (!dir.exists(report_dir)) {
+  dir.create(report_dir, recursive = TRUE)
+}
 
-      .pick_plot <- function(candidates) {
-        for (cand in candidates) {
-          if (is.null(cand) || length(cand) == 0 || !nzchar(cand)) next
+plot_dir_rel <- "../Plots"
+plot_dir_abs <- file.path(out_dir, "Plots")
 
-          abs_cand <- file.path(plot_dir_abs, cand)
+## Robustly find the actual plot file, ignoring underscores/spaces around "vs".
+.find_plot <- function(prefix) {
+  if (!dir.exists(plot_dir_abs)) {
+    return("")
+  }
 
-          if (file.exists(abs_cand)) {
-            return(file.path(plot_dir_rel, cand))
-          }
-        }
+  files <- list.files(
+    plot_dir_abs,
+    pattern = "\\.pdf$",
+    ignore.case = TRUE
+  )
 
-        ""
+  if (length(files) == 0) {
+    return("")
+  }
+
+  target <- gsub(
+    "[^A-Za-z0-9]",
+    "",
+    paste0(prefix, "_", level, "vs", base)
+  )
+
+  clean_files <- gsub(
+    "[^A-Za-z0-9]",
+    "",
+    tools::file_path_sans_ext(files)
+  )
+
+  idx <- which(clean_files == target)
+
+  if (length(idx) == 0) {
+    idx <- which(startsWith(clean_files, target))
+  }
+
+  if (length(idx) > 0) {
+    return(file.path(plot_dir_rel, files[idx[1]]))
+  }
+
+  ""
+}
+
+pca_file      <- .find_plot("PCA")
+pca_corr_file <- .find_plot("PCA_BatchCorrected")
+heatmap_file  <- .find_plot("SampleCorrelation")
+
+if (!nzchar(heatmap_file)) {
+  heatmap_file <- .find_plot("HeatMap")
+}
+
+volcano_file <- .find_plot("DE_Volcanoplot")
+ma_file      <- .find_plot("MAplot_shrunken")
+
+## Convert PDF figures to PNG for HTML embedding.
+## Use 150 dpi to keep the final HTML smaller.
+if (exists("convert_pdf_to_png", mode = "function")) {
+  for (v in c("pca_file", "pca_corr_file", "heatmap_file", "volcano_file", "ma_file")) {
+    rel_pdf <- get(v)
+
+    if (is.null(rel_pdf) || length(rel_pdf) == 0 || !nzchar(rel_pdf)) {
+      next
+    }
+
+    abs_pdf <- file.path(plot_dir_abs, basename(rel_pdf))
+
+    if (file.exists(abs_pdf)) {
+      png_abs <- convert_pdf_to_png(abs_pdf, dpi = 150)
+
+      if (!is.null(png_abs)) {
+        assign(v, sub("\\.pdf$", ".png", rel_pdf))
       }
+    }
+  }
+}
 
-      pca_file <- .pick_plot(
-        c(
-          paste0("PCA_", comp_name, ".pdf"),
-          paste0("PCA_", level, "vs", base, ".pdf"),
-          paste0("PCA_", level, "_vs_", base, ".pdf")
+safe_template_value <- function(x) {
+  if (is.null(x) || length(x) == 0) {
+    return("")
+  }
+
+  x <- x[1]
+
+  if (is.na(x)) {
+    return("")
+  }
+
+  x <- as.character(x)
+
+  ## Make path safe for insertion into an R string literal.
+  x <- gsub("\\", "/", x, fixed = TRUE)
+  x <- gsub('"', '\\\"', x, fixed = TRUE)
+
+  x
+}
+
+custom_script <- tryCatch(
+  .render_placeholder_template(
+    "dge_regionreport_customcode.Rmd",
+    values = list(
+      PCA_FILE      = safe_template_value(pca_file),
+      PCA_CORR_FILE = safe_template_value(pca_corr_file),
+      HEATMAP_FILE  = safe_template_value(heatmap_file),
+      VOLCANO_FILE  = safe_template_value(volcano_file),
+      MA_FILE       = safe_template_value(ma_file)
+    )
+  ),
+  error = function(e) {
+    message("Could not render RegionReport custom code template: ", conditionMessage(e))
+    NULL
+  }
+)
+
+if (requireNamespace("regionReport", quietly = TRUE)) {
+
+  ## Critical fix:
+  ## Do not allow 20000 genes in a single self-contained HTML report.
+  regionreport_nbest <- min(as.integer(nBest), 1000L)
+
+  if (as.integer(nBest) > 1000L) {
+    message(
+      "   -> nBest = ", nBest,
+      " is too large for RegionReport HTML output. ",
+      "Capping RegionReport nBest to ", regionreport_nbest, ". ",
+      "Use CSV result tables if you need the full gene list."
+    )
+  }
+
+  intgroup <- unique(c(main_condition, batch_col))
+  intgroup <- intgroup[!is.na(intgroup) & nzchar(intgroup)]
+
+  ## Critical fix:
+  ## Call DESeq2Report() directly, not with do.call().
+  ## do.call() can deparsed/embed the full dds object into the report call,
+  ## producing a massive reproducibility section.
+  tryCatch(
+    {
+      if (!is.null(custom_script)) {
+        regionReport::DESeq2Report(
+          dds        = dds_rep,
+          res        = res_rep,
+          project    = comp_name,
+          intgroup   = intgroup,
+          outdir     = report_dir,
+          output     = paste0("RegionReport_", comp_name),
+          nBest      = regionreport_nbest,
+          customCode = custom_script,
+          device     = "png",
+          browse     = FALSE,
+          echo       = FALSE
         )
-      )
-
-      pca_corr_file <- .pick_plot(
-        c(
-          paste0("PCA_BatchCorrected_", comp_name, ".pdf"),
-          paste0("PCA_BatchCorrected_", level, "vs", base, ".pdf"),
-          paste0("PCA_BatchCorrected_", level, "_vs_", base, ".pdf")
-        )
-      )
-
-      heatmap_file <- .pick_plot(
-        c(
-          paste0("SampleCorrelation_", comp_name, ".pdf"),
-          paste0("SampleCorrelation_", level, "vs", base, ".pdf"),
-          paste0("SampleCorrelation_", level, "_vs_", base, ".pdf")
-        )
-      )
-
-      volcano_file <- .pick_plot(
-        c(
-          paste0("DE_Volcanoplot_", comp_name, ".pdf"),
-          paste0("DE_Volcanoplot_", level, "vs", base, ".pdf"),
-          paste0("DE_Volcanoplot_", level, "_vs_", base, ".pdf")
-        )
-      )
-
-      ma_file <- .pick_plot(
-        c(
-          paste0("MAplot_shrunken_", comp_name, ".pdf"),
-          paste0("MAplot_shrunken_", level, "vs", base, ".pdf"),
-          paste0("MAplot_shrunken_", level, "_vs_", base, ".pdf")
-        )
-      )
-
-      ## Convert PDF figures to PNG for HTML embedding.
-      if (exists("convert_pdf_to_png", mode = "function")) {
-        for (v in c("pca_file", "pca_corr_file", "heatmap_file", "volcano_file", "ma_file")) {
-          rel_pdf <- get(v)
-
-          if (is.null(rel_pdf) || length(rel_pdf) == 0 || !nzchar(rel_pdf)) next
-
-          abs_pdf <- file.path(plot_dir_abs, basename(rel_pdf))
-
-          if (file.exists(abs_pdf)) {
-            png_abs <- convert_pdf_to_png(abs_pdf)
-
-            if (!is.null(png_abs)) {
-              assign(v, sub("\\.pdf$", ".png", rel_pdf))
-            }
-          }
-        }
-      }
-
-      safe_template_value <- function(x) {
-        if (is.null(x) || length(x) == 0) return("")
-        x <- x[1]
-        if (is.na(x)) return("")
-        as.character(x)
-      }
-
-      custom_script <- .render_placeholder_template(
-        "dge_regionreport_customcode.Rmd",
-        values = list(
-          PCA_FILE      = safe_template_value(pca_file),
-          PCA_CORR_FILE = safe_template_value(pca_corr_file),
-          HEATMAP_FILE  = safe_template_value(heatmap_file),
-          VOLCANO_FILE  = safe_template_value(volcano_file),
-          MA_FILE       = safe_template_value(ma_file)
-        )
-      )
-
-      if (requireNamespace("regionReport", quietly = TRUE)) {
-        report_args <- list(
+      } else {
+        regionReport::DESeq2Report(
           dds      = dds_rep,
           res      = res_rep,
           project  = comp_name,
-          intgroup = unique(c(main_condition, batch_col)),
+          intgroup = intgroup,
           outdir   = report_dir,
           output   = paste0("RegionReport_", comp_name),
-          nBest    = nBest,
+          nBest    = regionreport_nbest,
+          device   = "png",
+          browse   = FALSE,
           echo     = FALSE
         )
+      }
 
-        if (!is.null(custom_script)) {
-          report_args$customCode <- custom_script
-        }
+      report_html <- file.path(
+        report_dir,
+        paste0("RegionReport_", comp_name, ".html")
+      )
 
-        tryCatch(
-          do.call(regionReport::DESeq2Report, report_args),
-          error = function(e) {
-            message("RegionReport generation failed: ", conditionMessage(e))
-          }
+      if (file.exists(report_html)) {
+        report_size_mb <- file.info(report_html)$size / 1024^2
+
+        message(
+          "   -> RegionReport HTML written: ",
+          report_html,
+          " (", round(report_size_mb, 1), " MB)"
         )
 
-        if (!is.null(custom_script)) {
-          unlink(custom_script)
+        if (report_size_mb > 50) {
+          message(
+            "   -> WARNING: RegionReport HTML is very large (>50 MB). ",
+            "Consider reducing nBest further, for example nBest = 200 or 500."
+          )
         }
-      } else {
-        message("Skipping DESeq2Report: 'regionReport' package is not installed.")
       }
+    },
+    error = function(e) {
+      message("RegionReport generation failed: ", conditionMessage(e))
+    }
+  )
+
+  if (!is.null(custom_script)) {
+    unlink(custom_script)
+  }
+
+} else {
+  message("Skipping DESeq2Report: 'regionReport' package is not installed.")
+}
 
       while (grDevices::dev.cur() > 1) grDevices::dev.off()
 
