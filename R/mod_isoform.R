@@ -475,7 +475,12 @@ run_isoform_pca <- function(isoform_obj,
                                 apply_gene_expr_filter = FALSE,
                                 require_multi_transcript = FALSE) {
 
-  counts <- if (isoform_obj$type == "tximport") isoform_obj$txi$counts else isoform_obj$counts
+  counts <- if (isoform_obj$type == "tximport") {
+    isoform_obj$txi$counts
+  } else {
+    isoform_obj$counts
+  }
+
   sample_data <- isoform_obj$meta
 
   keep_samples <- sample_data[[condition]] %in% c(base, level)
@@ -486,68 +491,84 @@ run_isoform_pca <- function(isoform_obj,
 
   sample_data <- sample_data[keep_samples, , drop = FALSE]
   counts <- counts[, rownames(sample_data), drop = FALSE]
-  sample_data$condition <- factor(sample_data[[condition]], levels = c(base, level))
+
+  sample_data$condition <- factor(
+    sample_data[[condition]],
+    levels = c(base, level)
+  )
 
   num_samples <- ncol(counts)
 
-  if (is.null(min_samps_gene_expr)) min_samps_gene_expr <- ceiling(num_samples * 0.5)
+  if (is.null(min_samps_gene_expr)) {
+    min_samps_gene_expr <- ceiling(num_samples * 0.5)
+  }
 
   min_samps_gene_expr <- min(min_samps_gene_expr, num_samples)
   min_samps_feature_expr <- min(min_samps_feature_expr, num_samples)
 
   tx2gene <- isoform_obj$tx2gene
 
+  ## Clean transcript IDs in both objects.
   rownames(counts) <- clean_transcript_id(rownames(counts))
   tx2gene$tx_id <- clean_transcript_id(tx2gene$tx_id)
 
+  ## Critical fix:
+  ## tx_ids_original must exist before any downstream filtering uses it.
+  tx_ids_original <- rownames(counts)
+
   gene_id_map <- tx2gene$gene_id[match(rownames(counts), tx2gene$tx_id)]
-keep_mapped <- !is.na(gene_id_map)
+  keep_mapped <- !is.na(gene_id_map)
 
-n_total <- length(rownames(counts))
-n_mapped <- sum(keep_mapped)
+  n_total <- length(rownames(counts))
+  n_mapped <- sum(keep_mapped)
 
-if (n_mapped == 0) {
-  stop(
-    "No transcripts could be mapped to genes after version handling.\n\n",
-    "This usually means the transcript IDs in the count matrix and the transcript IDs in tx2gene are not using the same format or annotation source.\n\n",
-    "Example count transcript IDs:\n  ",
-    paste(utils::head(rownames(counts), 5), collapse = "\n  "),
-    "\n\nExample tx2gene tx_id values:\n  ",
-    paste(utils::head(tx2gene$tx_id, 5), collapse = "\n  "),
-    "\n\nPossible fixes:\n",
-    "  1. Update clean_transcript_id() to strip pipe/space/version suffixes.\n",
-    "  2. Use a custom_tx2gene built from the exact same GTF/FASTA used for quantification.\n",
-    "  3. Make sure the EnsDb package release matches the Ensembl/GENCODE release used for kallisto/Salmon indexing.\n",
-    call. = FALSE
-  )
-}
+  if (n_mapped == 0) {
+    stop(
+      "No transcripts could be mapped to genes after version handling.\n\n",
+      "This usually means the transcript IDs in the count matrix and the transcript IDs in tx2gene are not using the same format or annotation source.\n\n",
+      "Example count transcript IDs:\n  ",
+      paste(utils::head(rownames(counts), 5), collapse = "\n  "),
+      "\n\nExample tx2gene tx_id values:\n  ",
+      paste(utils::head(tx2gene$tx_id, 5), collapse = "\n  "),
+      "\n\nPossible fixes:\n",
+      "  1. Update clean_transcript_id() to strip pipe/space/version suffixes.\n",
+      "  2. Use a custom_tx2gene built from the exact same GTF/FASTA used for quantification.\n",
+      "  3. Make sure the EnsDb package release matches the Ensembl/GENCODE release used for kallisto/Salmon indexing.\n",
+      call. = FALSE
+    )
+  }
 
-if (n_mapped < 0.5 * n_total) {
-  warning(
-    "Only ", n_mapped, " / ", n_total, " transcripts (",
-    round(100 * n_mapped / n_total, 1),
-    "%) could be mapped to genes. This may indicate an annotation mismatch.",
-    call. = FALSE
-  )
-}
+  if (n_mapped < 0.5 * n_total) {
+    warning(
+      "Only ", n_mapped, " / ", n_total, " transcripts (",
+      round(100 * n_mapped / n_total, 1),
+      "%) could be mapped to genes. This may indicate an annotation mismatch.",
+      call. = FALSE
+    )
+  }
 
-counts <- counts[keep_mapped, , drop = FALSE]
-gene_id_map <- gene_id_map[keep_mapped]
-tx_ids_original <- tx_ids_original[keep_mapped]
+  counts <- counts[keep_mapped, , drop = FALSE]
+  gene_id_map <- gene_id_map[keep_mapped]
+  tx_ids_original <- tx_ids_original[keep_mapped]
 
-if (nrow(counts) == 0) {
-  stop("No transcripts remained after transcript-to-gene mapping.")
-}
+  if (nrow(counts) == 0) {
+    stop("No transcripts remained after transcript-to-gene mapping.")
+  }
 
   message("Mapped transcripts: ", nrow(counts))
 
+  ## Filter by total transcript expression.
   keep_tx <- rowSums(counts) >= min_transcript_total
+
   counts <- counts[keep_tx, , drop = FALSE]
   gene_id_map <- gene_id_map[keep_tx]
   tx_ids_original <- tx_ids_original[keep_tx]
 
-  if (nrow(counts) == 0) stop("No transcripts passed min_transcript_total filter.")
+  if (nrow(counts) == 0) {
+    stop("No transcripts passed min_transcript_total filter.")
+  }
 
+  ## Optional gene-level expression filter.
   if (isTRUE(apply_gene_expr_filter)) {
     gene_expr_matrix <- rowsum(counts, group = gene_id_map)
 
@@ -556,24 +577,34 @@ if (nrow(counts) == 0) {
     ]
 
     keep_tx <- gene_id_map %in% keep_genes_expr
+
     counts <- counts[keep_tx, , drop = FALSE]
     gene_id_map <- gene_id_map[keep_tx]
     tx_ids_original <- tx_ids_original[keep_tx]
 
-    if (nrow(counts) == 0) stop("No genes passed the min_gene_expr / min_samps_gene_expr filter.")
+    if (nrow(counts) == 0) {
+      stop("No genes passed the min_gene_expr / min_samps_gene_expr filter.")
+    }
   }
 
+  ## Filter by number of samples with transcript expression.
   keep_tx <- rowSums(counts > min_transcript_expr) >= min_samps_feature_expr
+
   counts <- counts[keep_tx, , drop = FALSE]
   gene_id_map <- gene_id_map[keep_tx]
   tx_ids_original <- tx_ids_original[keep_tx]
 
-  if (nrow(counts) == 0) stop("No transcripts passed expression filtering.")
+  if (nrow(counts) == 0) {
+    stop("No transcripts passed expression filtering.")
+  }
 
+  ## Limit transcripts per gene.
   gene_split <- split(seq_len(nrow(counts)), gene_id_map)
 
   keep_idx <- unlist(lapply(gene_split, function(idx) {
-    if (length(idx) <= max_transcripts) return(idx)
+    if (length(idx) <= max_transcripts) {
+      return(idx)
+    }
 
     gene_expr <- rowMeans(counts[idx, , drop = FALSE])
     idx[order(gene_expr, decreasing = TRUE)[seq_len(max_transcripts)]]
@@ -583,6 +614,11 @@ if (nrow(counts) == 0) {
   gene_id_map <- gene_id_map[keep_idx]
   tx_ids_original <- tx_ids_original[keep_idx]
 
+  if (nrow(counts) == 0) {
+    stop("No transcripts remained after limiting transcripts per gene.")
+  }
+
+  ## Optional multi-transcript-gene filter.
   if (isTRUE(require_multi_transcript)) {
     gene_counts_tbl <- table(gene_id_map)
     multi_tx_genes <- names(gene_counts_tbl)[gene_counts_tbl > 1]
@@ -592,7 +628,9 @@ if (nrow(counts) == 0) {
     gene_id_map <- gene_id_map[keep_multi]
     tx_ids_original <- tx_ids_original[keep_multi]
 
-    if (nrow(counts) == 0) stop("No multi-transcript genes remained after filtering.")
+    if (nrow(counts) == 0) {
+      stop("No multi-transcript genes remained after filtering.")
+    }
   }
 
   message("Final transcripts after filtering: ", nrow(counts))
