@@ -1,36 +1,65 @@
-<!--
-  Custom-code child fragment inserted into regionReport::DESeq2Report()'s
-  auto-generated report via the `customCode` argument (see the DGE block in
-  main.R). This used to be built line-by-line in R with writeLines()/paste0();
-  it is now a plain template with {{PLACEHOLDER}} tokens substituted at
-  runtime, which is both easier to read and easier to keep in sync with the
-  rest of the report styling.
+```{r expressom_custom_setup, include=FALSE}
+.expressom_fig <- function(path, caption = "", required = FALSE) {
+  if (is.null(path) || length(path) == 0 || !nzchar(path)) {
+    if (required) {
+      cat(sprintf("\n*Figure not provided: %s*\n\n", caption))
+    }
+    return(invisible(FALSE))
+  }
 
-  Placeholders (all relative to `report_dir`, already repointed at a .png if
-  pdftools successfully converted the source .pdf -- see main.R):
-    {{PCA_FILE}}       - PCA plot (original)
-    {{PCA_CORR_FILE}}  - PCA plot (batch-corrected via limma), optional
-    {{HEATMAP_FILE}}   - Sample correlation heatmap
-    {{VOLCANO_FILE}}   - Volcano plot
-    {{MA_FILE}}        - MA plot (shrunken)
--->
+  if (!file.exists(path)) {
+    if (required) {
+      cat(sprintf("\n*Figure not found: `%s`*\n\n", path))
+    }
+    return(invisible(FALSE))
+  }
 
-```{r pca_orig, echo=FALSE, fig.cap='PCA plot (Original)', eval=file.exists('{{PCA_FILE}}')}
-  knitr::include_graphics('{{PCA_FILE}}')
+  ext <- tolower(tools::file_ext(path))
+
+  if (ext %in% c("png", "jpg", "jpeg", "gif", "svg")) {
+    cat(sprintf("\n![%s](%s)\n\n", caption, path))
+  } else {
+    cat(
+      sprintf(
+        "\n[Download PDF: %s](%s)\n\n",
+        if (nzchar(caption)) caption else basename(path),
+        path
+      )
+    )
+  }
+
+  invisible(TRUE)
+}
 ```
 
-```{r pca_corr, echo=FALSE, fig.cap='PCA plot (Batch Corrected via limma)', eval=file.exists('{{PCA_CORR_FILE}}')}
-  if (file.exists('{{PCA_CORR_FILE}}')) knitr::include_graphics('{{PCA_CORR_FILE}}')
-```
+```{r expressom_custom_figures, results='asis'}
+.expressom_fig(
+  "{{PCA_FILE}}",
+  "PCA plot",
+  required = TRUE
+)
 
-```{r heatmap, echo=FALSE, fig.cap='Sample Correlation Heatmap', eval=file.exists('{{HEATMAP_FILE}}')}
-  knitr::include_graphics('{{HEATMAP_FILE}}')
-```
+.expressom_fig(
+  "{{PCA_CORR_FILE}}",
+  "PCA plot after batch correction",
+  required = FALSE
+)
 
-```{r volcano, echo=FALSE, fig.cap='Volcano plot', eval=file.exists('{{VOLCANO_FILE}}')}
-  knitr::include_graphics('{{VOLCANO_FILE}}')
-```
+.expressom_fig(
+  "{{HEATMAP_FILE}}",
+  "Sample correlation heatmap",
+  required = TRUE
+)
 
-```{r maplot, echo=FALSE, fig.cap='MA plot (shrunken)', eval=file.exists('{{MA_FILE}}')}
-  knitr::include_graphics('{{MA_FILE}}')
+.expressom_fig(
+  "{{VOLCANO_FILE}}",
+  "Volcano plot",
+  required = TRUE
+)
+
+.expressom_fig(
+  "{{MA_FILE}}",
+  "MA plot (shrunken)",
+  required = TRUE
+)
 ```

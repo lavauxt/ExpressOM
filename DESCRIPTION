@@ -60,7 +60,8 @@ Imports:
     tidyr,
     tidyverse,
     tximport,
-    withr
+    withr,
+    pdftools
 Suggests:
     Biostrings,
     DRIMSeq,

@@ -32,53 +32,28 @@
 #' @param subset_sample Optional string to filter the sample table (e.g., "cell_type == 'T_cells'")
 #' @param remove_sample Optional character vector of sample IDs to exclude entirely
 #' @param zscore_genes Optional character vector of gene names for targeted Z-score expression plotting
-#' @param gene_sets_zscore Optional named list of character vectors of gene names. Produces three
-#'   outputs: (1) a per-sample average Z-score ("module score") per set plotted by condition, plus
-#'   an automatic pooled "Global (All Genes)" panel; and (2) a per-individual-gene Z-score by
-#'   condition plot (one facet per gene), e.g.
-#'   \code{list(Tightness = c("Cdh5","Pdgfa"), "Lipid Scavengers" = c("Cd36","Stab1"))}
+#' @param gene_sets_zscore Optional named list of character vectors of gene names.
 #' @param run_dge Logical: perform standard gene-level differential expression (default: TRUE)
-#' @param run_isoform Logical: perform isoform-level analysis (DTE, DTU, IsoformSwitchAnalyzeR)
+#' @param run_isoform Logical: perform isoform-level analysis (DTE, DTU, Isoform SwitchAnalyzeR)
 #' @param run_predictors Logical: Run CPAT, Pfam, and SignalP via WSL/Conda during Isoform analysis
-#' @param bpparam BiocParallel backend for multi-threading (e.g. BiocParallel::MulticoreParam(4))
-#' @param execution_order String: "dge_first" or "isoform_first" to prioritise which analysis runs first
-#' @param isoform_fasta Path to transcript FASTA file (auto-downloads if NULL and run_isoform=TRUE)
-#' @param isoform_gff Path to GFF/GTF annotation file (auto-downloads if NULL and run_isoform=TRUE)
-#' @param use_wsl Logical: route external predictor tools (CPAT, SignalP,
-#'   Pfam) through WSL. Only meaningful on Windows; defaults to TRUE there.
-#'   Ignored on Linux/macOS, where tools run natively against PATH.
-#' @param wsl_distro Name of WSL distribution (default "Ubuntu-22.04"), only
-#'   used when running on Windows with use_wsl = TRUE
-#' @param predictor_cpu Integer: CPU threads for hmmscan / InterProScan during
-#'   the Pfam prediction step. Default NULL auto-detects available cores
-#'   (\code{parallel::detectCores() - 1}).
+#' @param bpparam BiocParallel backend for multi-threading
+#' @param execution_order String: "dge_first" or "isoform_first"
+#' @param isoform_fasta Path to transcript FASTA file
+#' @param isoform_gff Path to GFF/GTF annotation file
+#' @param use_wsl Logical: route external predictor tools through WSL on Windows
+#' @param wsl_distro Name of WSL distribution
+#' @param predictor_cpu Integer: CPU threads for hmmscan / InterProScan
 #' @param resume_isoform_from Path to directory with saved DTE/DTU RDS files to resume isoform analysis
-#' @param isoform_report_genes Gene symbols (e.g., c("TP53", "BCL2")) for transcript-proportion plots.
-#'   These genes also receive the enhanced isoform-level visualizations: an
-#'   IsoformSwitchAnalyzeR switch summary plot (structure/ORF/domains + gene,
-#'   isoform, and usage expression), a sashimi-style junction usage plot, an
-#'   exon-bin usage comparison plot, and (if run_dexseq = TRUE) a DEXSeq
-#'   transcript-usage plot.
-#' @param run_dexseq Logical: also run a complementary DEXSeq-based DTU engine
-#'   (transcripts treated as DEXSeq exonic bins) alongside the DRIMSeq-based
-#'   DTU test, and unlock DEXSeq-style per-gene transcript-usage plots in the
-#'   HTML report (default: FALSE, since it duplicates Step C at extra runtime cost)
-#' @param isoform_plot_top_n Number of top isoform switches (by significance)
-#'   to automatically render as switch summary plots, independent of
-#'   isoform_report_genes (default: 10)
+#' @param isoform_report_genes Gene symbols for transcript-proportion plots and enhanced isoform visualizations
+#' @param run_dexseq Logical: also run DEXSeq-based DTU engine
+#' @param isoform_plot_top_n Number of top isoform switches to render automatically
 #' @param nBest Number of top genes to include in RegionReport
-#' @param eda_only Logical: if TRUE, run only import + EDA (PCA, heatmap) then stop (no DGE or isoform).
-#' @param group_col Optional column name in metadata for colouring PCA/heatmap when no model is given.
-#' @param custom_transcript_id_map Path to a TSV/CSV with columns `count_id` and `fasta_id`.
-#'   If provided, transcript IDs in the count matrix are renamed to match the FASTA file
-#'   before any filtering; this resolves ID mismatches between custom references.
-#' @param skip_fasta_filter Logical: if TRUE, skip the pre‑filtering that keeps only transcripts
-#'   present in the FASTA file; rely on `importRdata()`'s own ID tolerance (e.g. `ignoreAfter*`).
-#'   (Default: FALSE)
-#' @param isoform_test_engine Which DTU test engine to use in IsoformSwitchAnalyzeR:
-#'   `"DEXSeq"` (default, built‑in), `"DRIMSeq"` (uses pre‑computed results from `run_dtu()`),
-#'   or `"satuRn"` (state‑of‑the‑art method). See `IsoformSwitchAnalyzeR::isoformSwitchTestSatuRn`.
-#' @return NULL (invisibly)
+#' @param eda_only Logical: if TRUE, run only import + EDA then stop
+#' @param group_col Optional column name in metadata for colouring PCA/heatmap when no model is given
+#' @param custom_transcript_id_map Path to a TSV/CSV with columns `count_id` and `fasta_id`
+#' @param skip_fasta_filter Logical: if TRUE, skip FASTA pre-filtering in isoform import
+#' @param isoform_test_engine Which DTU test engine to use in IsoformSwitchAnalyzeR
+#' @return NULL invisibly
 expressom <- function(count_type        = "salmon",
                       data_dir          = "./data",
                       out_dir           = "./results",
@@ -131,12 +106,11 @@ expressom <- function(count_type        = "salmon",
   execution_order <- match.arg(execution_order)
   isoform_test_engine <- match.arg(isoform_test_engine)
 
-  # Pre-flight dependency check: fail fast on missing core packages, and warn
-  # early about missing functional/isoform packages, rather than discovering
-  # a missing dependency after DGE/isoform steps have already been running.
-  validate_environment(run_isoform = run_isoform, run_functional = run_dge)
+  validate_environment(
+    run_isoform = run_isoform,
+    run_functional = run_dge
+  )
 
-  # Guard: warn if external predictors requested without WSL on native Windows
   if (isTRUE(run_predictors) && .Platform$OS.type == "windows" && !use_wsl) {
     warning(
       "run_predictors = TRUE but use_wsl = FALSE on Windows. ",
@@ -145,73 +119,130 @@ expressom <- function(count_type        = "salmon",
       "(e.g. Git-Bash/MSYS2) if you intend to run them natively."
     )
   }
-  old_warn        <- getOption("nwarnings")
-  options(nwarnings = 10000)
-  on.exit({
-    options(nwarnings = old_warn)
-    log_dir <- file.path(out_dir, "Log")
-    dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
-    if (dir.exists(log_dir)) {
-      capture.output(sessionInfo(), file = file.path(log_dir, "SessionInfo.txt"))
-      if (!is.null(warnings())) {
-        capture.output(warnings(), file = file.path(log_dir, "Warnings.txt"))
-      }
-    }
-  }, add = TRUE)
 
-  # 1. Automated Ensembl DB Installation Check
+  old_warn <- getOption("nwarnings")
+  options(nwarnings = 10000)
+
+  on.exit(
+    {
+      options(nwarnings = old_warn)
+
+      log_dir <- file.path(out_dir, "Log")
+      dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+
+      if (dir.exists(log_dir)) {
+        capture.output(sessionInfo(), file = file.path(log_dir, "SessionInfo.txt"))
+
+        if (!is.null(warnings())) {
+          capture.output(warnings(), file = file.path(log_dir, "Warnings.txt"))
+        }
+      }
+    },
+    add = TRUE
+  )
+
+  ## ------------------------------------------------------------------
+  ## 1. Automated Ensembl DB installation check
+  ## ------------------------------------------------------------------
   if (!requireNamespace(ensembl_package_name, quietly = TRUE)) {
-    message("Package '", ensembl_package_name, "' not found. Attempting automatic build and installation...")
-    matches     <- regexec("^EnsDb\\.(Hsapiens|Mmusculus)\\.v([0-9]+)$", ensembl_package_name)
+    message(
+      "Package '", ensembl_package_name,
+      "' not found. Attempting automatic build and installation..."
+    )
+
+    matches <- regexec(
+      "^EnsDb\\.(Hsapiens|Mmusculus)\\.v([0-9]+)$",
+      ensembl_package_name
+    )
+
     match_parts <- regmatches(ensembl_package_name, matches)[[1]]
+
     if (length(match_parts) == 3) {
       species <- if (match_parts[2] == "Hsapiens") "human" else "mouse"
       release <- match_parts[3]
+
       create_homemade_db(species = species, release = release)
       install_internal_db(pkg_name = ensembl_package_name)
     } else {
-      stop("Could not parse ensembl_package_name '", ensembl_package_name,
-           "' to build database automatically. Expected format like 'EnsDb.Hsapiens.v107'")
+      stop(
+        "Could not parse ensembl_package_name '", ensembl_package_name,
+        "' to build database automatically. Expected format like 'EnsDb.Hsapiens.v107'."
+      )
     }
   }
 
-  # ==========================================================================
-  # EDA-ONLY MODE
-  # ==========================================================================
+  ## ------------------------------------------------------------------
+  ## EDA-only mode
+  ## ------------------------------------------------------------------
   if (isTRUE(eda_only) || is.null(model) || is.null(level) || is.null(base)) {
-    message("DESeq2 model not fully specified or eda_only=TRUE. ",
-            "Running only data import and exploratory analysis (EDA).")
-    run_dge     <- FALSE
+    message(
+      "DESeq2 model not fully specified or eda_only = TRUE. ",
+      "Running only data import and exploratory analysis (EDA)."
+    )
+
+    run_dge <- FALSE
     run_isoform <- FALSE
-    model_eda   <- "~1"
-    if (!is.null(group_col) && group_col %in% colnames(read.csv(sample_table, nrows=1))) {
+    model_eda <- "~1"
+
+    sample_cols <- tryCatch(
+      colnames(utils::read.csv(sample_table, nrows = 1, check.names = FALSE)),
+      error = function(e) character(0)
+    )
+
+    if (!is.null(group_col) && group_col %in% sample_cols) {
       main_condition <- group_col
     } else if (!is.null(model) && model != "~1") {
-      main_condition <- tail(all.vars(as.formula(model)), 1)
+      main_condition <- tail(all.vars(stats::as.formula(model)), 1)
     } else {
       main_condition <- NULL
     }
   } else {
     model_eda <- model
-    main_condition <- tail(all.vars(as.formula(model)), 1)
+    main_condition <- tail(all.vars(stats::as.formula(model)), 1)
   }
 
-  # Early predictor-environment check
+  ## ------------------------------------------------------------------
+  ## Early predictor-environment check
+  ## ------------------------------------------------------------------
   if (run_isoform && isTRUE(run_predictors)) {
-    debug_wsl(distro = wsl_distro, out_dir = out_dir,
-              log_dir = file.path(out_dir, "Log", "Isoform"),
-              conda_env = "isoform_tools", verbose = TRUE, use_wsl = use_wsl)
+    debug_wsl(
+      distro = wsl_distro,
+      out_dir = out_dir,
+      log_dir = file.path(out_dir, "Log", "Isoform"),
+      conda_env = "isoform_tools",
+      verbose = TRUE,
+      use_wsl = use_wsl
+    )
   }
 
-  comp_name      <- paste0(level, "_vs_", base)
-  edb_obj        <- getExportedValue(ensembl_package_name, ensembl_package_name)
-
-  if (!is.null(batch_col) && !(batch_col %in% all.vars(as.formula(model)))) {
-    message("WARNING: 'batch_col' [", batch_col, "] is specified for visualization, but missing from your design formula: '", model, "'.")
-    message("Consider adding it to prevent confounding your DGE results (e.g., model = '~ ", batch_col, " + ", main_condition, "').")
+  comp_name <- if (!is.null(level) && !is.null(base)) {
+    paste0(level, "vs", base)
+  } else {
+    "EDA"
   }
 
-  # Always import counts and run EDA
+  edb_obj <- getExportedValue(ensembl_package_name, ensembl_package_name)
+
+  if (!is.null(batch_col) && !is.null(model)) {
+    model_vars <- all.vars(stats::as.formula(model))
+
+    if (!(batch_col %in% model_vars)) {
+      message(
+        "WARNING: 'batch_col' [", batch_col,
+        "] is specified for visualization, but missing from your design formula: '",
+        model, "'."
+      )
+
+      message(
+        "Consider adding it to prevent confounding your DGE results (e.g., model = '~ ",
+        batch_col, " + ", main_condition, "')."
+      )
+    }
+  }
+
+  ## ------------------------------------------------------------------
+  ## Always import counts and run EDA
+  ## ------------------------------------------------------------------
   tx_data <- import_counts(
     data_dir             = data_dir,
     sample_table         = sample_table,
@@ -225,16 +256,14 @@ expressom <- function(count_type        = "salmon",
     custom_gene_map      = custom_gene_map
   )
 
-  # Build the DESeqDataSet
   dds <- create_dds_object(
     tx_data,
     level = if (run_dge) level else NULL,
-    base  = if (run_dge) base  else NULL,
+    base  = if (run_dge) base else NULL,
     model = if (run_dge || (!eda_only && !is.null(model))) model else "~1",
     replicate_col = replicate_col
   )
 
-  # Run EDA (always)
   run_eda(
     dds            = dds,
     edb            = edb_obj,
@@ -247,29 +276,47 @@ expressom <- function(count_type        = "salmon",
     pca_ntop       = pca_ntop
   )
 
-  # If eda_only, stop here
   if (!run_dge && !run_isoform) {
     message("EDA completed. Skipping differential expression and isoform analyses.")
     return(invisible(NULL))
   }
 
-  # Otherwise continue...
-  pipeline_steps  <- if (execution_order == "dge_first") c("dge", "isoform") else c("isoform", "dge")
-  dge_results     <- NULL
+  pipeline_steps <- if (execution_order == "dge_first") {
+    c("dge", "isoform")
+  } else {
+    c("isoform", "dge")
+  }
+
+  dge_results <- NULL
   isoform_results <- NULL
 
   for (step in pipeline_steps) {
 
-    # =========================================================================
-    # GENE-LEVEL DIFFERENTIAL EXPRESSION (DGE) BLOCK
-    # =========================================================================
+    ## ==================================================================
+    ## Gene-level differential expression (DGE)
+    ## ==================================================================
     if (step == "dge" && run_dge) {
       message("\n=== Running Gene-Level DGE Analysis ===")
 
-      dds <- create_dds_object(tx_data, level, base, model, replicate_col)
+      dds <- create_dds_object(
+        tx_data,
+        level,
+        base,
+        model,
+        replicate_col
+      )
 
-      res_list <- run_deseq2_analysis(dds, model, level, base, shrink_method, out_dir,
-                                      padj_cutoff, test, reduced)
+      res_list <- run_deseq2_analysis(
+        dds,
+        model,
+        level,
+        base,
+        shrink_method,
+        out_dir,
+        padj_cutoff,
+        test,
+        reduced
+      )
 
       results_data <- export_significant_results(
         res_shrunken   = res_list$res_shrunken,
@@ -282,15 +329,23 @@ expressom <- function(count_type        = "salmon",
         padj_cutoff    = padj_cutoff
       )
 
-      # Build symbol-keyed dds/res for RegionReport
       message("Converting identifiers for RegionReport...")
-      dds_rep   <- res_list$dds
-      res_rep   <- res_list$res_shrunken
+
+      dds_rep <- res_list$dds
+      res_rep <- res_list$res_shrunken
 
       clean_ens <- strip_ensembl_version(rownames(dds_rep))
-      sym_map   <- tx_data$gene_map$symbol[match(clean_ens, tx_data$gene_map$ensembl)]
-      sym_map[is.na(sym_map) | sym_map == ""] <- clean_ens[is.na(sym_map) | sym_map == ""]
-      sym_map   <- make.unique(sym_map)
+
+      sym_map <- tx_data$gene_map$symbol[
+        match(clean_ens, tx_data$gene_map$ensembl)
+      ]
+
+      sym_map[is.na(sym_map) | sym_map == ""] <- clean_ens[
+        is.na(sym_map) | sym_map == ""
+      ]
+
+      sym_map <- make.unique(sym_map)
+
       rownames(dds_rep) <- sym_map
       rownames(res_rep) <- sym_map
 
@@ -307,78 +362,176 @@ expressom <- function(count_type        = "salmon",
         top_genes      = top_genes,
         padj_cutoff    = padj_cutoff,
         highlight_genes = highlight_genes,
-        batch_col       = batch_col
+        batch_col      = batch_col
       )
+
       while (grDevices::dev.cur() > 1) grDevices::dev.off()
 
-      # --- RegionReport ---
+      ## --------------------------------------------------------------
+      ## RegionReport
+      ## --------------------------------------------------------------
       report_dir <- file.path(out_dir, "RegionReport")
       if (!dir.exists(report_dir)) dir.create(report_dir, recursive = TRUE)
 
-      plot_dir_rel  <- "../Plots"
-      plot_dir_abs  <- file.path(out_dir, "Plots")
-      pca_file      <- file.path(plot_dir_rel, paste0("PCA_",              level, "_vs_", base, ".pdf"))
-      pca_corr_file <- file.path(plot_dir_rel, paste0("PCA_BatchCorrected_", level, "_vs_", base, ".pdf"))
-      heatmap_file  <- file.path(plot_dir_rel, paste0("SampleCorrelation_", level, "_vs_", base, ".pdf"))
-      volcano_file  <- file.path(plot_dir_rel, paste0("DE_Volcanoplot_",   level, "_vs_", base, ".pdf"))
-      ma_file       <- file.path(plot_dir_rel, paste0("MAplot_shrunken_",  level, "_vs_", base, ".pdf"))
+      plot_dir_rel <- "../Plots"
+      plot_dir_abs <- file.path(out_dir, "Plots")
 
-      # knitr::include_graphics() on a .pdf path produces an <img src="...pdf">
-      # tag, which browsers cannot render -- and DESeq2Report() always
-      # produces an HTML report. Convert each figure to a PNG (if pdftools is
-      # available) and repoint the *_file variables at it so the custom code
-      # chunks below actually display instead of showing broken images.
-      for (v in c("pca_file", "pca_corr_file", "heatmap_file", "volcano_file", "ma_file")) {
-        rel_pdf <- get(v)
-        abs_pdf <- file.path(plot_dir_abs, basename(rel_pdf))
-        if (file.exists(abs_pdf) && !is.null(convert_pdf_to_png(abs_pdf))) {
-          assign(v, sub("\\.pdf$", ".png", rel_pdf))
+      .pick_plot <- function(candidates) {
+        for (cand in candidates) {
+          if (is.null(cand) || length(cand) == 0 || !nzchar(cand)) next
+
+          abs_cand <- file.path(plot_dir_abs, cand)
+
+          if (file.exists(abs_cand)) {
+            return(file.path(plot_dir_rel, cand))
+          }
+        }
+
+        ""
+      }
+
+      pca_file <- .pick_plot(
+        c(
+          paste0("PCA_", comp_name, ".pdf"),
+          paste0("PCA_", level, "vs", base, ".pdf"),
+          paste0("PCA_", level, "_vs_", base, ".pdf")
+        )
+      )
+
+      pca_corr_file <- .pick_plot(
+        c(
+          paste0("PCA_BatchCorrected_", comp_name, ".pdf"),
+          paste0("PCA_BatchCorrected_", level, "vs", base, ".pdf"),
+          paste0("PCA_BatchCorrected_", level, "_vs_", base, ".pdf")
+        )
+      )
+
+      heatmap_file <- .pick_plot(
+        c(
+          paste0("SampleCorrelation_", comp_name, ".pdf"),
+          paste0("SampleCorrelation_", level, "vs", base, ".pdf"),
+          paste0("SampleCorrelation_", level, "_vs_", base, ".pdf")
+        )
+      )
+
+      volcano_file <- .pick_plot(
+        c(
+          paste0("DE_Volcanoplot_", comp_name, ".pdf"),
+          paste0("DE_Volcanoplot_", level, "vs", base, ".pdf"),
+          paste0("DE_Volcanoplot_", level, "_vs_", base, ".pdf")
+        )
+      )
+
+      ma_file <- .pick_plot(
+        c(
+          paste0("MAplot_shrunken_", comp_name, ".pdf"),
+          paste0("MAplot_shrunken_", level, "vs", base, ".pdf"),
+          paste0("MAplot_shrunken_", level, "_vs_", base, ".pdf")
+        )
+      )
+
+      ## Convert PDF figures to PNG for HTML embedding.
+      if (exists("convert_pdf_to_png", mode = "function")) {
+        for (v in c("pca_file", "pca_corr_file", "heatmap_file", "volcano_file", "ma_file")) {
+          rel_pdf <- get(v)
+
+          if (is.null(rel_pdf) || length(rel_pdf) == 0 || !nzchar(rel_pdf)) next
+
+          abs_pdf <- file.path(plot_dir_abs, basename(rel_pdf))
+
+          if (file.exists(abs_pdf)) {
+            png_abs <- convert_pdf_to_png(abs_pdf)
+
+            if (!is.null(png_abs)) {
+              assign(v, sub("\\.pdf$", ".png", rel_pdf))
+            }
+          }
         }
       }
 
-      # Rmd fragment lives in inst/rmd/dge_regionreport_customcode.Rmd (see
-      # .render_placeholder_template() in utils_core.R) rather than being
-      # built line-by-line here with writeLines()/paste0().
+      safe_template_value <- function(x) {
+        if (is.null(x) || length(x) == 0) return("")
+        x <- x[1]
+        if (is.na(x)) return("")
+        as.character(x)
+      }
+
       custom_script <- .render_placeholder_template(
         "dge_regionreport_customcode.Rmd",
         values = list(
-          PCA_FILE      = pca_file,
-          PCA_CORR_FILE = pca_corr_file,
-          HEATMAP_FILE  = heatmap_file,
-          VOLCANO_FILE  = volcano_file,
-          MA_FILE       = ma_file
+          PCA_FILE      = safe_template_value(pca_file),
+          PCA_CORR_FILE = safe_template_value(pca_corr_file),
+          HEATMAP_FILE  = safe_template_value(heatmap_file),
+          VOLCANO_FILE  = safe_template_value(volcano_file),
+          MA_FILE       = safe_template_value(ma_file)
         )
       )
 
       if (requireNamespace("regionReport", quietly = TRUE)) {
-        regionReport::DESeq2Report(
-          dds        = dds_rep,
-          res        = res_rep,
-          project    = comp_name,
-          intgroup   = unique(c(main_condition, batch_col)),
-          outdir     = report_dir,
-          output     = paste0("RegionReport_", comp_name),
-          nBest      = nBest,
-          customCode = custom_script,
-          echo       = FALSE
+        report_args <- list(
+          dds      = dds_rep,
+          res      = res_rep,
+          project  = comp_name,
+          intgroup = unique(c(main_condition, batch_col)),
+          outdir   = report_dir,
+          output   = paste0("RegionReport_", comp_name),
+          nBest    = nBest,
+          echo     = FALSE
         )
+
+        if (!is.null(custom_script)) {
+          report_args$customCode <- custom_script
+        }
+
+        tryCatch(
+          do.call(regionReport::DESeq2Report, report_args),
+          error = function(e) {
+            message("RegionReport generation failed: ", conditionMessage(e))
+          }
+        )
+
+        if (!is.null(custom_script)) {
+          unlink(custom_script)
+        }
       } else {
         message("Skipping DESeq2Report: 'regionReport' package is not installed.")
       }
-      unlink(custom_script)
 
       while (grDevices::dev.cur() > 1) grDevices::dev.off()
 
+      ## --------------------------------------------------------------
+      ## Targeted z-score plots
+      ## --------------------------------------------------------------
       if (!is.null(zscore_genes)) {
         message("Generating targeted expression heatmaps (Sample Z-score & L2FC)...")
+
         plot_dir <- file.path(out_dir, "Plots")
-        plot_sample_zscore(dds_rep, zscore_genes, main_condition, level, base, plot_dir)
-        plot_l2fc_heatmap(dds_rep, zscore_genes, main_condition, level, base, plot_dir)
+
+        plot_sample_zscore(
+          dds_rep,
+          zscore_genes,
+          main_condition,
+          level,
+          base,
+          plot_dir
+        )
+
+        plot_l2fc_heatmap(
+          dds_rep,
+          zscore_genes,
+          main_condition,
+          level,
+          base,
+          plot_dir
+        )
       }
 
-      # Z-score plots for gene sets
+      ## --------------------------------------------------------------
+      ## Gene-set z-score plots
+      ## --------------------------------------------------------------
       if (!is.null(gene_sets_zscore)) {
-        message("Generating separate Z‑score plots for each gene set...")
+        message("Generating separate Z-score plots for each gene set...")
+
         plot_dir <- file.path(out_dir, "Plots")
         if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 
@@ -410,6 +563,9 @@ expressom <- function(count_type        = "salmon",
         }
       }
 
+      ## --------------------------------------------------------------
+      ## Functional analysis
+      ## --------------------------------------------------------------
       func_results <- safe_run(
         run_functional_analysis(
           res_tbl          = results_data$res_tbl,
@@ -429,6 +585,7 @@ expressom <- function(count_type        = "salmon",
       )
 
       message("Running FGSEA Analysis...")
+
       safe_run(
         run_fgsea_analysis(
           res_tbl     = results_data$res_tbl,
@@ -450,69 +607,94 @@ expressom <- function(count_type        = "salmon",
       )
     }
 
-    # =========================================================================
-    # ISOFORM-LEVEL ANALYSIS BLOCK
-    # =========================================================================
+    ## ==================================================================
+    ## Isoform-level analysis
+    ## ==================================================================
     if (step == "isoform" && run_isoform) {
       message("\n=== Running Isoform-Level Analysis ===")
 
-      iso_dir      <- file.path(out_dir, "IsoformSwitch")
+      iso_dir <- file.path(out_dir, "IsoformSwitch")
       iso_save_dir <- file.path(iso_dir, "saved")
+
       dir.create(iso_save_dir, recursive = TRUE, showWarnings = FALSE)
 
-      .iso_ckpt_exists <- function(nm) file.exists(file.path(iso_save_dir, nm))
-      .iso_ckpt_save   <- function(obj, nm) {
+      .iso_ckpt_exists <- function(nm) {
+        file.exists(file.path(iso_save_dir, nm))
+      }
+
+      .iso_ckpt_save <- function(obj, nm) {
         saveRDS(obj, file.path(iso_save_dir, nm))
         message("Step checkpoint saved: ", nm)
         invisible(obj)
       }
-      .iso_ckpt_load   <- function(nm) {
+
+      .iso_ckpt_load <- function(nm) {
         message("Resuming from step checkpoint: ", nm)
         readRDS(file.path(iso_save_dir, nm))
       }
 
-      dte_res        <- NULL
-      dtu_res        <- NULL
-      dexseq_res     <- NULL
+      dte_res <- NULL
+      dtu_res <- NULL
+      dexseq_res <- NULL
       isoform_import <- NULL
 
       if (!is.null(resume_isoform_from) && dir.exists(resume_isoform_from)) {
         message("Resuming isoform analysis from: ", resume_isoform_from)
-        loaded         <- load_isoform_results(resume_isoform_from)
+
+        loaded <- load_isoform_results(resume_isoform_from)
+
         isoform_import <- loaded$isoform_import
         dte_res        <- loaded$dte_results
         dtu_res        <- loaded$dtu_results
         dexseq_res     <- loaded$dexseq_results
-        if (!is.null(dte_res) && !is.null(dtu_res))
+
+        if (!is.null(dte_res) && !is.null(dtu_res)) {
           message("Loaded DTE and DTU results from resume directory.")
-        else
+        } else {
           message("Resume directory incomplete. Will run missing steps.")
+        }
       }
 
-      if (is.null(isoform_import) && .iso_ckpt_exists("isoform_import.rds"))
+      if (is.null(isoform_import) && .iso_ckpt_exists("isoform_import.rds")) {
         isoform_import <- .iso_ckpt_load("isoform_import.rds")
-      if (is.null(dte_res) && .iso_ckpt_exists("dte_results.rds"))
+      }
+
+      if (is.null(dte_res) && .iso_ckpt_exists("dte_results.rds")) {
         dte_res <- .iso_ckpt_load("dte_results.rds")
-      if (is.null(dtu_res) && .iso_ckpt_exists("dtu_results.rds"))
+      }
+
+      if (is.null(dtu_res) && .iso_ckpt_exists("dtu_results.rds")) {
         dtu_res <- .iso_ckpt_load("dtu_results.rds")
-      if (is.null(dexseq_res) && .iso_ckpt_exists("dexseq_results.rds"))
+      }
+
+      if (is.null(dexseq_res) && .iso_ckpt_exists("dexseq_results.rds")) {
         dexseq_res <- .iso_ckpt_load("dexseq_results.rds")
+      }
 
       if (is.null(isoform_fasta) || is.null(isoform_gff)) {
         message("   -> Auto-fetching Ensembl FASTA and GTF references...")
-        ref_dir       <- safe_dir(file.path(data_dir, "reference"))
-        refs          <- download_ensembl_refs(ensembl_package_name = ensembl_package_name,
-                                               out_dir = ref_dir)
-        isoform_gff   <- refs$gtf
+
+        ref_dir <- safe_dir(file.path(data_dir, "reference"))
+
+        refs <- download_ensembl_refs(
+          ensembl_package_name = ensembl_package_name,
+          out_dir = ref_dir
+        )
+
+        isoform_gff <- refs$gtf
         isoform_fasta <- c(refs$cdna_fasta, refs$ncrna_fasta)
       }
 
-      if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE))
+      if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE)) {
         stop("Please install IsoformSwitchAnalyzeR: BiocManager::install('IsoformSwitchAnalyzeR')")
+      }
 
-      # ---- Step A: Import transcript counts --------------------------------
+      ## --------------------------------------------------------------
+      ## Step A: Import transcript counts
+      ## --------------------------------------------------------------
       if (is.null(isoform_import)) {
         message("Step A: Importing transcript-level counts...")
+
         isoform_import <- import_transcript_counts(
           data_dir             = data_dir,
           sample_table         = sample_table,
@@ -524,55 +706,95 @@ expressom <- function(count_type        = "salmon",
           custom_tx2gene       = custom_tx2gene,
           custom_gene_map      = custom_gene_map
         )
+
         .iso_ckpt_save(isoform_import, "isoform_import.rds")
       } else {
         message("Step A: Isoform import loaded from checkpoint. Skipping.")
       }
 
-      # ---- Step A2: Transcript-level PCA -----------------------------------
-      # Companion to the gene-level PCA in run_eda(); descriptive/exploratory
-      # only, so it doesn't participate in the DTE/DTU checkpoint chain --
-      # cheap enough (single vst() + prcomp()) to simply re-run whenever this
-      # step is reached, rather than adding another .rds to track.
+      ## --------------------------------------------------------------
+      ## Step A2: Transcript-level PCA
+      ## --------------------------------------------------------------
       safe_run(
-        run_isoform_pca(isoform_import, main_condition, level, base,
-                        out_dir = iso_dir, batch_col = batch_col),
+        run_isoform_pca(
+          isoform_import,
+          main_condition,
+          level,
+          base,
+          out_dir = iso_dir,
+          batch_col = batch_col
+        ),
         label = "Transcript-level PCA"
       )
 
-      # ---- Step B: DTE ----------------------------------------------------
+      ## --------------------------------------------------------------
+      ## Step B: DTE
+      ## --------------------------------------------------------------
       if (is.null(dte_res)) {
         message("Step B: Running DTE (Differential Transcript Expression)...")
-        dte_res <- run_dte(isoform_import, main_condition, level, base, padj_cutoff)
+
+        dte_res <- run_dte(
+          isoform_import,
+          main_condition,
+          level,
+          base,
+          padj_cutoff,
+          bpparam = bpparam
+        )
+
         .iso_ckpt_save(dte_res, "dte_results.rds")
       } else {
         message("Step B: DTE results loaded from checkpoint. Skipping.")
       }
 
-      # ---- Step C: DTU (DRIMSeq engine) ------------------------------------
+      ## --------------------------------------------------------------
+      ## Step C: DTU (DRIMSeq engine)
+      ## --------------------------------------------------------------
       if (is.null(dtu_res)) {
         message("Step C: Running DTU (Differential Transcript Usage)...")
-        dtu_res <- run_dtu(isoform_import, main_condition, level, base, bpparam = bpparam)
+
+        dtu_res <- run_dtu(
+          isoform_import,
+          main_condition,
+          level,
+          base,
+          bpparam = bpparam
+        )
+
         .iso_ckpt_save(dtu_res, "dtu_results.rds")
       } else {
         message("Step C: DTU results loaded from checkpoint. Skipping.")
       }
 
-      # ---- Step C.5: DTU via DEXSeq (optional) ----------------------------
+      ## --------------------------------------------------------------
+      ## Step C.5: DTU via DEXSeq (optional)
+      ## --------------------------------------------------------------
       if (isTRUE(run_dexseq)) {
         if (is.null(dexseq_res)) {
           message("Step C.5: Running DEXSeq-based DTU (complementary engine)...")
+
           dexseq_res <- safe_run(
-            run_dexseq_dtu(isoform_import, main_condition, level, base, bpparam = bpparam),
+            run_dexseq_dtu(
+              isoform_import,
+              main_condition,
+              level,
+              base,
+              bpparam = bpparam
+            ),
             label = "DEXSeq DTU"
           )
-          if (!is.null(dexseq_res)) .iso_ckpt_save(dexseq_res, "dexseq_results.rds")
+
+          if (!is.null(dexseq_res)) {
+            .iso_ckpt_save(dexseq_res, "dexseq_results.rds")
+          }
         } else {
           message("Step C.5: DEXSeq DTU results loaded from checkpoint. Skipping.")
         }
       }
 
-      # ---- Step D: IsoformSwitchAnalyzeR -----------------------------------
+      ## --------------------------------------------------------------
+      ## Step D: IsoformSwitchAnalyzeR
+      ## --------------------------------------------------------------
       switch_res <- run_isoform_switch(
         dte_results    = dte_res,
         dtu_results    = dtu_res,
@@ -595,46 +817,52 @@ expressom <- function(count_type        = "salmon",
         test_engine              = isoform_test_engine
       )
 
-      # ---- DTE/DTU/DEXSeq/Switch report -------------------------------------
+      ## --------------------------------------------------------------
+      ## DTE/DTU/DEXSeq/Switch report
+      ## --------------------------------------------------------------
       if (!is.null(dte_res) && !is.null(dtu_res) && !is.null(isoform_import)) {
         generate_dte_dtu_report(
-          dte_results         = dte_res,
-          dtu_results         = dtu_res,
-          isoform_obj         = isoform_import,
-          out_dir             = out_dir,
-          condition           = main_condition,
-          level               = level,
-          base                = base,
-          genes_of_interest   = isoform_report_genes,
-          top_n               = 15,
-          switch_list         = switch_res,
-          dexseq_results      = dexseq_res,
-          switch_plot_top_n   = isoform_plot_top_n
+          dte_results       = dte_res,
+          dtu_results       = dtu_res,
+          isoform_obj       = isoform_import,
+          out_dir           = out_dir,
+          condition         = main_condition,
+          level             = level,
+          base              = base,
+          genes_of_interest = isoform_report_genes,
+          top_n             = 15,
+          switch_list       = switch_res,
+          dexseq_results    = dexseq_res,
+          switch_plot_top_n = isoform_plot_top_n
         )
       }
 
-      # Final copies
+      ## --------------------------------------------------------------
+      ## Final copies
+      ## --------------------------------------------------------------
       if (!dir.exists(iso_dir)) dir.create(iso_dir, recursive = TRUE)
-      saveRDS(dte_res,    file.path(iso_dir, "dte_results.rds"))
-      saveRDS(dtu_res,    file.path(iso_dir, "dtu_results.rds"))
-      # run_isoform_switch() already serialized this exact object to
-      # iso_save_dir/switch_list.rds (its own "Final save" step, which
-      # resume_from also depends on -- see its docs -- so that write can't
-      # simply be removed). switch_list.rds can be a large object (sequences,
-      # ORF/domain/signal-peptide annotations), so saveRDS()-ing it a SECOND
-      # time here just to have a copy in iso_dir was pure duplicated work for
-      # an identical result; file.copy() gets the same end state (the file
-      # is where the rest of this folder's outputs are, not only buried in
-      # "saved/") without re-serializing.
+
+      saveRDS(dte_res, file.path(iso_dir, "dte_results.rds"))
+      saveRDS(dtu_res, file.path(iso_dir, "dtu_results.rds"))
+
       switch_rds_src <- file.path(iso_save_dir, "switch_list.rds")
+
       if (!is.null(switch_res) && file.exists(switch_rds_src)) {
-        file.copy(switch_rds_src, file.path(iso_dir, "switch_list.rds"), overwrite = TRUE)
+        file.copy(
+          switch_rds_src,
+          file.path(iso_dir, "switch_list.rds"),
+          overwrite = TRUE
+        )
       } else if (!is.null(switch_res)) {
         saveRDS(switch_res, file.path(iso_dir, "switch_list.rds"))
       }
-      if (!is.null(dexseq_res)) saveRDS(dexseq_res, file.path(iso_dir, "dexseq_results.rds"))
+
+      if (!is.null(dexseq_res)) {
+        saveRDS(dexseq_res, file.path(iso_dir, "dexseq_results.rds"))
+      }
 
       message("Isoform analysis complete. Results saved in: ", iso_dir)
+
       while (grDevices::dev.cur() > 1) grDevices::dev.off()
 
       isoform_results <- list(
@@ -647,27 +875,59 @@ expressom <- function(count_type        = "salmon",
     }
   }
 
-  # Save workspace
-  rdata_dir  <- safe_dir(file.path(out_dir, "Save_rdata"))
+  ## ------------------------------------------------------------------
+  ## Save workspace
+  ## ------------------------------------------------------------------
+  rdata_dir <- safe_dir(file.path(out_dir, "Save_rdata"))
   rdata_path <- file.path(rdata_dir, paste0("Results_", comp_name, ".RData"))
 
-  to_save <- c("comp_name", "edb_obj", "main_condition", "level", "base", "model", "test", "batch_col")
-  if (run_dge)      to_save <- c(to_save, "dge_results")
-  if (run_isoform)  to_save <- c(to_save, "isoform_results")
-  for (nm in c("tx_data", "dds", "res_list", "results_data", "func_results",
-               "isoform_import", "dte_res", "dtu_res", "switch_res")) {
-    if (exists(nm, envir = environment())) to_save <- c(to_save, nm)
+  to_save <- c(
+    "comp_name",
+    "edb_obj",
+    "main_condition",
+    "level",
+    "base",
+    "model",
+    "test",
+    "batch_col"
+  )
+
+  if (run_dge) {
+    to_save <- c(to_save, "dge_results")
   }
 
-  save(list  = intersect(to_save, ls(envir = environment(), all.names = TRUE)),
-       file  = rdata_path,
-       envir = environment())
+  if (run_isoform) {
+    to_save <- c(to_save, "isoform_results")
+  }
+
+  for (nm in c(
+    "tx_data",
+    "dds",
+    "res_list",
+    "results_data",
+    "func_results",
+    "isoform_import",
+    "dte_res",
+    "dtu_res",
+    "switch_res"
+  )) {
+    if (exists(nm, envir = environment())) {
+      to_save <- c(to_save, nm)
+    }
+  }
+
+  save(
+    list  = intersect(to_save, ls(envir = environment(), all.names = TRUE)),
+    file  = rdata_path,
+    envir = environment()
+  )
+
   message("\nR environment saved to: ", rdata_path)
   message("=== Pipeline complete for: ", comp_name, " ===")
+
   invisible(NULL)
 }
 
-# Alias for README compatibility
 #' Run the full ExpressOM bulk RNA-seq pipeline
 #' @rdname expressom
 #' @export
