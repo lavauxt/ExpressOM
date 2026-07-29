@@ -679,3 +679,127 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
 
   list(width = width, height = height)
 }
+
+#' Standardize a gene annotation table so downstream code can rely on
+#' columns named "ensembl", "symbol", and "entrezid".
+#'
+#' @keywords internal
+#' @export
+.standardize_gene_map <- function(gene_map) {
+  if (is.null(gene_map)) {
+    return(
+      data.frame(
+        ensembl = character(0),
+        symbol = character(0),
+        entrezid = character(0),
+        stringsAsFactors = FALSE
+      )
+    )
+  }
+
+  gene_map <- as.data.frame(gene_map, stringsAsFactors = FALSE)
+
+  if (ncol(gene_map) == 0) {
+    stop("gene_map is empty.")
+  }
+
+  ## Make column names safe and unique.
+  names(gene_map) <- make.unique(trimws(names(gene_map)))
+
+  ## ------------------------------------------------------------------
+  ## Ensure an "ensembl" column exists.
+  ## ------------------------------------------------------------------
+  if (!"ensembl" %in% names(gene_map)) {
+    id_candidates <- c(
+      "gene_id",
+      "ensembl_id",
+      "ensembl_gene_id",
+      "ensembl_gene",
+      "gene",
+      "id",
+      "GeneID",
+      "gene_id.1"
+    )
+
+    id_col <- intersect(id_candidates, names(gene_map))
+
+    if (length(id_col) == 0) {
+      stop(
+        "gene_map does not contain an Ensembl/gene ID column.\n",
+        "Expected one of: ensembl, gene_id, ensembl_id, ensembl_gene_id.\n",
+        "Found columns: ",
+        paste(names(gene_map), collapse = ", ")
+      )
+    }
+
+    names(gene_map)[names(gene_map) == id_col[1]] <- "ensembl"
+  }
+
+  ## If make.unique() created ensembl.1, ensembl.2, etc., drop the extras.
+  extra_ensembl_cols <- grep("^ensembl\\.", names(gene_map), value = TRUE)
+
+  if (length(extra_ensembl_cols) > 0) {
+    gene_map <- gene_map[, setdiff(names(gene_map), extra_ensembl_cols), drop = FALSE]
+  }
+
+  gene_map$ensembl <- strip_ensembl_version(as.character(gene_map$ensembl))
+
+  ## ------------------------------------------------------------------
+  ## Ensure a "symbol" column exists.
+  ## ------------------------------------------------------------------
+  if (!"symbol" %in% names(gene_map)) {
+    symbol_candidates <- c(
+      "gene_name",
+      "symbol",
+      "external_gene_name",
+      "gene_symbol",
+      "SYMBOL",
+      "GeneSymbol",
+      "name"
+    )
+
+    symbol_col <- intersect(symbol_candidates, names(gene_map))
+
+    if (length(symbol_col) > 0) {
+      gene_map$symbol <- as.character(gene_map[[symbol_col[1]]])
+    } else {
+      gene_map$symbol <- gene_map$ensembl
+    }
+  }
+
+  gene_map$symbol <- as.character(gene_map$symbol)
+
+  gene_map$symbol[is.na(gene_map$symbol) | gene_map$symbol == ""] <-
+    gene_map$ensembl[is.na(gene_map$symbol) | gene_map$symbol == ""]
+
+  ## ------------------------------------------------------------------
+  ## Ensure an "entrezid" column exists.
+  ## ------------------------------------------------------------------
+  if (!"entrezid" %in% names(gene_map)) {
+    entrez_candidates <- c(
+      "entrezid",
+      "ENTREZID",
+      "entrez_id",
+      "entrezgene",
+      "entrez_gene"
+    )
+
+    entrez_col <- intersect(entrez_candidates, names(gene_map))
+
+    if (length(entrez_col) > 0) {
+      gene_map$entrezid <- as.character(gene_map[[entrez_col[1]]])
+    } else {
+      gene_map$entrezid <- NA_character_
+    }
+  }
+
+  gene_map$entrezid <- as.character(gene_map$entrezid)
+
+  ## ------------------------------------------------------------------
+  ## Remove invalid/duplicated Ensembl IDs.
+  ## ------------------------------------------------------------------
+  gene_map <- gene_map[!is.na(gene_map$ensembl) & gene_map$ensembl != "", , drop = FALSE]
+  gene_map <- gene_map[!duplicated(gene_map$ensembl), , drop = FALSE]
+
+  gene_map
+}

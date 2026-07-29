@@ -196,6 +196,7 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     )
 
     meta <- sample_df[colnames(txi$counts), , drop = FALSE]
+    gene_map <- .standardize_gene_map(gene_map)
     return(list(txi = txi, meta = meta, edb = edb, gene_map = gene_map, type = "tximport"))
 
   } else if (count_type == "matrix") {
@@ -357,7 +358,30 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
   if (!dir.exists(fc_dir)) dir.create(fc_dir, recursive = TRUE)
 
   res_tbl <- as.data.frame(res_shrunken)
-  res_tbl <- merge(res_tbl, gene_map, by = "ensembl", all.x = TRUE)
+  ## Ensure both tables have a clean, unique "ensembl" column.
+gene_map <- .standardize_gene_map(gene_map)
+
+if (!"ensembl" %in% colnames(res_tbl)) {
+  res_tbl$ensembl <- strip_ensembl_version(rownames(res_tbl))
+} else {
+  res_tbl$ensembl <- strip_ensembl_version(as.character(res_tbl$ensembl))
+}
+
+## Avoid creating symbol.x / symbol.y or entrezid.x / entrezid.y columns.
+res_tbl <- res_tbl[, setdiff(colnames(res_tbl), c("symbol", "entrezid")), drop = FALSE]
+
+gene_map_merge <- gene_map[
+  ,
+  intersect(c("ensembl", "symbol", "entrezid"), colnames(gene_map)),
+  drop = FALSE
+]
+
+res_tbl <- merge(
+  res_tbl,
+  gene_map_merge,
+  by = "ensembl",
+  all.x = TRUE
+)
 
   if (any(is.na(res_tbl$entrezid) | res_tbl$entrezid == "")) {
     message("  Recovering missing Entrez IDs from gene_map...")
