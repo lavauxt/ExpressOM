@@ -4,20 +4,56 @@
 #' @keywords internal
 #' @export
 strip_ensembl_version <- function(x) {
+  x <- as.character(x)
+
   is_versioned_ensembl <- grepl("^ENS[A-Z]*[GT][0-9]+\\.[0-9]+$", x)
-  x[is_versioned_ensembl] <- sub("\\.[0-9]+$", "", x[is_versioned_ensembl])
+
+  x[is_versioned_ensembl] <- sub(
+    "\\.[0-9]+$",
+    "",
+    x[is_versioned_ensembl]
+  )
+
   x
 }
 
 #' Clean a transcript/gene ID for exact-match purposes
+#'
+#' Handles:
+#'   ENST00000456328.2
+#'   ENST00000456328.2|ENSG00000223972.5|DDX11L1|...
+#'   ENST00000456328.2 some description
+#'   ENSG00000223972.5
+#'
 #' @keywords internal
 #' @export
 clean_transcript_id <- function(x) {
-  x <- sub("\\|.$", "", x)
-  x <- sub(" .$", "", x)
-  strip_ensembl_version(x)
-}
+  x <- as.character(x)
 
+  # Remove leading/trailing whitespace
+  x <- trimws(x)
+
+  # Remove everything after the first pipe.
+  # Example:
+  #   ENST00000456328.2|ENSG00000223972.5|DDX11L1|...
+  # becomes:
+  #   ENST00000456328.2
+  x <- sub("\\|.*$", "", x)
+
+  # Remove everything after the first whitespace.
+  # Example:
+  #   ENST00000456328.2 some description
+  # becomes:
+  #   ENST00000456328.2
+  x <- sub("\\s+.*$", "", x)
+
+  # Strip Ensembl version suffix.
+  # Example:
+  #   ENST00000456328.2 -> ENST00000456328
+  x <- strip_ensembl_version(x)
+
+  x
+}
 #' Build a display-safe gene label, falling back to the ID when no symbol is known
 #' @keywords internal
 #' @export
@@ -627,4 +663,19 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
   message("Environment check passed successfully!")
 
   return(TRUE)
+}
+
+#' Cap plot dimensions to avoid device errors
+#' @keywords internal
+.cap_plot_dims <- function(width, height, max_dim = 30, min_dim = 3) {
+  width <- as.numeric(width)
+  height <- as.numeric(height)
+
+  if (length(width) == 0 || is.na(width)) width <- 8
+  if (length(height) == 0 || is.na(height)) height <- 6
+
+  width <- max(min_dim, min(width, max_dim))
+  height <- max(min_dim, min(height, max_dim))
+
+  list(width = width, height = height)
 }

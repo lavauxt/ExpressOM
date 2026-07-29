@@ -501,13 +501,43 @@ run_isoform_pca <- function(isoform_obj,
   tx2gene$tx_id <- clean_transcript_id(tx2gene$tx_id)
 
   gene_id_map <- tx2gene$gene_id[match(rownames(counts), tx2gene$tx_id)]
-  keep_mapped <- !is.na(gene_id_map)
+keep_mapped <- !is.na(gene_id_map)
 
-  counts <- counts[keep_mapped, , drop = FALSE]
-  gene_id_map <- gene_id_map[keep_mapped]
-  tx_ids_original <- rownames(counts)
+n_total <- length(rownames(counts))
+n_mapped <- sum(keep_mapped)
 
-  if (nrow(counts) == 0) stop("No transcripts could be mapped to genes after version handling.")
+if (n_mapped == 0) {
+  stop(
+    "No transcripts could be mapped to genes after version handling.\n\n",
+    "This usually means the transcript IDs in the count matrix and the transcript IDs in tx2gene are not using the same format or annotation source.\n\n",
+    "Example count transcript IDs:\n  ",
+    paste(utils::head(rownames(counts), 5), collapse = "\n  "),
+    "\n\nExample tx2gene tx_id values:\n  ",
+    paste(utils::head(tx2gene$tx_id, 5), collapse = "\n  "),
+    "\n\nPossible fixes:\n",
+    "  1. Update clean_transcript_id() to strip pipe/space/version suffixes.\n",
+    "  2. Use a custom_tx2gene built from the exact same GTF/FASTA used for quantification.\n",
+    "  3. Make sure the EnsDb package release matches the Ensembl/GENCODE release used for kallisto/Salmon indexing.\n",
+    call. = FALSE
+  )
+}
+
+if (n_mapped < 0.5 * n_total) {
+  warning(
+    "Only ", n_mapped, " / ", n_total, " transcripts (",
+    round(100 * n_mapped / n_total, 1),
+    "%) could be mapped to genes. This may indicate an annotation mismatch.",
+    call. = FALSE
+  )
+}
+
+counts <- counts[keep_mapped, , drop = FALSE]
+gene_id_map <- gene_id_map[keep_mapped]
+tx_ids_original <- tx_ids_original[keep_mapped]
+
+if (nrow(counts) == 0) {
+  stop("No transcripts remained after transcript-to-gene mapping.")
+}
 
   message("Mapped transcripts: ", nrow(counts))
 

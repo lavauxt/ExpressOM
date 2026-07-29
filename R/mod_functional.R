@@ -731,84 +731,171 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 # ------------------------------------------------------------------------------
 
 #' Run fgsea analysis using DE results and a GMT file (or multiple GMT files)
-#' 
-#' @description Performs Gene Set Enrichment Analysis using both `fgsea` and `clusterProfiler` using external GMT files (e.g., from MSigDB) or downloading via msigdbr.
-#' @param res_tbl The full results table from `export_significant_results()` containing 'gene' and 'log2FoldChange'.
-#' @param gmt_file Path to a local `.gmt` file, a character vector/list of multiple `.gmt` files, or MSigDB category names (e.g., "H", "C2") to download via msigdbr.
-#'   A category may include a subcategory suffix separated by ":", e.g.
-#'   `"C2:CP:KEGG"` (KEGG pathways within curated gene sets), `"C5:GO:BP"`
-#'   (GO Biological Process within ontology gene sets), `"C3:TFT:GTRD"`
-#'   (transcription factor targets). Only the first ":" is treated as the
-#'   category/subcategory separator, since msigdbr's own subcategory codes
-#'   already contain one (e.g. "CP:KEGG"). Falls back to the full,
-#'   unfiltered category if the requested subcategory isn't found.
+#'
+#' @description Performs Gene Set Enrichment Analysis using both `fgsea` and
+#'   `clusterProfiler` using external GMT files (e.g., from MSigDB) or
+#'   downloading via msigdbr.
+#'
+#' @param res_tbl The full results table from `export_significant_results()`
+#'   containing 'gene' and 'log2FoldChange'.
+#' @param gmt_file Path to a local `.gmt` file, a character vector/list of
+#'   multiple `.gmt` files, or MSigDB category names (e.g., "H", "C2") to
+#'   download via msigdbr.
 #' @param edb Ensembl Database (used to detect species for msigdbr).
 #' @param out_dir Output directory for fgsea results.
-#' @param comp_name Comparison name (e.g. "Treated_vs_Control") for file naming.
+#' @param comp_name Comparison name for file naming.
 #' @param padj_cutoff Adjusted p-value cutoff for filtering significant pathways.
+#'
 #' @export
-run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out_dir, comp_name, padj_cutoff = 0.01) {
-  
+run_fgsea_analysis <- function(res_tbl,
+                               gmt_file = c("C2", "C5", "C8"),
+                               edb,
+                               out_dir,
+                               comp_name,
+                               padj_cutoff = 0.01) {
+
   gmt_list <- if (is.null(gmt_file)) list(NULL) else as.list(gmt_file)
 
+  ## ------------------------------------------------------------------
+  ## Internal helpers
+  ## ------------------------------------------------------------------
+
+  .cap_dim <- function(x, min_dim = 3, max_dim = 30) {
+    x <- suppressWarnings(as.numeric(x))
+
+    if (length(x) == 0 || is.na(x)) {
+      x <- 8
+    }
+
+    max(min_dim, min(max_dim, x))
+  }
+
+  .safe_ggsave <- function(filename,
+                           plot,
+                           width,
+                           height,
+                           device = "pdf",
+                           ...) {
+
+    if (is.null(plot)) {
+      message("   -> Skipping plot save, plot object is NULL: ", basename(filename))
+      return(invisible(FALSE))
+    }
+
+    width <- .cap_dim(width, min_dim = 4, max_dim = 30)
+    height <- .cap_dim(height, min_dim = 4, max_dim = 30)
+
+    ok <- tryCatch(
+      {
+        ggplot2::ggsave(
+          filename = filename,
+          plot = plot,
+          device = device,
+          width = width,
+          height = height,
+          ...
+        )
+
+        TRUE
+      },
+      error = function(e) {
+        message(
+          "   -> Failed to save plot: ", basename(filename),
+          "\n      Error: ", conditionMessage(e)
+        )
+        FALSE
+      }
+    )
+
+    invisible(ok)
+  }
+
+  ## ------------------------------------------------------------------
+  ## Loop over GMT sources / MSigDB collections
+  ## ------------------------------------------------------------------
+
   for (gmt_item in gmt_list) {
-    
+
     if (is.null(gmt_item) || !file.exists(gmt_item)) {
+
       if (!requireNamespace("msigdbr", quietly = TRUE)) {
         stop("Package 'msigdbr' is required to download pathways. Please install it.")
       }
-      
+
       org_info <- get_organism_info(edb)
       msig_org <- org_info$msig_org
-      
-      valid_collections <- c("H", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9",
-                             "MH", "M1", "M2", "M3", "M5", "M7", "M8", "HALLMARK")
 
-      # "<category>:<subcategory>" syntax, e.g. "C2:CP:KEGG" -- only the
-      # FIRST colon is the category/subcategory separator, since msigdbr's
-      # own subcategory codes already contain one (e.g. "CP:KEGG", "GO:BP").
-      raw_input     <- toupper(gmt_item)
-      has_subcat    <- grepl(":", raw_input)
-      input_cat     <- if (has_subcat) sub(":.*$", "", raw_input) else raw_input
-      input_subcat  <- if (has_subcat) sub("^[^:]+:", "", raw_input) else NULL
-      
-      if (!is.null(gmt_item) && input_cat %in% valid_collections) {    
-              if (input_cat %in% c("MH", "HALLMARK")) {
-                msig_cat <- "H"
-              } else if (grepl("^M[0-9]", input_cat)) {
-                msig_cat <- paste0("C", gsub("M", "", input_cat))
-              } else {
-                msig_cat <- input_cat
-              }
-        gmt_name <- paste0("msigdbr_", input_cat, if (!is.null(input_subcat)) paste0("_", gsub(":", "_", input_subcat)) else "")
-        message("-> Fetching MSigDB category [", input_cat, "]",
-                if (!is.null(input_subcat)) paste0(" subcategory [", input_subcat, "]") else "",
-                " (mapped to ", msig_cat, ") via msigdbr for ", msig_org, "...")
-        } else {
-          message("Provided GMT file '", gmt_item, "' not recognized as MSigDB category. Falling back to Hallmark...")
+      valid_collections <- c(
+        "H", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9",
+        "MH", "M1", "M2", "M3", "M5", "M7", "M8", "HALLMARK"
+      )
+
+      raw_input <- toupper(gmt_item)
+      has_subcat <- grepl(":", raw_input)
+      input_cat <- if (has_subcat) sub(":.*$", "", raw_input) else raw_input
+      input_subcat <- if (has_subcat) sub("^[^:]+:", "", raw_input) else NULL
+
+      if (!is.null(gmt_item) && input_cat %in% valid_collections) {
+
+        if (input_cat %in% c("MH", "HALLMARK")) {
           msig_cat <- "H"
-          input_subcat <- NULL
-          gmt_name <- "hallmark_msigdbr"
+        } else if (grepl("^M[0-9]", input_cat)) {
+          msig_cat <- paste0("C", gsub("M", "", input_cat))
+        } else {
+          msig_cat <- input_cat
+        }
+
+        gmt_name <- paste0(
+          "msigdbr_",
+          input_cat,
+          if (!is.null(input_subcat)) paste0("_", gsub(":", "_", input_subcat)) else ""
+        )
+
+        message(
+          "-> Fetching MSigDB category [", input_cat, "]",
+          if (!is.null(input_subcat)) paste0(" subcategory [", input_subcat, "]") else "",
+          " (mapped to ", msig_cat, ") via msigdbr for ", msig_org, "..."
+        )
+
+      } else {
+        message(
+          "Provided GMT file '", gmt_item,
+          "' not recognized as MSigDB category. Falling back to Hallmark..."
+        )
+
+        msig_cat <- "H"
+        input_subcat <- NULL
+        gmt_name <- "hallmark_msigdbr"
       }
-      
+
       .msigdbr_fetch <- function(species, cat, subcat = NULL) {
         fmls <- names(formals(msigdbr::msigdbr))
-        # Both the modern ("collection") and legacy ("category") msigdbr
-        # argument names use "subcategory" for the sub-collection filter --
-        # see run_local_enrichment()'s .fetch(), which already established
-        # this against the installed msigdbr version.
+
         args <- list(species = species)
-        if ("collection" %in% fmls) args$collection <- cat else args$category <- cat
-        if (!is.null(subcat)) args$subcategory <- subcat
-        do.call(msigdbr::msigdbr, args) %>% dplyr::select(gs_name, gene_symbol)
+
+        if ("collection" %in% fmls) {
+          args$collection <- cat
+        } else {
+          args$category <- cat
+        }
+
+        if (!is.null(subcat)) {
+          args$subcategory <- subcat
+        }
+
+        do.call(msigdbr::msigdbr, args) |>
+          dplyr::select(gs_name, gene_symbol)
       }
 
       m_t2g <- tryCatch(
         .msigdbr_fetch(msig_org, msig_cat, input_subcat),
         error = function(e) {
-          message("   -> msigdbr collection '", msig_cat,
-                  if (!is.null(input_subcat)) paste0(" / subcategory '", input_subcat, "'") else "",
-                  "' not available, falling back to 'H'")
+          message(
+            "   -> msigdbr collection '", msig_cat,
+            if (!is.null(input_subcat)) paste0(" / subcategory '", input_subcat, "'") else "",
+            "' not available, falling back to 'H'"
+          )
+
           tryCatch(
             .msigdbr_fetch(msig_org, "H"),
             error = function(e2) {
@@ -817,141 +904,389 @@ run_fgsea_analysis <- function(res_tbl, gmt_file = c("C2", "C5", "C8"), edb, out
           )
         }
       )
-      # A subcategory that parses fine but simply doesn't exist for this
-      # collection/organism (e.g. a typo, or a subcategory that's only
-      # defined for human when msig_org is mouse) returns a valid *empty*
-      # data.frame rather than an error -- the tryCatch above wouldn't catch
-      # this, so it's handled separately: retry without the subcategory
-      # filter instead of silently proceeding with zero gene sets.
+
       if (!is.null(input_subcat) && nrow(m_t2g) == 0) {
-        message("   -> msigdbr subcategory '", input_subcat, "' returned 0 gene sets for '",
-                msig_cat, "' / ", msig_org, "; using the full '", msig_cat, "' collection instead.")
-        m_t2g <- tryCatch(.msigdbr_fetch(msig_org, msig_cat), error = function(e) m_t2g)
+        message(
+          "   -> msigdbr subcategory '", input_subcat,
+          "' returned 0 gene sets for '", msig_cat, "' / ", msig_org,
+          "; using the full '", msig_cat, "' collection instead."
+        )
+
+        m_t2g <- tryCatch(
+          .msigdbr_fetch(msig_org, msig_cat),
+          error = function(e) m_t2g
+        )
       }
-      
+
+      if (nrow(m_t2g) == 0) {
+        message(
+          "-> Skipping [", gmt_name, "]: msigdbr returned 0 gene sets."
+        )
+        next
+      }
+
       pathways.GSEA <- m_t2g
       pathways.fgsea <- split(x = m_t2g$gene_symbol, f = m_t2g$gs_name)
-      
+
     } else {
       gmt_name <- tools::file_path_sans_ext(basename(gmt_item))
-      message('-> Loading pathways for fgsea/GSEA: ', gmt_name)
+
+      message("-> Loading pathways for fgsea/GSEA: ", gmt_name)
+
       pathways.GSEA <- clusterProfiler::read.gmt(gmt_item)
       pathways.fgsea <- fgsea::gmtPathways(gmt_item)
     }
-     
-    fgsea_out <- file.path(out_dir, "GSEA", "FGSEA", gmt_name)
-    if(!dir.exists(fgsea_out)) dir.create(fgsea_out, recursive = TRUE)
 
-    message('-> Preparing ranked gene list for [', gmt_name, ']...')
+    if (length(pathways.fgsea) == 0) {
+      message("-> Skipping [", gmt_name, "]: no pathways available.")
+      next
+    }
+
+    fgsea_out <- file.path(out_dir, "GSEA", "FGSEA", gmt_name)
+
+    if (!dir.exists(fgsea_out)) {
+      dir.create(fgsea_out, recursive = TRUE)
+    }
+
+    ## ----------------------------------------------------------------
+    ## Ranked gene list
+    ## ----------------------------------------------------------------
+
+    message("-> Preparing ranked gene list for [", gmt_name, "]...")
+
     res2 <- res_tbl |>
       dplyr::select(gene, log2FoldChange) |>
       stats::na.omit() |>
       dplyr::distinct() |>
       dplyr::group_by(gene) |>
-      dplyr::summarize(log2FoldChange = mean(log2FoldChange, na.rm = TRUE), .groups = 'drop')
-    
+      dplyr::summarize(log2FoldChange = mean(log2FoldChange, na.rm = TRUE),
+                       .groups = "drop")
+
     ranks <- tibble::deframe(res2)
-    
+
+    if (length(ranks) == 0) {
+      message("-> Skipping [", gmt_name, "]: no valid ranked genes available.")
+      next
+    }
+
     set.seed(123456)
     ranks <- ranks + runif(length(ranks), min = -1e-6, max = 1e-6)
     ranks <- sort(ranks, decreasing = TRUE)
-    
-    message('-> Running clusterProfiler GSEA for [', gmt_name, ']...')
+
+    ## ----------------------------------------------------------------
+    ## clusterProfiler GSEA
+    ## ----------------------------------------------------------------
+
+    message("-> Running clusterProfiler GSEA for [", gmt_name, "]...")
+
     set.seed(123456)
-    gsea_results <- tryCatch({
-      suppressWarnings(suppressMessages(
-        clusterProfiler::GSEA(ranks, TERM2GENE = pathways.GSEA, pvalueCutoff = padj_cutoff)
-      ))
-    }, error = function(e) NULL)
-    
-    message('-> Running fgseaMultilevel for [', gmt_name, ']...')
+
+    gsea_results <- tryCatch(
+      {
+        suppressWarnings(
+          suppressMessages(
+            clusterProfiler::GSEA(
+              ranks,
+              TERM2GENE = pathways.GSEA,
+              pvalueCutoff = padj_cutoff
+            )
+          )
+        )
+      },
+      error = function(e) {
+        message("   -> clusterProfiler GSEA failed: ", conditionMessage(e))
+        NULL
+      }
+    )
+
+    ## ----------------------------------------------------------------
+    ## fgseaMultilevel
+    ## ----------------------------------------------------------------
+
+    message("-> Running fgseaMultilevel for [", gmt_name, "]...")
+
     set.seed(123456)
-    fgseaRes <- fgsea::fgseaMultilevel(pathways = pathways.fgsea, stats = ranks)
-    
-    message('-> Saving results table for [', gmt_name, ']...')
-    fgseaResTidy <- tibble::as_tibble(fgseaRes) |> dplyr::arrange(dplyr::desc(NES))
+
+    fgseaRes <- tryCatch(
+      fgsea::fgseaMultilevel(
+        pathways = pathways.fgsea,
+        stats = ranks
+      ),
+      error = function(e) {
+        message("   -> fgseaMultilevel failed: ", conditionMessage(e))
+        NULL
+      }
+    )
+
+    if (is.null(fgseaRes)) {
+      message("-> Skipping [", gmt_name, "]: fgseaMultilevel returned no results.")
+      next
+    }
+
+    ## ----------------------------------------------------------------
+    ## Save tables
+    ## ----------------------------------------------------------------
+
+    message("-> Saving results table for [", gmt_name, "]...")
+
+    fgseaResTidy <- tibble::as_tibble(fgseaRes) |>
+      dplyr::arrange(dplyr::desc(NES))
+
     utils::write.csv(
-      fgseaResTidy %>% dplyr::select(-leadingEdge),
+      fgseaResTidy |> dplyr::select(-leadingEdge),
       file.path(fgsea_out, paste0("FGSEA_Results_", gmt_name, ".csv")),
       row.names = FALSE
     )
-    
-    if (requireNamespace("DT", quietly = TRUE) && requireNamespace("htmlwidgets", quietly = TRUE)) {
-      datatable_object <- fgseaResTidy |>
-        dplyr::select(-leadingEdge, -ES) |>
-        dplyr::arrange(padj) |>
-        DT::datatable()
-      html_name <- paste0("GSEA_Table_", gmt_name, ".html")
-      withr::with_dir(fgsea_out, {
-        htmlwidgets::saveWidget(datatable_object, file = html_name, selfcontained = TRUE)
-      })
-      
+
+    if (requireNamespace("DT", quietly = TRUE) &&
+        requireNamespace("htmlwidgets", quietly = TRUE)) {
+
+      tryCatch(
+        {
+          datatable_object <- fgseaResTidy |>
+            dplyr::select(-leadingEdge, -ES) |>
+            dplyr::arrange(padj) |>
+            DT::datatable()
+
+          html_name <- paste0("GSEA_Table_", gmt_name, ".html")
+
+          withr::with_dir(
+            fgsea_out,
+            {
+              htmlwidgets::saveWidget(
+                datatable_object,
+                file = html_name,
+                selfcontained = TRUE
+              )
+            }
+          )
+        },
+        error = function(e) {
+          message(
+            "   -> Skipping interactive HTML table for [", gmt_name, "]: ",
+            conditionMessage(e)
+          )
+        }
+      )
+
     } else {
       message("Skipping HTML table generation: 'DT' or 'htmlwidgets' is not installed.")
     }
-    
-    message('-> Plotting NES Barplot for [', gmt_name, ']...')
-    fgseaResTidy_filtered <- fgseaResTidy |> dplyr::filter(padj < padj_cutoff)
-    
-    if (nrow(fgseaResTidy_filtered) > 0) {
-      fgseaResTidy_filtered$pathway <- gsub("_", " ", fgseaResTidy_filtered$pathway)
-      fgseaResTidy_filtered$pathway <- stringr::str_wrap(fgseaResTidy_filtered$pathway, width = 60)
-      
-      fgseaResTidy_filtered$direction <- ifelse(fgseaResTidy_filtered$NES > 0, "Up", "Down")
 
-      p_bar <- ggplot2::ggplot(fgseaResTidy_filtered, ggplot2::aes(reorder(pathway, NES), NES)) +
-        ggplot2::geom_col(ggplot2::aes(fill = direction), width = 0.6) +
-        ggplot2::coord_flip() +  
-        ggplot2::labs(x = "Pathway", y = "Normalized Enrichment Score", title = paste("GSEA NES:", gmt_name)) +
+    ## ----------------------------------------------------------------
+    ## NES barplot
+    ## ----------------------------------------------------------------
+
+    message("-> Plotting NES barplot for [", gmt_name, "]...")
+
+    fgseaResTidy_filtered <- fgseaResTidy |>
+      dplyr::filter(padj < padj_cutoff)
+
+    if (nrow(fgseaResTidy_filtered) > 0) {
+
+      max_barplot_pathways <- getOption("ExpressOM.max_gsea_barplot_pathways", 80L)
+      max_barplot_pathways <- as.integer(max_barplot_pathways)
+
+      if (is.na(max_barplot_pathways) || max_barplot_pathways < 5) {
+        max_barplot_pathways <- 80L
+      }
+
+      total_sig <- nrow(fgseaResTidy_filtered)
+
+      ## Sort by strongest adjusted p-value and effect size.
+      fgseaResTidy_filtered <- fgseaResTidy_filtered[
+        order(
+          fgseaResTidy_filtered$padj,
+          -abs(fgseaResTidy_filtered$NES)
+        ),
+      ]
+
+      barplot_subtitle <- NULL
+
+      if (total_sig > max_barplot_pathways) {
+        message(
+          "   -> Limiting NES barplot to top ", max_barplot_pathways,
+          " of ", total_sig, " significant pathways.",
+          " Set options(ExpressOM.max_gsea_barplot_pathways = N) to change."
+        )
+
+        fgseaResTidy_filtered <- utils::head(
+          fgseaResTidy_filtered,
+          max_barplot_pathways
+        )
+
+        barplot_subtitle <- sprintf(
+          "Showing top %d of %d significant pathways (ordered by padj)",
+          max_barplot_pathways,
+          total_sig
+        )
+      }
+
+      fgseaResTidy_filtered$pathway <- gsub(
+        "_",
+        " ",
+        fgseaResTidy_filtered$pathway
+      )
+
+      fgseaResTidy_filtered$pathway <- stringr::str_wrap(
+        fgseaResTidy_filtered$pathway,
+        width = 60
+      )
+
+      fgseaResTidy_filtered$direction <- ifelse(
+        fgseaResTidy_filtered$NES > 0,
+        "Up",
+        "Down"
+      )
+
+      p_bar <- ggplot2::ggplot(
+        fgseaResTidy_filtered,
+        ggplot2::aes(reorder(pathway, NES), NES)
+      ) +
+        ggplot2::geom_col(
+          ggplot2::aes(fill = direction),
+          width = 0.6
+        ) +
+        ggplot2::coord_flip() +
+        ggplot2::labs(
+          x = "Pathway",
+          y = "Normalized Enrichment Score",
+          title = paste("GSEA NES:", gmt_name),
+          subtitle = barplot_subtitle
+        ) +
         ggplot2::theme_minimal() +
         ggplot2::theme(
           plot.title = ggplot2::element_text(face = "bold"),
+          plot.subtitle = ggplot2::element_text(size = 9, color = "grey30"),
           axis.title.x = ggplot2::element_text(face = "bold"),
           axis.title.y = ggplot2::element_text(face = "bold"),
           axis.text.x = ggplot2::element_text(face = "bold"),
           axis.text.y = ggplot2::element_text(face = "bold", size = 8),
           plot.margin = ggplot2::margin(1, 1, 1, 1, "cm")
         ) +
-        ggplot2::scale_fill_manual(values = c("Up" = "#1E90FF", "Down" = "#FF6347"), drop = FALSE) +
+        ggplot2::scale_fill_manual(
+          values = c(
+            "Up" = "#1E90FF",
+            "Down" = "#FF6347"
+          ),
+          drop = FALSE
+        ) +
         ggplot2::guides(fill = "none")
-      
+
       num_pathways <- nrow(fgseaResTidy_filtered)
-      height_adjustment <- max(8, num_pathways * 0.3)
-      ggplot2::ggsave(file.path(fgsea_out, paste0("Barplot_", gmt_name, ".pdf")), plot = p_bar, width = 12, height = height_adjustment, device = "pdf")
+
+      ## Critical fix:
+      ## Never allow height to exceed 30 inches.
+      height_adjustment <- max(8, min(30, num_pathways * 0.3 + 2))
+
+      .safe_ggsave(
+        filename = file.path(
+          fgsea_out,
+          paste0("Barplot_", gmt_name, ".pdf")
+        ),
+        plot = p_bar,
+        width = 12,
+        height = height_adjustment,
+        device = "pdf"
+      )
+
+    } else {
+      message(
+        "   -> No significant pathways at padj < ", padj_cutoff,
+        " for NES barplot."
+      )
     }
-    
-    message('-> Generating individual pathway gseaplots for [', gmt_name, ']...')
+
+    ## ----------------------------------------------------------------
+    ## Individual clusterProfiler gseaplot2 plots
+    ## ----------------------------------------------------------------
+
+    message("-> Generating individual pathway gseaplots for [", gmt_name, "]...")
+
     max_gsea_plots <- getOption("ExpressOM.max_gsea_plots", 20L)
+    max_gsea_plots <- as.integer(max_gsea_plots)
+
+    if (is.na(max_gsea_plots) || max_gsea_plots < 0) {
+      max_gsea_plots <- 20L
+    }
+
     if (!is.null(gsea_results) && nrow(as.data.frame(gsea_results)) > 0) {
+
       gene_set_ids <- gsea_results@result$ID
       valid_idx <- which(!is.na(gene_set_ids))
-      if (length(valid_idx) > max_gsea_plots) {
-        message("   -> Limiting individual gseaplots to top ", max_gsea_plots,
-                " of ", length(valid_idx),
-                " (set options(ExpressOM.max_gsea_plots = N) to change)")
+
+      if (max_gsea_plots == 0) {
+        message("   -> Individual gseaplots disabled by options(ExpressOM.max_gsea_plots = 0).")
+        valid_idx <- integer(0)
+      } else if (length(valid_idx) > max_gsea_plots) {
+        message(
+          "   -> Limiting individual gseaplots to top ", max_gsea_plots,
+          " of ", length(valid_idx),
+          " (set options(ExpressOM.max_gsea_plots = N) to change)"
+        )
+
         valid_idx <- valid_idx[seq_len(max_gsea_plots)]
       }
+
       for (i in valid_idx) {
+
         pid <- gene_set_ids[i]
         clean_pid <- gsub("[^A-Za-z0-9_-]", "_", pid)
-        
-        safe_run({
-          pathway_name <- gsub("_", " ", gsea_results@result$Description[i])
-          p <- enrichplot::gseaplot2(gsea_results, geneSetID = i, title = as.character(pathway_name))
-          ggplot2::ggsave(filename = file.path(fgsea_out, paste0("GSEA_plot_", gmt_name, "_", clean_pid, ".pdf")),
-                          plot = p, device = "pdf", width = 8, height = 6)
-          ggplot2::ggsave(filename = file.path(fgsea_out, paste0("GSEA_plot_", gmt_name, "_", clean_pid, ".tiff")),
-                          plot = p, device = "tiff", width = 8, height = 6, compression = "lzw", dpi = 600)
-        }, label = paste("gseaplot", pid))
+
+        safe_run(
+          {
+            pathway_name <- gsub(
+              "_",
+              " ",
+              gsea_results@result$Description[i]
+            )
+
+            p <- enrichplot::gseaplot2(
+              gsea_results,
+              geneSetID = i,
+              title = as.character(pathway_name)
+            )
+
+            .safe_ggsave(
+              filename = file.path(
+                fgsea_out,
+                paste0("GSEA_plot_", gmt_name, "_", clean_pid, ".pdf")
+              ),
+              plot = p,
+              device = "pdf",
+              width = 8,
+              height = 6
+            )
+
+            .safe_ggsave(
+              filename = file.path(
+                fgsea_out,
+                paste0("GSEA_plot_", gmt_name, "_", clean_pid, ".tiff")
+              ),
+              plot = p,
+              device = "tiff",
+              width = 8,
+              height = 6,
+              compression = "lzw",
+              dpi = 600
+            )
+          },
+          label = paste("gseaplot", pid)
+        )
       }
+
     } else {
       message("   -> Skipping individual gseaplots: clusterProfiler GSEA returned no significant results.")
     }
-    
-    while(grDevices::dev.cur() > 1) grDevices::dev.off()
+
+    while (grDevices::dev.cur() > 1) {
+      grDevices::dev.off()
+    }
   }
-  message('-> FGSEA processing complete across all specified gene sets.')
+
+  message("-> FGSEA processing complete across all specified gene sets.")
 }
+
 
 # ------------------------------------------------------------------------------
 # Local enrichment analysis (replaces EnrichR for offline use)
