@@ -1175,7 +1175,6 @@ run_fgsea_analysis <- function(res_tbl,
 
       num_pathways <- nrow(fgseaResTidy_filtered)
 
-      ## Critical fix:
       ## Never allow height to exceed 30 inches.
       height_adjustment <- max(8, min(30, num_pathways * 0.3 + 2))
 
@@ -1298,13 +1297,6 @@ run_fgsea_analysis <- function(res_tbl,
 #' clusterProfiler::enricher()". Used both as a standalone export and as the
 #' offline TF-enrichment fallback inside \code{run_functional_analysis()}
 #' when the EnrichR API is unreachable.
-#'
-#' (Previously this existed as two independently-maintained, drifting copies:
-#' this exported function, unused anywhere in the package, still called
-#' \code{msigdbr::msigdbr(category = ...)}; the inline copy that actually ran
-#' in \code{run_functional_analysis()} had already moved to msigdbr's current
-#' \code{collection}/\code{subcategory} argument names. Consolidated here so
-#' there's one implementation to fix if msigdbr's API changes again.)
 #'
 #' @param gene_list Vector of significant gene symbols (e.g. DEGs)
 #' @param universe Vector of ALL genes expressed in the experiment (background)

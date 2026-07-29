@@ -209,11 +209,7 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
   org_info <- get_organism_info(edb)
   org_obj <- .load_org_db(org_info$org_db)
 
-  # Sample correlation heatmap for this specific comparison. The RegionReport
-  # Rmd built in main.R looks for "SampleCorrelation_<level>_vs_<base>.pdf"
-  # (run_eda()'s own heatmap is a differently-named, EDA-wide file and isn't
-  # a substitute), so this needs to actually run for that report section to
-  # render instead of silently staying blank.
+
   if (!is.null(main_condition) && main_condition %in% colnames(SummarizedExperiment::colData(dds))) {
     vsd <- tryCatch(DESeq2::vst(dds, blind = TRUE),
                     error = function(e) DESeq2::varianceStabilizingTransformation(dds, blind = TRUE))
@@ -291,8 +287,7 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
     mat     <- SummarizedExperiment::assay(vsd)
     coldata <- as.data.frame(SummarizedExperiment::colData(vsd))
   } else if (is.matrix(vsd)) {
-    # If a matrix is provided, we need coldata separately – but this function expects SE.
-    # Keep original behavior: if matrix, error.
+
     stop("vsd must be a SummarizedExperiment object (e.g., DESeqDataSet or DESeqTransform)")
   } else {
     stop("vsd must be a SummarizedExperiment object")
@@ -322,23 +317,10 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
   pca_df     <- data.frame(PC1 = pca$x[, 1], PC2 = pca$x[, 2], coldata)
   pca_df$sample_label <- rownames(pca_df)
 
-  # Per-sample scores on EVERY PC (not just the PC1/PC2 used for plotting),
-  # for anyone who wants the actual coordinate values rather than just the
-  # gene-loadings/variance table below (which only ever reported which
-  # genes went into the PCA and their variance, never a per-sample value).
-  # One row per sample; sample_label + all available coldata columns come
-  # first so this is self-contained without needing a separate join back to
-  # the original metadata.
   pca_scores <- data.frame(sample_label = rownames(pca$x), coldata,
                            pca$x, row.names = NULL, check.names = FALSE)
   attr(pca_scores, "percentVar") <- stats::setNames(percentVar, colnames(pca$x))
 
-  # The actual per-sample transformed value (rlog/vst, whatever `mat` holds)
-  # for each of the genes that went into this PCA -- one row per gene (same
-  # genes/order as gene_info above, i.e. the top `ntop` most variable when
-  # that was requested), one column per sample. gene_info alone only ever
-  # said *which* genes and their variance; this is the actual number you'd
-  # need to look up, say, "what was gene X's value in sample Y".
   gene_values <- data.frame(gene = rownames(mat), as.data.frame(mat, check.names = FALSE),
                             row.names = NULL, check.names = FALSE)
 
@@ -949,7 +931,7 @@ plotP_fork <- function(x, threshold = 0.01) {
   df  <- x
   pb  <- df$pPERT
   ph  <- df$pNDE
-  # .combfunc and .getP2 are defined once in utils_core.R — no duplicate needed here
+
   combinemethod <- ifelse(
     sum(.combfunc(pb, ph, "fisher") == df$pG) > sum(.combfunc(pb, ph, "norminv") == df$pG),
     "fisher", "norminv"
@@ -1038,5 +1020,3 @@ plotP_fork <- function(x, threshold = 0.01) {
   print(p)
   return(invisible(p))
 }
-# NOTE: .combfunc and .getP2 are defined in utils_core.R.
-# Duplicate definitions have been removed from this file to avoid divergence.

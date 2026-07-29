@@ -132,7 +132,6 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     # Fill missing symbol with ensembl
     gene_map$symbol[is.na(gene_map$symbol) | gene_map$symbol == ""] <- gene_map$ensembl[is.na(gene_map$symbol) | gene_map$symbol == ""]
 
-    # ---- ENHANCED FALLBACK: fill missing Entrez using bitr ----
     if (!is.null(org_obj)) {
       gene_map <- .fill_entrez_with_bitr(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol")
     }
@@ -357,24 +356,15 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
   fc_dir <- file.path(out_dir, "DE_raw_results")
   if (!dir.exists(fc_dir)) dir.create(fc_dir, recursive = TRUE)
 
-  # --- MAIN RESULTS TABLE ---
   res_tbl <- as.data.frame(res_shrunken)
-  # Strip version suffixes from Ensembl IDs BEFORE merging (MSTRG/other custom
-  # IDs containing dots are left untouched, see strip_ensembl_version())
-  res_tbl$ensembl <- strip_ensembl_version(rownames(res_tbl))
   res_tbl <- merge(res_tbl, gene_map, by = "ensembl", all.x = TRUE)
-  
-  # --- RECOVER ENTREZ IDs FROM GENE MAP (fallback for any that were missed) ---
+
   if (any(is.na(res_tbl$entrezid) | res_tbl$entrezid == "")) {
     message("  Recovering missing Entrez IDs from gene_map...")
     
-    # Clean gene_map for matching
     gene_map_clean <- gene_map[!is.na(gene_map$entrezid) & gene_map$entrezid != "", ]
     gene_map_clean$ensembl_clean <- strip_ensembl_version(gene_map_clean$ensembl)
-    
-    # First pass: match by gene symbol already resolved on res_tbl (i.e. the
-    # primary merge succeeded on "ensembl" but entrezid itself was blank in
-    # gene_map for that row)
+
     missing_idx <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
     if (any(missing_idx)) {
       for (i in which(missing_idx)) {
@@ -388,8 +378,7 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
       }
     }
     
-    # Second pass: match by Ensembl ID (version-stripped). Mostly redundant
-    # with the primary merge, kept as a safety net.
+
     missing_idx <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
     if (any(missing_idx)) {
       for (i in which(missing_idx)) {
@@ -403,14 +392,6 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
       }
     }
 
-    # Third pass (the one that was MISSING): res_tbl$ensembl may itself be a
-    # bare gene SYMBOL rather than a gene_id, because a custom_tx2gene file
-    # can use gene symbols as its aggregation key (e.g. tximport's tx2gene
-    # maps "ENST00000832824" -> "DDX11L16" directly, instead of an
-    # ENSG/MSTRG id). In that case the two passes above never fire because
-    # res_tbl$symbol is still NA (the primary "by = ensembl" merge found no
-    # match at all) and res_tbl$ensembl doesn't look like an Ensembl ID
-    # either. Try matching res_tbl$ensembl against gene_map's symbol column.
     missing_idx <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
     if (any(missing_idx)) {
       gene_map_by_symbol <- gene_map_clean[!duplicated(gene_map_clean$symbol), ]
