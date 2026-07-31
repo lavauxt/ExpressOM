@@ -512,8 +512,6 @@ run_isoform_pca <- function(isoform_obj,
   rownames(counts) <- clean_transcript_id(rownames(counts))
   tx2gene$tx_id <- clean_transcript_id(tx2gene$tx_id)
 
-  ## Critical fix:
-  ## tx_ids_original must exist before any downstream filtering uses it.
   tx_ids_original <- rownames(counts)
 
   gene_id_map <- tx2gene$gene_id[match(rownames(counts), tx2gene$tx_id)]
@@ -1775,6 +1773,11 @@ run_isoform_switch <- function(dte_results = NULL,
 
   predictor_log_path <- file.path(log_dir, "predictor_status.log")
 
+  message(
+    "Predictor run logging to: ", predictor_log_path, " (step-by-step status) and ",
+    file.path(log_dir, "wsl_commands.log"), " (every shell command, in real time)."
+  )
+
   .log_predictor_status <- function(step, status, detail = "") {
     cat(
       sprintf(
@@ -1887,7 +1890,8 @@ run_isoform_switch <- function(dte_results = NULL,
       conda_env = "isoform_tools",
       intern = TRUE,
       ignore_stderr = !show_stderr,
-      log_dir = log_dir
+      log_dir = log_dir,
+      verbose = FALSE
     )
 
     exit_code <- attr(res, "status") %||% 0L

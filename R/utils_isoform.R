@@ -28,12 +28,24 @@
   sprintf('"%s"', x)
 }
 
+#' Resolve where WSL command logs are written when a caller doesn't specify
+#' log_dir explicitly.
+#'
+#' Overridable globally via options(expressom.wsl_log_dir = "/some/path") so
+#' a whole pipeline run can point every WSL command at one place; otherwise
+#' falls back to a fixed, discoverable folder so command logging is never
+#' silently dropped just because a caller left log_dir at its default.
+#' @keywords internal
+.default_wsl_log_dir <- function() {
+  getOption("expressom.wsl_log_dir", file.path(getwd(), "expressom_wsl_logs"))
+}
+
 #' Persist an environment variable for later predictor runs
 #'
 #' Appends or replaces an `export VAR="value"` line in the dedicated env file
 #' sourced by `.wsl_exec_script()` on every invocation.
 #' @keywords internal
-.wsl_write_env_var <- function(var, value, wsl_distro = "Ubuntu", use_wsl = TRUE) {
+.wsl_write_env_var <- function(var, value, wsl_distro = "Ubuntu", use_wsl = TRUE, log_dir = NULL) {
   export_line <- sprintf("export %s=%s", var, .dq(value))
   tmp_env <- paste0(.ISOFORM_ENV_FILE, ".tmp")
 
@@ -60,7 +72,7 @@
     use_wsl = use_wsl,
     intern = FALSE,
     ignore_stderr = TRUE,
-    log_dir = NULL
+    log_dir = log_dir
   )
 
   ok <- isTRUE(status == 0L)
@@ -176,6 +188,20 @@
 }
 
 #' Write bash commands to a temp script and execute via WSL or natively
+#'
+#' Every call is written to wsl_commands.log as it happens -- one entry per
+#' invocation, appended immediately after that command finishes -- regardless
+#' of what the caller passes for log_dir (see .default_wsl_log_dir()). Set
+#' verbose = FALSE to suppress the live console trace for callers (like
+#' run_tool() in mod_isoform.R) that already print their own equivalent
+#' summary; the file log is unaffected by verbose either way.
+#'
+#' `ignore_stderr` only controls whether a non-zero exit raises an R
+#' warning() -- it no longer hides the command's actual output. Previously,
+#' because ignore_stderr defaulted to TRUE and every "does this exist" probe
+#' hardcoded it to TRUE too, a genuine failure (as opposed to a routine
+#' "not found") printed nothing but an exit code: the one piece of text that
+#' would explain *why* was thrown away.
 #' @keywords internal
 .wsl_exec_script <- function(bash_body,
                              wsl_distro = "Ubuntu",
@@ -184,7 +210,18 @@
                              conda_env = "isoform_tools",
                              intern = FALSE,
                              ignore_stderr = TRUE,
-                             log_dir = NULL) {
+                             log_dir = NULL,
+                             verbose = TRUE) {
+
+  effective_log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
+  cmd_preview <- paste(bash_body, collapse = "; ")
+
+  if (isTRUE(verbose)) {
+    message(
+      "  [wsl] $ ",
+      if (nchar(cmd_preview) > 200) paste0(substr(cmd_preview, 1, 200), " ...") else cmd_preview
+    )
+  }
 
   env_file_source <- sprintf(
     '[ -f %s ] && . %s 2>/dev/null || true',
@@ -276,28 +313,35 @@
     message("WSL/predictor environment error: ", missing_exe_msg)
     warning(missing_exe_msg, call. = FALSE)
     run_status <- 127L
-  } else if (run_status != 0L && !isTRUE(ignore_stderr)) {
-    if (length(out) > 0) {
+  } else if (run_status != 0L) {
+    if (!isTRUE(ignore_stderr)) {
+      warning("WSL/shell command exited with status ", run_status, call. = FALSE)
+    }
+
+    if (isTRUE(verbose) && length(out) > 0) {
+      message("  [wsl] exit ", run_status, " -- output:")
       message(paste(utils::head(out, 30), collapse = "\n"))
+
+      if (length(out) > 30) {
+        message(
+          "  ... (", length(out) - 30, " more lines in ",
+          file.path(effective_log_dir, "wsl_commands.log"), ")"
+        )
+      }
     }
+  } else if (isTRUE(verbose)) {
+    message("  [wsl] exit 0")
   }
 
-  if (!is.null(log_dir)) {
-    .log_wsl_command(
-      cmd = paste(bash_body, collapse = "; "),
-      exit_code = run_status,
-      stdout = out,
-      stderr = missing_exe_msg,
-      log_dir = log_dir
-    )
-
-    if (run_status != 0L) {
-      message(
-        "  [shell] command exited with code ", run_status,
-        ". See ", file.path(log_dir, "wsl_commands.log")
-      )
-    }
-  }
+  ## Unconditional: this is the one trail that's never silenced by verbose,
+  ## ignore_stderr, or a caller forgetting to pass log_dir.
+  .log_wsl_command(
+    cmd = cmd_preview,
+    exit_code = run_status,
+    stdout = out,
+    stderr = missing_exe_msg,
+    log_dir = effective_log_dir
+  )
 
   if (intern) {
     attr(out, "status") <- run_status
@@ -725,7 +769,11 @@ debug_wsl <- function(distro = "Ubuntu",
 #' @export
 install_signalp_from_windows <- function(windows_signalp_dir,
                                          distro = "Ubuntu",
-                                         install_path = "/usr/local/signalp") {
+                                         install_path = "/usr/local/signalp",
+                                         log_dir = NULL) {
+
+  effective_log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
+  message("Logging every command to: ", file.path(effective_log_dir, "wsl_commands.log"))
 
   if (!check_wsl(distro)) {
     stop("WSL with distro ", distro, " not available.")
@@ -768,7 +816,8 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   mkdir_status <- .wsl_exec_script(
     sprintf("sudo mkdir -p %s", .dq(install_path)),
     wsl_distro = distro,
-    use_wsl = TRUE
+    use_wsl = TRUE,
+    log_dir = effective_log_dir
   )
 
   if (!isTRUE(mkdir_status == 0L)) {
@@ -779,7 +828,8 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   cp_status <- .wsl_exec_script(
     sprintf("sudo cp -r %s/. %s/", .dq(wsl_windows_path), .dq(install_path)),
     wsl_distro = distro,
-    use_wsl = TRUE
+    use_wsl = TRUE,
+    log_dir = effective_log_dir
   )
 
   if (!isTRUE(cp_status == 0L)) {
@@ -792,13 +842,15 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   chmod_status <- .wsl_exec_script(
     sprintf("sudo chmod +x %s", .dq(bin_path)),
     wsl_distro = distro,
-    use_wsl = TRUE
+    use_wsl = TRUE,
+    log_dir = effective_log_dir
   )
 
   ln_status <- .wsl_exec_script(
     sprintf("sudo ln -sf %s /usr/local/bin/signalp", .dq(bin_path)),
     wsl_distro = distro,
-    use_wsl = TRUE
+    use_wsl = TRUE,
+    log_dir = effective_log_dir
   )
 
   if (!isTRUE(chmod_status == 0L) || !isTRUE(ln_status == 0L)) {
@@ -813,11 +865,12 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   data_dir_exists <- .wsl_exec_script(
     sprintf("[ -d %s ]", .dq(data_dir)),
     wsl_distro = distro,
-    use_wsl = TRUE
+    use_wsl = TRUE,
+    log_dir = effective_log_dir
   )
 
   if (isTRUE(data_dir_exists == 0L)) {
-    .wsl_write_env_var("SIGNALP_DIR", data_dir, wsl_distro = distro, use_wsl = TRUE)
+    .wsl_write_env_var("SIGNALP_DIR", data_dir, wsl_distro = distro, use_wsl = TRUE, log_dir = effective_log_dir)
   } else {
     message(
       "  ! No 'data' subdirectory found under ", install_path,
@@ -842,6 +895,12 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu",
   if (!check_wsl(distro)) {
     stop("WSL with distro ", distro, " not available.")
   }
+
+  log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
+  message(
+    "Logging every command in real time to: ", file.path(log_dir, "wsl_commands.log"),
+    " (tail -f that file from another terminal to watch progress as it happens)"
+  )
 
   conda_sh_path <- NULL
 
@@ -969,7 +1028,7 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu",
 
     if (!is.null(windows_signalp_dir)) {
       message("Installing SignalP from Windows directory...")
-      install_signalp_from_windows(windows_signalp_dir, distro)
+      install_signalp_from_windows(windows_signalp_dir, distro, log_dir = log_dir)
     } else {
       message(
         "SignalP was not installed (no conda/apt package exists for it -- academic license). ",
@@ -1060,7 +1119,7 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu",
 
     if (!is.null(windows_signalp_dir)) {
       message("Installing SignalP from Windows directory...")
-      install_signalp_from_windows(windows_signalp_dir, distro)
+      install_signalp_from_windows(windows_signalp_dir, distro, log_dir = log_dir)
     } else {
       message(
         "SignalP was not installed (no apt package exists for it -- academic license). ",
@@ -1094,8 +1153,13 @@ install_isoform_databases <- function(distro = "Ubuntu",
                                       log_dir = NULL) {
 
   via_wsl <- use_wsl && .Platform$OS.type == "windows"
+  log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
+  message(
+    "Logging every command in real time to: ", file.path(log_dir, "wsl_commands.log"),
+    " (tail -f that file from another terminal to watch progress as it happens)"
+  )
 
-  conda_sh <- .find_conda_sh(wsl_distro = distro, use_wsl = via_wsl)
+  conda_sh <- .find_conda_sh(wsl_distro = distro, use_wsl = via_wsl, log_dir = log_dir)
 
   if (is.null(conda_sh)) {
     message(
@@ -1105,8 +1169,12 @@ install_isoform_databases <- function(distro = "Ubuntu",
     )
   }
 
+  ## .wsl_exec_script() itself now logs every call unconditionally to
+  ## log_dir, so there's no need to duplicate that here -- the previous
+  ## version only logged if the *caller* of install_isoform_databases()
+  ## happened to pass log_dir, which in practice almost never happened.
   .run <- function(body, intern = FALSE) {
-    res <- .wsl_exec_script(
+    .wsl_exec_script(
       body,
       wsl_distro = distro,
       use_wsl = via_wsl,
@@ -1114,19 +1182,8 @@ install_isoform_databases <- function(distro = "Ubuntu",
       conda_env = conda_env,
       intern = intern,
       ignore_stderr = TRUE,
-      log_dir = NULL
+      log_dir = log_dir
     )
-
-    if (!is.null(log_dir)) {
-      .log_wsl_command(
-        if (length(body) > 1) paste(body, collapse = "; ") else body,
-        exit_code = if (intern) (attr(res, "status") %||% 0L) else res,
-        stdout = if (intern) res else NULL,
-        log_dir = log_dir
-      )
-    }
-
-    res
   }
 
   # ---- CPAT databases ----
@@ -1185,7 +1242,7 @@ install_isoform_databases <- function(distro = "Ubuntu",
     }
   }
 
-  .wsl_write_env_var("CPAT_DATA", cpat_data_dir, wsl_distro = distro, use_wsl = via_wsl)
+  .wsl_write_env_var("CPAT_DATA", cpat_data_dir, wsl_distro = distro, use_wsl = via_wsl, log_dir = log_dir)
 
   message(
     if (cpat_ok) "CPAT data installed successfully. CPAT_DATA -> " else
@@ -1246,7 +1303,7 @@ install_isoform_databases <- function(distro = "Ubuntu",
     }
   }
 
-  .wsl_write_env_var("PFAM_DB", pfam_hmm, wsl_distro = distro, use_wsl = via_wsl)
+  .wsl_write_env_var("PFAM_DB", pfam_hmm, wsl_distro = distro, use_wsl = via_wsl, log_dir = log_dir)
 
   message("Pfam database step complete. Location: ", pfam_db_dir, " (PFAM_DB -> ", pfam_hmm, ")")
 

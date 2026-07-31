@@ -379,10 +379,15 @@ if (!dir.exists(report_dir)) {
   dir.create(report_dir, recursive = TRUE)
 }
 
-plot_dir_rel <- "../Plots"
 plot_dir_abs <- file.path(out_dir, "Plots")
 
 ## Robustly find the actual plot file, ignoring underscores/spaces around "vs".
+## Returns an ABSOLUTE, normalized path. The customCode child doc is knitted
+## and pandoc-embedded by regionReport, not by us, so a relative "../Plots/x"
+## path only resolves if regionReport's working directory happens to match
+## report_dir for both the knit step and the pandoc self-contained embed
+## step. An absolute path removes that dependency entirely -- once an image
+## is embedded it becomes base64 data anyway, so there's no portability lost.
 .find_plot <- function(prefix) {
   if (!dir.exists(plot_dir_abs)) {
     return("")
@@ -417,7 +422,11 @@ plot_dir_abs <- file.path(out_dir, "Plots")
   }
 
   if (length(idx) > 0) {
-    return(file.path(plot_dir_rel, files[idx[1]]))
+    return(normalizePath(
+      file.path(plot_dir_abs, files[idx[1]]),
+      winslash = "/",
+      mustWork = FALSE
+    ))
   }
 
   ""
@@ -438,19 +447,17 @@ ma_file      <- .find_plot("MAplot_shrunken")
 ## Use 150 dpi to keep the final HTML smaller.
 if (exists("convert_pdf_to_png", mode = "function")) {
   for (v in c("pca_file", "pca_corr_file", "heatmap_file", "volcano_file", "ma_file")) {
-    rel_pdf <- get(v)
+    abs_pdf <- get(v)
 
-    if (is.null(rel_pdf) || length(rel_pdf) == 0 || !nzchar(rel_pdf)) {
+    if (is.null(abs_pdf) || length(abs_pdf) == 0 || !nzchar(abs_pdf)) {
       next
     }
-
-    abs_pdf <- file.path(plot_dir_abs, basename(rel_pdf))
 
     if (file.exists(abs_pdf)) {
       png_abs <- convert_pdf_to_png(abs_pdf, dpi = 150)
 
       if (!is.null(png_abs)) {
-        assign(v, sub("\\.pdf$", ".png", rel_pdf))
+        assign(v, png_abs)
       }
     }
   }
