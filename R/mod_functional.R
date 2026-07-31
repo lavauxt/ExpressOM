@@ -183,24 +183,11 @@
   failed    <- character(0)
 
   for (pid in kegg_ids) {
-    # Devices open *before* this pathway's attempt -- anything left over
-    # afterwards is pathview()'s (pathview manages its own png() device
-    # internally and doesn't always clean up on error), and is force-closed
-    # below so a mid-render crash on this pathway can't leave a stray open
-    # device for the *next* pathway's pathview() call to draw into.
+
     devs_before <- grDevices::dev.list()
     result <- safe_run({
       withr::with_dir(dir_kegg, {
-        # gene.idtype = "entrez": gene_data's names are NCBI Entrez Gene IDs
-        # (see all_lfc_vector in run_functional_analysis()). This is the
-        # explicit, best-tested pathview default and is *correct* --not just
-        # "usually equivalent"-- for every organism this package currently
-        # supports (human/mouse/rat all have entrez.gnodes = 1 in pathview's
-        # own species table, i.e. their native KEGG gene ID IS the Entrez
-        # Gene ID). Using "entrez" explicitly rather than "KEGG" removes any
-        # ambiguity and matches pathview's own documented recommendation
-        # (gene.idtype = "KEGG" is only needed for organisms where the two ID
-        # systems diverge, e.g. plants/bacteria using locus tags).
+
         pv_out <- pathview::pathview(
           gene.data   = gene_data,
           pathway.id  = pid,
@@ -209,11 +196,7 @@
           limit       = list(gene = 2, cpd = 1),
           kegg.dir    = "."
         )
-        # pathview()'s own return value tells us exactly how many of this
-        # pathway's genes actually had data to color -- surfacing that here
-        # turns a silently-blank/gray diagram into a diagnosable message
-        # instead of something that only shows up on visual inspection of
-        # the PNG.
+
         gd <- tryCatch(pv_out$plot.data.gene, error = function(e) NULL)
         if (!is.null(gd) && nrow(gd) > 0) {
           n_matched <- sum(!is.na(gd$mol.data))
@@ -234,8 +217,6 @@
       })
     }, label = paste("KEGG pathview", pid))
 
-    # Force-close anything left open beyond what existed before this
-    # iteration, whether it succeeded or not -- see comment above devs_before.
     devs_after <- grDevices::dev.list()
     stray <- setdiff(devs_after, devs_before)
     for (d in stray) grDevices::dev.off(d)
@@ -349,9 +330,8 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     }
   }
 
-  # We will create ORA directory only when we have results
-  dir_ora <- file.path(out_dir, "ORA")   # just a path, not created yet
-  dir_gsea <- safe_dir(file.path(out_dir, "GSEA"))  # GSEA is always created (used later)
+  dir_ora <- file.path(out_dir, "ORA")   
+  dir_gsea <- safe_dir(file.path(out_dir, "GSEA"))  
 
   allOE_genes <- as.character(res_tbl$gene[!is.na(res_tbl$gene)])
   sigOE       <- dplyr::filter(res_tbl, .data$padj < padj_cutoff)
