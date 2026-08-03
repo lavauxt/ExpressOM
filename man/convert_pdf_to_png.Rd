@@ -6,19 +6,7 @@
 \usage{
 convert_pdf_to_png(pdf_file, dpi = 200)
 }
-\arguments{
-\item{pdf_file}{Path to the source PDF.}
-
-\item{dpi}{Resolution for the rendered PNG.}
-}
-\value{
-Path to the created PNG, or NULL if conversion wasn't possible.
-}
 \description{
-Used by \code{generate_dte_dtu_report()} so plots can be embedded in the
-HTML report via \code{knitr::include_graphics()}: browsers cannot render a
-PDF through an \code{<img>} tag, so every figure needs a PNG rendition to
-actually display in \code{report.html} (PDFs remain the primary output
-format for the standalone plot files themselves).
+Convert a PDF plot to a PNG alongside it
 }
 \keyword{internal}

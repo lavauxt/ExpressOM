@@ -8,7 +8,8 @@
   wsl_distro = "Ubuntu",
   use_wsl = TRUE,
   conda_sh = NULL,
-  conda_env = "isoform_tools"
+  conda_env = "isoform_tools",
+  log_dir = NULL
 )
 }
 \description{

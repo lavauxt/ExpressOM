@@ -6,14 +6,6 @@
 \usage{
 download_ensembl_refs(ensembl_package_name, out_dir = "./reference")
 }
-\arguments{
-\item{ensembl_package_name}{Name of the Ensembl package (e.g., "EnsDb.Hsapiens.v107")}
-
-\item{out_dir}{Directory where the reference files should be saved}
-}
-\value{
-A list containing the local paths: `gtf`, `cdna_fasta`, `ncrna_fasta`.
-}
 \description{
 Download Ensembl Reference FASTA and GTF
 }

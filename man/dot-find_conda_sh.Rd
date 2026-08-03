@@ -4,19 +4,9 @@
 \alias{.find_conda_sh}
 \title{Best-effort discovery of a conda profile script (conda.sh)}
 \usage{
-.find_conda_sh(wsl_distro = "Ubuntu", use_wsl = TRUE)
-}
-\arguments{
-\item{wsl_distro}{WSL distribution name.}
-
-\item{use_wsl}{Route through WSL? (only effective on Windows.)}
-}
-\value{
-Path to conda.sh inside the execution environment, or NULL.
+.find_conda_sh(wsl_distro = "Ubuntu", use_wsl = TRUE, log_dir = NULL)
 }
 \description{
-Searches the usual conda/mamba/miniforge install locations inside the
-execution environment (WSL distro or native shell). Shared by debug_wsl()
-and install_isoform_databases() so both use one, tested search order.
+Best-effort discovery of a conda profile script (conda.sh)
 }
 \keyword{internal}

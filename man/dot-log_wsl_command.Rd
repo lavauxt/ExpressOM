@@ -2,22 +2,11 @@
 % Please edit documentation in R/utils_isoform.R
 \name{.log_wsl_command}
 \alias{.log_wsl_command}
-\title{Write a WSL command execution to log (for debugging)}
+\title{Write a WSL command execution to log}
 \usage{
 .log_wsl_command(cmd, exit_code, stdout = NULL, stderr = NULL, log_dir)
 }
-\arguments{
-\item{cmd}{The command string executed}
-
-\item{exit_code}{Integer exit code}
-
-\item{stdout}{Character vector of stdout (optional)}
-
-\item{stderr}{Character vector of stderr (optional)}
-
-\item{log_dir}{Directory where log files are stored}
-}
 \description{
-Write a WSL command execution to log (for debugging)
+Write a WSL command execution to log
 }
 \keyword{internal}

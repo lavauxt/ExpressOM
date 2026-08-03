@@ -2,7 +2,7 @@
 % Please edit documentation in R/utils_isoform.R
 \name{install_wsl_isoform_tools}
 \alias{install_wsl_isoform_tools}
-\title{Install required external tools inside WSL using mamba (default) or apt/pip}
+\title{Install required external tools inside WSL using mamba or apt/pip}
 \usage{
 install_wsl_isoform_tools(
   distro = "Ubuntu",
@@ -12,17 +12,6 @@ install_wsl_isoform_tools(
   log_dir = NULL
 )
 }
-\arguments{
-\item{distro}{WSL distribution name (default "Ubuntu")}
-
-\item{use_mamba}{Logical: use mamba/conda (default TRUE)}
-
-\item{install_databases}{Logical: also install CPAT, Pfam databases}
-
-\item{windows_signalp_dir}{Optional Windows path to a SignalP installation}
-
-\item{log_dir}{Optional directory to write a WSL command audit trail}
-}
 \description{
-Install required external tools inside WSL using mamba (default) or apt/pip
+Install required external tools inside WSL using mamba or apt/pip
 }

@@ -7,14 +7,9 @@
 create_homemade_db(
   species = "human",
   release = "107",
-  maintainer = "User <user@example.com>",
+  maintainer = "User [user@example.com](mailto:user@example.com)",
   author = "ExpressOM Builder"
 )
-}
-\arguments{
-\item{species}{String: "human" or "mouse"}
-
-\item{release}{Ensembl release version (e.g., "107")}
 }
 \description{
 Create and Bundle Homemade Ensembl Database

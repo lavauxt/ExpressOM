@@ -7,10 +7,8 @@
 .dq(x)
 }
 \description{
-Unlike `shQuote(x, type = "sh")` (which single-quotes and therefore
-freezes any literal `$HOME`/`$VAR` inside `x`), this wraps `x` in double
-quotes and escapes only the characters that are special inside double
-quotes (`\\`, `"`, `` ` ``), so a value like `"$HOME/pfam_db"` still
-expands correctly when the generated script runs.
+Unlike shQuote(x, type = "sh"), which single-quotes and freezes `$HOME`,
+this wraps x in double quotes and escapes only characters special inside
+double quotes, so `$HOME/path` still expands in the generated shell script.
 }
 \keyword{internal}

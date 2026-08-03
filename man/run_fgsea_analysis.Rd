@@ -14,25 +14,23 @@ run_fgsea_analysis(
 )
 }
 \arguments{
-\item{res_tbl}{The full results table from `export_significant_results()` containing 'gene' and 'log2FoldChange'.}
+\item{res_tbl}{The full results table from `export_significant_results()`
+containing 'gene' and 'log2FoldChange'.}
 
-\item{gmt_file}{Path to a local `.gmt` file, a character vector/list of multiple `.gmt` files, or MSigDB category names (e.g., "H", "C2") to download via msigdbr.
-A category may include a subcategory suffix separated by ":", e.g.
-`"C2:CP:KEGG"` (KEGG pathways within curated gene sets), `"C5:GO:BP"`
-(GO Biological Process within ontology gene sets), `"C3:TFT:GTRD"`
-(transcription factor targets). Only the first ":" is treated as the
-category/subcategory separator, since msigdbr's own subcategory codes
-already contain one (e.g. "CP:KEGG"). Falls back to the full,
-unfiltered category if the requested subcategory isn't found.}
+\item{gmt_file}{Path to a local `.gmt` file, a character vector/list of
+multiple `.gmt` files, or MSigDB category names (e.g., "H", "C2") to
+download via msigdbr.}
 
 \item{edb}{Ensembl Database (used to detect species for msigdbr).}
 
 \item{out_dir}{Output directory for fgsea results.}
 
-\item{comp_name}{Comparison name (e.g. "Treated_vs_Control") for file naming.}
+\item{comp_name}{Comparison name for file naming.}
 
 \item{padj_cutoff}{Adjusted p-value cutoff for filtering significant pathways.}
 }
 \description{
-Performs Gene Set Enrichment Analysis using both `fgsea` and `clusterProfiler` using external GMT files (e.g., from MSigDB) or downloading via msigdbr.
+Performs Gene Set Enrichment Analysis using both `fgsea` and
+  `clusterProfiler` using external GMT files (e.g., from MSigDB) or
+  downloading via msigdbr.
 }

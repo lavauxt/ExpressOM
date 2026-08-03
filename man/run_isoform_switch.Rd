@@ -2,7 +2,7 @@
 % Please edit documentation in R/mod_isoform.R
 \name{run_isoform_switch}
 \alias{run_isoform_switch}
-\title{Run IsoformSwitchAnalyzeR analysis using isoformSwitchAnalysisCombined}
+\title{Run IsoformSwitchAnalyzeR analysis}
 \usage{
 run_isoform_switch(
   dte_results = NULL,
@@ -27,68 +27,6 @@ run_isoform_switch(
   test_engine = c("DEXSeq", "DRIMSeq", "satuRn")
 )
 }
-\arguments{
-\item{dte_results}{(unused, kept for compatibility)}
-
-\item{dtu_results}{Required (and used) when \code{test_engine = "DRIMSeq"}:
-the \code{list(dtu_results = ...)} returned by \code{run_dtu()}, whose
-\code{feature_id} column is fed into IsoformSwitchAnalyzeR as
-pre-computed DTU p-values. Not used when \code{test_engine = "DEXSeq"}
-(that path calls \code{isoformSwitchTestDEXSeq()} itself instead).}
-
-\item{isoform_obj}{Imported isoform data (from import_transcript_counts)}
-
-\item{condition}{Column name in metadata containing groups}
-
-\item{level}{Foreground level for contrast}
-
-\item{base}{Reference level}
-
-\item{fasta_file}{Path to transcript FASTA file}
-
-\item{gff_file}{Path to GFF/GTF annotation}
-
-\item{out_dir}{Output directory}
-
-\item{run_predictors}{Logical: run external predictors (CPAT, SignalP, Pfam)}
-
-\item{use_wsl}{Logical: use WSL for external tools (Windows only)}
-
-\item{wsl_distro}{WSL distribution name (default "Ubuntu-22.04")}
-
-\item{save_dir}{Optional directory to save per-step RDS checkpoints}
-
-\item{resume_from}{Optional path to a save_dir with a prior switch_list.rds}
-
-\item{bsgenome_name}{Optional BSgenome package name}
-
-\item{predictor_cpu}{Integer: CPU threads for hmmscan / InterProScan
-(default NULL auto-detects with \code{parallel::detectCores() - 1})}
-
-\item{log_dir}{Optional explicit directory for logs (WSL debug info, WSL
-command audit trail). Defaults to \code{file.path(out_dir, "Log")}. Set
-this when calling from a larger pipeline that already manages a single
-unified log tree elsewhere, so isoform logs land there instead of a
-second, separate location.}
-
-\item{custom_transcript_id_map}{Path to a TSV/CSV with columns `count_id` and `fasta_id`.
-If provided, transcript IDs in the count matrix are renamed to match the FASTA file
-before any filtering; this resolves ID mismatches between custom references.}
-
-\item{skip_fasta_filter}{Logical: if TRUE, skip the pre‑filtering that keeps only transcripts
-present in the FASTA file; rely on `importRdata()`'s own ID tolerance (e.g. `ignoreAfter*`).
-(Default: FALSE)}
-
-\item{test_engine}{Which DTU test engine to use in IsoformSwitchAnalyzeR:
-`"DEXSeq"` (default, built‑in), `"DRIMSeq"` (uses pre‑computed results from `run_dtu()`),
-or `"satuRn"` (state‑of‑the‑art method). See `IsoformSwitchAnalyzeR::isoformSwitchTestSatuRn`.}
-}
-\value{
-IsoformSwitchAnalyzeR results object, or NULL if no genes were
-  found to be switching (see the isoformSwitchAnalysisCombined() tryCatch
-  below) -- callers should treat a NULL return as "no isoform switches
-  detected", not as an error.
-}
 \description{
-Run IsoformSwitchAnalyzeR analysis using isoformSwitchAnalysisCombined
+Run IsoformSwitchAnalyzeR analysis
 }

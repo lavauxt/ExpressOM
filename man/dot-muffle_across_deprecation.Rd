@@ -6,21 +6,7 @@
 \usage{
 .muffle_across_deprecation(expr)
 }
-\arguments{
-\item{expr}{Expression to evaluate}
-}
 \description{
-IsoformSwitchAnalyzeR's own internal code (there is no dplyr::across() call
-anywhere in ExpressOM itself) uses the deprecated
-\code{dplyr::filter(dplyr::across())} pattern without supplying
-\code{.cols}, which since dplyr 1.1.0 emits one lifecycle-deprecation
-warning per row it's evaluated on. On a genome-wide isoform/exon
-annotation, a single \code{importRdata()} or
-\code{analyzeAlternativeSplicing()} call can therefore raise hundreds of
-thousands of warnings -- collecting, formatting, and (interactively)
-printing that many condition objects is not free, and it buries any other,
-genuinely actionable warning in noise. This muffles ONLY warnings matching
-that one message pattern; every other warning (including ExpressOM's own)
-still propagates normally, so it's safe to wrap broadly.
+Run an expression while muffling one specific, known-noisy lifecycle warning
 }
 \keyword{internal}

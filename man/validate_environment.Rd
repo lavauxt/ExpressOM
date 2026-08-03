@@ -6,14 +6,6 @@
 \usage{
 validate_environment(run_isoform = TRUE, run_functional = TRUE)
 }
-\arguments{
-\item{run_isoform}{Logical; checks isoform dependencies if TRUE.}
-
-\item{run_functional}{Logical; checks enrichment dependencies if TRUE.}
-}
-\value{
-Throws an error if dependencies are missing, returns TRUE silently otherwise.
-}
 \description{
 ExpressOM Pre-Flight Environment Validation
 }

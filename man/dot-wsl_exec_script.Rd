@@ -12,34 +12,24 @@
   conda_env = "isoform_tools",
   intern = FALSE,
   ignore_stderr = TRUE,
-  log_dir = NULL
+  log_dir = NULL,
+  verbose = TRUE
 )
 }
-\arguments{
-\item{bash_body}{Character vector of bash commands.}
-
-\item{wsl_distro}{WSL distribution name.}
-
-\item{use_wsl}{Route through WSL? (only effective on Windows.)}
-
-\item{conda_sh}{Full path to conda profile script inside execution env,
-or NULL to skip conda activation.}
-
-\item{conda_env}{Conda environment to activate.}
-
-\item{intern}{If TRUE return stdout as character vector.}
-
-\item{ignore_stderr}{Suppress stderr in R console when TRUE.}
-
-\item{log_dir}{Optional directory to write command log (if NULL, no log)}
-}
-\value{
-Integer exit code (0 = success) or character vector when intern=TRUE.
-}
 \description{
-Avoids shell-escaping issues by writing commands to a temp .sh file and
-running it with `wsl -d <distro> bash <script>` (Windows) or
-`bash <script>` (Linux/macOS). Conda activation lines are prepended
-automatically when conda_sh is provided.
+Every call is written to wsl_commands.log as it happens -- one entry per
+invocation, appended immediately after that command finishes -- regardless
+of what the caller passes for log_dir (see .default_wsl_log_dir()). Set
+verbose = FALSE to suppress the live console trace for callers (like
+run_tool() in mod_isoform.R) that already print their own equivalent
+summary; the file log is unaffected by verbose either way.
+}
+\details{
+`ignore_stderr` only controls whether a non-zero exit raises an R
+warning() -- it no longer hides the command's actual output. Previously,
+because ignore_stderr defaulted to TRUE and every "does this exist" probe
+hardcoded it to TRUE too, a genuine failure (as opposed to a routine
+"not found") printed nothing but an exit code: the one piece of text that
+would explain *why* was thrown away.
 }
 \keyword{internal}

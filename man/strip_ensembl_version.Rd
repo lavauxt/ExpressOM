@@ -6,20 +6,7 @@
 \usage{
 strip_ensembl_version(x)
 }
-\arguments{
-\item{x}{Character vector of identifiers}
-}
-\value{
-Character vector, same length as \code{x}
-}
 \description{
-Unlike \code{sub("\\..*$", "", x)}, which truncates at the FIRST dot and
-therefore destroys any non-Ensembl identifier that legitimately contains a
-dot (e.g. StringTie loci like "MSTRG.116" or transcripts like "MSTRG.6.1",
-both of which would otherwise collapse to the bare string "MSTRG"), this
-only strips a trailing ".<digits>" version suffix when the identifier
-actually looks like an Ensembl gene/transcript ID (ENSG/ENST, or their
-species-prefixed variants like ENSMUSG/ENSMUST). Every other identifier
-(MSTRG IDs, gene symbols, custom IDs) is returned unchanged.
+Safely strip Ensembl-style version suffixes from an identifier vector
 }
 \keyword{internal}

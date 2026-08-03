@@ -6,17 +6,7 @@
 \usage{
 .to_wsl_path(win_path, distro = "Ubuntu")
 }
-\arguments{
-\item{win_path}{A Windows-style path string.}
-
-\item{distro}{WSL distribution name (default "Ubuntu").}
-}
-\value{
-A Unix-style path string suitable for use inside WSL.
-}
 \description{
-Uses wslpath -u when available, otherwise performs a manual
-C:/foo -> /mnt/c/foo substitution. On non-Windows platforms
-the path is returned unchanged.
+Convert a Windows file path to a WSL-compatible Unix path
 }
 \keyword{internal}

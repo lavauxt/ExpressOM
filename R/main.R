@@ -141,9 +141,6 @@ expressom <- function(count_type        = "salmon",
     add = TRUE
   )
 
-  ## ------------------------------------------------------------------
-  ## 1. Automated Ensembl DB installation check
-  ## ------------------------------------------------------------------
   if (!requireNamespace(ensembl_package_name, quietly = TRUE)) {
     message(
       "Package '", ensembl_package_name,
@@ -171,9 +168,6 @@ expressom <- function(count_type        = "salmon",
     }
   }
 
-  ## ------------------------------------------------------------------
-  ## EDA-only mode
-  ## ------------------------------------------------------------------
   if (isTRUE(eda_only) || is.null(model) || is.null(level) || is.null(base)) {
     message(
       "DESeq2 model not fully specified or eda_only = TRUE. ",
@@ -201,9 +195,6 @@ expressom <- function(count_type        = "salmon",
     main_condition <- tail(all.vars(stats::as.formula(model)), 1)
   }
 
-  ## ------------------------------------------------------------------
-  ## Early predictor-environment check
-  ## ------------------------------------------------------------------
   if (run_isoform && isTRUE(run_predictors)) {
     debug_wsl(
       distro = wsl_distro,
@@ -292,9 +283,6 @@ expressom <- function(count_type        = "salmon",
 
   for (step in pipeline_steps) {
 
-    ## ==================================================================
-    ## Gene-level differential expression (DGE)
-    ## ==================================================================
     if (step == "dge" && run_dge) {
       message("\n=== Running Gene-Level DGE Analysis ===")
 
@@ -367,12 +355,6 @@ expressom <- function(count_type        = "salmon",
 
       while (grDevices::dev.cur() > 1) grDevices::dev.off()
 
-      ## --------------------------------------------------------------
-      ## RegionReport
-      ## --------------------------------------------------------------
-      ## --------------------------------------------------------------
-## RegionReport
-## --------------------------------------------------------------
 report_dir <- file.path(out_dir, "RegionReport")
 
 if (!dir.exists(report_dir)) {
@@ -381,13 +363,6 @@ if (!dir.exists(report_dir)) {
 
 plot_dir_abs <- file.path(out_dir, "Plots")
 
-## Robustly find the actual plot file, ignoring underscores/spaces around "vs".
-## Returns an ABSOLUTE, normalized path. The customCode child doc is knitted
-## and pandoc-embedded by regionReport, not by us, so a relative "../Plots/x"
-## path only resolves if regionReport's working directory happens to match
-## report_dir for both the knit step and the pandoc self-contained embed
-## step. An absolute path removes that dependency entirely -- once an image
-## is embedded it becomes base64 data anyway, so there's no portability lost.
 .find_plot <- function(prefix) {
   if (!dir.exists(plot_dir_abs)) {
     return("")
@@ -443,8 +418,6 @@ if (!nzchar(heatmap_file)) {
 volcano_file <- .find_plot("DE_Volcanoplot")
 ma_file      <- .find_plot("MAplot_shrunken")
 
-## Convert PDF figures to PNG for HTML embedding.
-## Use 150 dpi to keep the final HTML smaller.
 if (exists("convert_pdf_to_png", mode = "function")) {
   for (v in c("pca_file", "pca_corr_file", "heatmap_file", "volcano_file", "ma_file")) {
     abs_pdf <- get(v)
@@ -476,7 +449,6 @@ safe_template_value <- function(x) {
 
   x <- as.character(x)
 
-  ## Make path safe for insertion into an R string literal.
   x <- gsub("\\", "/", x, fixed = TRUE)
   x <- gsub('"', '\\\"', x, fixed = TRUE)
 
@@ -502,8 +474,6 @@ custom_script <- tryCatch(
 
 if (requireNamespace("regionReport", quietly = TRUE)) {
 
-  ## Critical fix:
-  ## Do not allow 20000 genes in a single self-contained HTML report.
   regionreport_nbest <- min(as.integer(nBest), 1000L)
 
   if (as.integer(nBest) > 1000L) {
@@ -518,10 +488,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
   intgroup <- unique(c(main_condition, batch_col))
   intgroup <- intgroup[!is.na(intgroup) & nzchar(intgroup)]
 
-  ## Critical fix:
-  ## Call DESeq2Report() directly, not with do.call().
-  ## do.call() can deparsed/embed the full dds object into the report call,
-  ## producing a massive reproducibility section.
   tryCatch(
     {
       if (!is.null(custom_script)) {
@@ -590,9 +556,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
 
       while (grDevices::dev.cur() > 1) grDevices::dev.off()
 
-      ## --------------------------------------------------------------
-      ## Targeted z-score plots
-      ## --------------------------------------------------------------
       if (!is.null(zscore_genes)) {
         message("Generating targeted expression heatmaps (Sample Z-score & L2FC)...")
 
@@ -617,9 +580,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         )
       }
 
-      ## --------------------------------------------------------------
-      ## Gene-set z-score plots
-      ## --------------------------------------------------------------
       if (!is.null(gene_sets_zscore)) {
         message("Generating separate Z-score plots for each gene set...")
 
@@ -654,9 +614,7 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         }
       }
 
-      ## --------------------------------------------------------------
-      ## Functional analysis
-      ## --------------------------------------------------------------
+
       func_results <- safe_run(
         run_functional_analysis(
           res_tbl          = results_data$res_tbl,
@@ -698,9 +656,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
       )
     }
 
-    ## ==================================================================
-    ## Isoform-level analysis
-    ## ==================================================================
     if (step == "isoform" && run_isoform) {
       message("\n=== Running Isoform-Level Analysis ===")
 
@@ -780,9 +735,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         stop("Please install IsoformSwitchAnalyzeR: BiocManager::install('IsoformSwitchAnalyzeR')")
       }
 
-      ## --------------------------------------------------------------
-      ## Step A: Import transcript counts
-      ## --------------------------------------------------------------
       if (is.null(isoform_import)) {
         message("Step A: Importing transcript-level counts...")
 
@@ -803,9 +755,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         message("Step A: Isoform import loaded from checkpoint. Skipping.")
       }
 
-      ## --------------------------------------------------------------
-      ## Step A2: Transcript-level PCA
-      ## --------------------------------------------------------------
       safe_run(
         run_isoform_pca(
           isoform_import,
@@ -818,9 +767,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         label = "Transcript-level PCA"
       )
 
-      ## --------------------------------------------------------------
-      ## Step B: DTE
-      ## --------------------------------------------------------------
       if (is.null(dte_res)) {
         message("Step B: Running DTE (Differential Transcript Expression)...")
 
@@ -838,9 +784,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         message("Step B: DTE results loaded from checkpoint. Skipping.")
       }
 
-      ## --------------------------------------------------------------
-      ## Step C: DTU (DRIMSeq engine)
-      ## --------------------------------------------------------------
       if (is.null(dtu_res)) {
         message("Step C: Running DTU (Differential Transcript Usage)...")
 
@@ -857,9 +800,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         message("Step C: DTU results loaded from checkpoint. Skipping.")
       }
 
-      ## --------------------------------------------------------------
-      ## Step C.5: DTU via DEXSeq (optional)
-      ## --------------------------------------------------------------
       if (isTRUE(run_dexseq)) {
         if (is.null(dexseq_res)) {
           message("Step C.5: Running DEXSeq-based DTU (complementary engine)...")
@@ -883,9 +823,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         }
       }
 
-      ## --------------------------------------------------------------
-      ## Step D: IsoformSwitchAnalyzeR
-      ## --------------------------------------------------------------
       switch_res <- run_isoform_switch(
         dte_results    = dte_res,
         dtu_results    = dtu_res,
@@ -908,9 +845,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         test_engine              = isoform_test_engine
       )
 
-      ## --------------------------------------------------------------
-      ## DTE/DTU/DEXSeq/Switch report
-      ## --------------------------------------------------------------
       if (!is.null(dte_res) && !is.null(dtu_res) && !is.null(isoform_import)) {
         generate_dte_dtu_report(
           dte_results       = dte_res,
@@ -928,9 +862,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         )
       }
 
-      ## --------------------------------------------------------------
-      ## Final copies
-      ## --------------------------------------------------------------
       if (!dir.exists(iso_dir)) dir.create(iso_dir, recursive = TRUE)
 
       saveRDS(dte_res, file.path(iso_dir, "dte_results.rds"))
@@ -966,9 +897,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
     }
   }
 
-  ## ------------------------------------------------------------------
-  ## Save workspace
-  ## ------------------------------------------------------------------
   rdata_dir <- safe_dir(file.path(out_dir, "Save_rdata"))
   rdata_path <- file.path(rdata_dir, paste0("Results_", comp_name, ".RData"))
 

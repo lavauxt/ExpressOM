@@ -6,21 +6,7 @@
 \usage{
 .render_placeholder_template(template_file, values, fileext = ".Rmd")
 }
-\arguments{
-\item{template_file}{Filename under \code{inst/rmd/}}
-
-\item{values}{Named list/character vector; each name's \code{{{NAME}}}
-token in the template is replaced with its (character-coerced) value}
-
-\item{fileext}{File extension for the returned temp file (default ".Rmd")}
-}
-\value{
-Path to a temp file containing the substituted content. Caller is
-  responsible for \code{unlink()}-ing it when done.
-}
 \description{
-Used for small Rmd fragments (e.g. regionReport's \code{customCode}
-argument) that need simple string substitution rather than a full
-\code{rmarkdown::render(params = ...)} pass.
+Render a {{PLACEHOLDER}}-style template to a temp file with values substituted
 }
 \keyword{internal}

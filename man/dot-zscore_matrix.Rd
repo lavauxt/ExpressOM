@@ -6,17 +6,7 @@
 \usage{
 .zscore_matrix(expr_mat)
 }
-\arguments{
-\item{expr_mat}{Numeric matrix, genes/features as rows, samples as columns}
-}
-\value{
-Matrix of the same dimensions, row-wise z-scored
-}
 \description{
-Single source of truth for the "z = (x - row_mean) / row_sd, with a
-zero-variance row held at z = 0 instead of NaN" computation shared by
-plot_sample_zscore(), plot_geneset_zscore_avg(), and
-plot_gene_zscore_individual() in mod_plots.R (previously three separately
-hand-copied instances of the same four lines).
+Per-row z-score matrix, guarding against division by zero
 }
 \keyword{internal}

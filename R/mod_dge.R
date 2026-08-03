@@ -1,7 +1,3 @@
-# ==============================================================================
-# mod_dge.R - Gene-level DGE functions with enhanced Entrez mapping
-# ==============================================================================
-
 #' Write structured DGE parameters log
 #' @keywords internal
 .write_dge_log <- function(out_dir, comp_name, model, test, reduced,
@@ -87,7 +83,6 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
   rownames(sample_df) <- sample_df[[sample_col]]
   edb     <- getExportedValue(ensembl_package_name, ensembl_package_name)
 
-  # ---- Build tx2gene (custom or from Ensembl) ----
   if (!is.null(custom_tx2gene) && file.exists(custom_tx2gene)) {
     message("Using custom tx2gene file: ", custom_tx2gene)
     tx2gene <- data.table::fread(custom_tx2gene, header = TRUE, data.table = FALSE)
@@ -104,7 +99,6 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     tx2gene$gene_id <- strip_ensembl_version(tx2gene$gene_id)
   }
 
-  # ---- Build gene_map (custom or from Ensembl) ----
   org_info <- get_organism_info(edb)
   org_db   <- org_info$org_db
   org_obj  <- if (requireNamespace(org_db, quietly = TRUE)) .load_org_db(org_db) else NULL
@@ -112,36 +106,29 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
   if (!is.null(custom_gene_map) && file.exists(custom_gene_map)) {
     message("Using custom gene annotation file: ", custom_gene_map)
     gene_map <- data.table::fread(custom_gene_map, header = TRUE, data.table = FALSE)
-    # Accept either 'gene_id' or 'ensembl' as ID column
     if (!("gene_id" %in% colnames(gene_map)) && "ensembl" %in% colnames(gene_map)) {
       colnames(gene_map)[colnames(gene_map) == "ensembl"] <- "gene_id"
     }
     if (!all(c("gene_id", "symbol") %in% colnames(gene_map))) {
       stop("Custom gene map must contain columns 'gene_id' (or 'ensembl') and 'symbol'")
     }
-    # Strip version and rename
     gene_map$gene_id <- strip_ensembl_version(gene_map$gene_id)
     colnames(gene_map)[colnames(gene_map) == "gene_id"] <- "ensembl"
     if (!"entrezid" %in% colnames(gene_map)) {
       gene_map$entrezid <- NA_character_
     }
-    # Keep only required columns
     gene_map <- gene_map[, c("ensembl", "symbol", "entrezid")]
-    # Remove duplicates
     gene_map <- gene_map[!duplicated(gene_map$ensembl), ]
-    # Fill missing symbol with ensembl
     gene_map$symbol[is.na(gene_map$symbol) | gene_map$symbol == ""] <- gene_map$ensembl[is.na(gene_map$symbol) | gene_map$symbol == ""]
 
     if (!is.null(org_obj)) {
       gene_map <- .fill_entrez_with_bitr(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol")
     }
     
-    # ---- FINAL CHECK: report Entrez coverage ----
     entrez_present <- sum(!is.na(gene_map$entrezid) & gene_map$entrezid != "")
     message("  Gene map loaded: ", nrow(gene_map), " genes, ", entrez_present, " with Entrez IDs")
     
   } else {
-    # No custom gene map: build from Ensembl
     gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
     gene_map <- as.data.frame(gene_map)
     colnames(gene_map) <- c("ensembl", "symbol")
@@ -160,7 +147,6 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     }
   }
 
-  # --- Continue with tximport or matrix import ---
   if (count_type != "matrix") {
     count_file_name <- switch(count_type,
       "salmon"    = "quant.sf",
@@ -234,7 +220,6 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
   meta <- tx_data$meta
   design_formula <- as.formula(model)
 
-  # If design is ~1, we skip factor conversions and releveling
   if (identical(design_formula, ~1)) {
     dds <- if (tx_data$type == "tximport") {
       DESeq2::DESeqDataSetFromTximport(tx_data$txi, colData = meta, design = ~1)
@@ -247,7 +232,6 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
     return(dds)
   }
 
-  # Normal path (model has factors)
   design_vars <- all.vars(design_formula)
   for (var in design_vars) {
     if (var %in% colnames(meta) && is.character(meta[[var]])) {
@@ -257,7 +241,6 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
   main_condition <- tail(design_vars, 1)
   meta[[main_condition]] <- as.factor(meta[[main_condition]])
 
-  # Build dds
   dds <- if (tx_data$type == "tximport") {
     DESeq2::DESeqDataSetFromTximport(tx_data$txi, colData = meta, design = design_formula)
   } else {
@@ -265,14 +248,12 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
                                    colData = meta, design = design_formula)
   }
 
-  # Only relevel if level and base are provided (non-NULL)
   if (!is.null(level) && !is.null(base)) {
     dds[[main_condition]] <- relevel(dds[[main_condition]], base)
   } else {
     message("Note: level/base not provided; skipping releveling.")
   }
 
-  # Minimal filter
   keep <- rowSums(DESeq2::counts(dds)) >= 1
   dds <- dds[keep, ]
 
@@ -358,7 +339,6 @@ export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_di
   if (!dir.exists(fc_dir)) dir.create(fc_dir, recursive = TRUE)
 
   res_tbl <- as.data.frame(res_shrunken)
-  ## Ensure both tables have a clean, unique "ensembl" column.
 gene_map <- .standardize_gene_map(gene_map)
 
 if (!"ensembl" %in% colnames(res_tbl)) {
@@ -367,7 +347,6 @@ if (!"ensembl" %in% colnames(res_tbl)) {
   res_tbl$ensembl <- strip_ensembl_version(as.character(res_tbl$ensembl))
 }
 
-## Avoid creating symbol.x / symbol.y or entrezid.x / entrezid.y columns.
 res_tbl <- res_tbl[, setdiff(colnames(res_tbl), c("symbol", "entrezid")), drop = FALSE]
 
 gene_map_merge <- gene_map[
@@ -438,10 +417,8 @@ res_tbl <- merge(
     message("    Recovered ", recovered, "/", total, " Entrez IDs")
   }
 
-  # Set gene column for display
   res_tbl$gene <- ifelse(is.na(res_tbl$symbol) | res_tbl$symbol == "", res_tbl$ensembl, res_tbl$symbol)
 
-  # --- NORMALIZED COUNTS ---
   counts_df <- as.data.frame(DESeq2::counts(dds, normalized = TRUE))
   counts_df$ensembl <- strip_ensembl_version(rownames(counts_df))
   counts_df <- merge(counts_df, gene_map, by = "ensembl", all.x = TRUE)
@@ -453,7 +430,6 @@ res_tbl <- merge(
     error = function(e) warning("Could not write normalized counts: ", e$message)
   )
 
-  # --- RAW COUNTS ---
   raw_counts <- as.data.frame(DESeq2::counts(dds, normalized = FALSE))
   raw_counts$ensembl <- strip_ensembl_version(rownames(raw_counts))
   raw_counts <- merge(raw_counts, gene_map, by = "ensembl", all.x = TRUE)
@@ -465,23 +441,18 @@ res_tbl <- merge(
     error = function(e) warning("Could not write raw counts: ", e$message)
   )
 
-  # --- FILTER RESULTS TABLE ---
   desired_cols <- c("gene", "ensembl", "entrezid", "baseMean", "log2FoldChange", "lfcSE", "pvalue", "padj", "stat")
   res_cols <- intersect(desired_cols, colnames(res_tbl))
   res_tbl <- res_tbl[, res_cols, drop = FALSE]
 
-  # --- SIGNIFICANT RESULTS ---
   sig_res <- res_tbl[!is.na(res_tbl$padj) & res_tbl$padj < padj_cutoff, ]
 
-  # --- WRITE FILES ---
   utils::write.table(res_tbl, file.path(fc_dir, paste0("DEgenes_raw_", level, "_vs_", base, ".txt")),
                      sep = "\t", quote = FALSE, row.names = FALSE)
 
   write_filtered <- function(df, tag) {
     prefix <- file.path(fc_dir, paste0("DEgenes_", tag, "_", level, "_vs_", base))
     utils::write.table(df,                                   paste0(prefix, ".txt"),      sep = "\t", quote = FALSE, row.names = FALSE)
-    utils::write.table(df[df$log2FoldChange > 1,  ],         paste0(prefix, "_LFC1.txt"), sep = "\t", quote = FALSE, row.names = FALSE)
-    utils::write.table(df[df$log2FoldChange < -1, ],         paste0(prefix, "_LFC-1.txt"),sep = "\t", quote = FALSE, row.names = FALSE)
   }
 
   padj_tag <- paste0("pval_", gsub("\\.", "_", as.character(padj_cutoff)))

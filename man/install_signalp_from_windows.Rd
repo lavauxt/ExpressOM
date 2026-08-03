@@ -7,18 +7,9 @@
 install_signalp_from_windows(
   windows_signalp_dir,
   distro = "Ubuntu",
-  install_path = "/usr/local/signalp"
+  install_path = "/usr/local/signalp",
+  log_dir = NULL
 )
-}
-\arguments{
-\item{windows_signalp_dir}{Path to SignalP directory on Windows (e.g., "C:/signalp-5.0")}
-
-\item{distro}{WSL distribution name (default "Ubuntu")}
-
-\item{install_path}{Destination path inside WSL (default "/usr/local/signalp")}
-}
-\value{
-Logical indicating success
 }
 \description{
 Install SignalP from a Windows directory into WSL

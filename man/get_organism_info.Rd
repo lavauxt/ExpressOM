@@ -6,9 +6,6 @@
 \usage{
 get_organism_info(edb)
 }
-\arguments{
-\item{edb}{Ensembl database object}
-}
 \description{
 Extract organism specific databases and properties
 }

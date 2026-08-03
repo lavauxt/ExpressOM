@@ -39,11 +39,3 @@ clusterProfiler::enricher()". Used both as a standalone export and as the
 offline TF-enrichment fallback inside \code{run_functional_analysis()}
 when the EnrichR API is unreachable.
 }
-\details{
-(Previously this existed as two independently-maintained, drifting copies:
-this exported function, unused anywhere in the package, still called
-\code{msigdbr::msigdbr(category = ...)}; the inline copy that actually ran
-in \code{run_functional_analysis()} had already moved to msigdbr's current
-\code{collection}/\code{subcategory} argument names. Consolidated here so
-there's one implementation to fix if msigdbr's API changes again.)
-}

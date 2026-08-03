@@ -6,20 +6,7 @@
 \usage{
 .format_gene_tx_label(gene, id)
 }
-\arguments{
-\item{gene}{Character vector, typically \code{.coalesce_gene_label(symbol, id)}}
-
-\item{id}{Character vector (same length as \code{gene}) of the identifier
-that was used as the fallback}
-}
-\value{
-Character vector, same length as the inputs
-}
 \description{
-Meant to be used on the output of \code{.coalesce_gene_label()}: when a
-gene has a real symbol, this renders "SYMBOL (id)" (e.g. "IGLL5
-(ENST00001131995)"); when it doesn't and \code{gene} has already fallen
-back to \code{id} itself, this avoids the redundant "ENST00001131995
-(ENST00001131995)" and just shows the id once.
+Build a "SYMBOL (id)" label without a redundant repeat when there's no symbol
 }
 \keyword{internal}

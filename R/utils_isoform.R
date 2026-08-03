@@ -1,7 +1,3 @@
-###############################################################################
-# utils_isoform.R - WSL/conda helpers + install/database utilities
-###############################################################################
-
 # Small in-session cache to avoid repeatedly shelling out for the same
 # conda.sh / distro combination during a single predictor run.
 #' @keywords internal
@@ -18,9 +14,6 @@
 #' @keywords internal
 .dq <- function(x) {
   x <- as.character(x)
-
-  # Escape backslash first, then double quote and backtick.
-  # Leave `$` alone so shell expansion still works inside double quotes.
   x <- gsub("\\", "\\\\", x, fixed = TRUE)
   x <- gsub('"', '\\\"', x, fixed = TRUE)
   x <- gsub('`', '\\`', x, fixed = TRUE)
@@ -152,7 +145,6 @@
   r <- trimws(r[nzchar(trimws(r))])
   if (length(r) > 0) return(r[1])
 
-  # Manual fallback: C:/foo/bar -> /mnt/c/foo/bar
   if (grepl("^[A-Za-z]:/", p)) {
     return(paste0("/mnt/", tolower(substr(p, 1, 1)), substring(p, 3)))
   }
@@ -333,8 +325,6 @@
     message("  [wsl] exit 0")
   }
 
-  ## Unconditional: this is the one trail that's never silenced by verbose,
-  ## ignore_stderr, or a caller forgetting to pass log_dir.
   .log_wsl_command(
     cmd = cmd_preview,
     exit_code = run_status,
@@ -414,7 +404,6 @@
                                    log_dir = NULL) {
   fname <- paste0(organism, "_logitModel.RData")
 
-  # 1. IsoformSwitchAnalyzeR ships the models in its extdata
   isa_local <- system.file("extdata", fname, package = "IsoformSwitchAnalyzeR")
 
   if (nzchar(isa_local) && file.exists(isa_local)) {
@@ -424,7 +413,6 @@
     return(isa_local)
   }
 
-  # 2. CPAT_DATA environment variable on the Windows/R side
   cpat_data_env <- Sys.getenv("CPAT_DATA", "")
 
   if (nzchar(cpat_data_env)) {
@@ -438,7 +426,6 @@
     }
   }
 
-  # 3. Search inside execution environment
   result <- .wsl_exec_script(
     bash_body = sprintf(
       'for _p in "$HOME/.cpat_data/%s" "${CPAT_DATA:-.}/%s"; do if [ -f "$_p" ]; then echo "$_p"; break; fi; done',
@@ -553,7 +540,6 @@ debug_wsl <- function(distro = "Ubuntu",
     invisible(results)
   }
 
-  # 1. Confirm execution shell responds
   if (via_wsl && !nzchar(Sys.which("wsl"))) {
     results$errors <- c(results$errors, "'wsl' executable not found on PATH")
     if (verbose) message("  \u2717 wsl executable not found")
@@ -587,7 +573,6 @@ debug_wsl <- function(distro = "Ubuntu",
   results$wsl_available <- TRUE
   if (verbose) message("  \u2713 execution environment reachable")
 
-  # 2. Conda installation and environment
   conda_check <- .wsl_exec_script(
     bash_body = "command -v conda || echo 'not found'",
     wsl_distro = distro,
@@ -635,7 +620,6 @@ debug_wsl <- function(distro = "Ubuntu",
     )
   }
 
-  # 3. Required tools
   tools_list <- c("cpat", "run_cpat.py", "signalp6", "signalp", "hmmscan", "interproscan.sh")
 
   for (tool in tools_list) {
@@ -680,7 +664,6 @@ debug_wsl <- function(distro = "Ubuntu",
     }
   }
 
-  # 4. Databases
   pfam_path <- .find_pfam_db(
     wsl_distro = distro,
     use_wsl = via_wsl,
@@ -1169,10 +1152,6 @@ install_isoform_databases <- function(distro = "Ubuntu",
     )
   }
 
-  ## .wsl_exec_script() itself now logs every call unconditionally to
-  ## log_dir, so there's no need to duplicate that here -- the previous
-  ## version only logged if the *caller* of install_isoform_databases()
-  ## happened to pass log_dir, which in practice almost never happened.
   .run <- function(body, intern = FALSE) {
     .wsl_exec_script(
       body,
@@ -1186,7 +1165,6 @@ install_isoform_databases <- function(distro = "Ubuntu",
     )
   }
 
-  # ---- CPAT databases ----
   message("Installing CPAT hexamer and logit models...")
 
   find_cpat <- .run("command -v cpat || command -v run_cpat.py || true", intern = TRUE)
@@ -1250,7 +1228,6 @@ install_isoform_databases <- function(distro = "Ubuntu",
     cpat_data_dir
   )
 
-  # ---- Pfam database ----
   message("Installing Pfam-A.hmm...")
 
   if (is.null(pfam_db_dir)) pfam_db_dir <- "$HOME/pfam_db"
@@ -1307,7 +1284,6 @@ install_isoform_databases <- function(distro = "Ubuntu",
 
   message("Pfam database step complete. Location: ", pfam_db_dir, " (PFAM_DB -> ", pfam_hmm, ")")
 
-  # ---- SignalP ----
   message("SignalP models require a license and cannot be automatically installed.")
   message("Use install_signalp_from_windows() to copy a local SignalP distribution into WSL.")
   message(

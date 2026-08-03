@@ -7,9 +7,6 @@
 safe_pdf(path, expr, width = 10, height = 8)
 }
 \description{
-Uses non-standard evaluation so that `expr` is captured unevaluated and only
-executed *after* the PDF device is opened — fixing the bug where the previous
-`force(expr)` approach evaluated the plot expression before the device was
-ready, sending output to whatever device happened to be current at the time.
+Safely save a ggplot or base R plot to PDF
 }
 \keyword{internal}

@@ -1,7 +1,3 @@
-# ==============================================================================
-# mod_functional.R - Consolidated functional analysis (ORA, GSEA, SPIA)
-# ==============================================================================
-
 #' @keywords internal
 .write_enrich_csv <- function(obj, path) {
   df <- as.data.frame(obj)
@@ -64,7 +60,6 @@
 
 #' @keywords internal
 .ensure_hdo_sqlite <- function() {
-  # Cross-platform cache directory
   cache_dir <- tryCatch({
     if (requireNamespace("rappdirs", quietly = TRUE)) {
       rappdirs::user_cache_dir("GOSemSim")
@@ -143,20 +138,8 @@
   
   kegg_ids <- as.character(gseaKEGG_results$ID)
   if (length(kegg_ids) > top_genes) kegg_ids <- kegg_ids[seq_len(top_genes)]
-  # Ensure IDs start with species code
   kegg_ids <- ifelse(grepl("^[a-zA-Z]", kegg_ids), kegg_ids, paste0(kegg_code, kegg_ids))
 
-  # KEGG's "Global and overview maps" (01100-series) are reference maps that
-  # aggregate hundreds of pathways into one diagram. pathview() is well
-  # documented to choke on these: they're enormous, many nodes have no
-  # per-pathway layout coordinates in the KGML pathview actually needs (that
-  # metadata is only reliably present for the regular, single-pathway maps),
-  # and a render that dies partway through is the single most common source
-  # of "some pathway crash" reports for this function. There's nothing
-  # gene-expression-specific to recover by retrying them, so they're skipped
-  # up front rather than attempted-then-caught -- cheaper, and the message
-  # below makes it explicit which IDs were never even attempted vs. which
-  # ones were tried and failed.
   overview_map_ids <- c("01100", "01110", "01120", "01200", "01210",
                         "01212", "01230", "01232", "01240", "01250")
   overview_pattern <- paste0("^", kegg_code, "(", paste(overview_map_ids, collapse = "|"), ")$")
@@ -169,14 +152,12 @@
   }
   if (length(kegg_ids) == 0) return(invisible(NULL))
   
-  # Prepare gene.data: a named numeric vector of log2FoldChanges with Entrez IDs as names
   gene_data <- expression_vector[!is.na(expression_vector)]
   if (length(gene_data) == 0) {
     message("   -> No valid gene expression data for KEGG pathview.")
     return(invisible(NULL))
   }
   
-  # Attach pathview namespace if not already attached
   if (!"package:pathview" %in% search()) try(attachNamespace("pathview"), silent = TRUE)
 
   succeeded <- character(0)
@@ -208,7 +189,6 @@
                     "loci can leave canonical pathway genes without a valid Entrez ID.)")
           }
         }
-        # Remove intermediate files (optional)
         for (ext in c(".xml", ".png")) {
           f <- paste0(pid, ext)
           if (file.exists(f)) file.remove(f)
@@ -295,7 +275,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   gseaReac <- NULL
   spia_result <- NULL
 
-  # Optional debug output (set option("ExpressOM.verbose" = TRUE) to enable)
   if (getOption("ExpressOM.verbose", FALSE)) {
     message("=== DEBUG res_tbl ===")
     message("  Dimensions : ", nrow(res_tbl), " rows x ", ncol(res_tbl), " cols")
@@ -322,7 +301,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     message("=== END DEBUG ===")
   }
 
-  # Ensure required packages are available
   required_pkgs <- c("ReactomePA", "DOSE", "pathview", "enrichplot", "enrichR", "clusterProfiler", "msigdbr")
   for (pkg in required_pkgs) {
     if (!requireNamespace(pkg, quietly = TRUE)) {
@@ -354,11 +332,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     OE_foldchanges <- numeric(0)
   }
 
-  # ==============================================================================
-  # PART 1: ORA (Fisher / Hypergeometric)
-  # ==============================================================================
-
-  # ---- 1A. Transcription Factor (TF) enrichment ----
   message("Running Transcription Factor (TF) enrichment...")
   if (length(tf_db) > 0) {
     websiteLive <- getOption("enrichR.live", NA)
@@ -426,7 +399,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     message("      No TF databases specified; skipping TF enrichment.")
   }
 
-  # ---- 1B. ORA GO (BP, MF, CC)
   message("Running GO ORA...")
   ego_list <- list()
   has_go_results <- FALSE
@@ -434,7 +406,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     ego <- .run_go_ontology(ont, sigOE_genes, allOE_genes, org_db,
                              go_pvalue_cutoff, go_qvalue_cutoff)
     if (!is.null(ego)) {
-      # Only create the ORA/GO directories once we know there's something to write
       dir_ora <- safe_dir(dir_ora)
       dir_go  <- safe_dir(file.path(dir_ora, "GO"))
       ego_list[[ont]] <- .write_go_ontology_outputs(ego, ont, OE_foldchanges, top_genes, dir_go, comp_name)
@@ -443,7 +414,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   }
   ego_list <- purrr::compact(ego_list)
 
-  # ---- Entrez mapping for remaining analyses ----
   if (!"entrezid" %in% colnames(res_tbl)) res_tbl$entrezid <- NA_character_
   missing_entrez <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
   if (any(missing_entrez)) {
@@ -504,9 +474,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   }
   message("   -> Significant ORA genes with Entrez IDs: ", length(sig_entrez_ids))
 
-  # ==============================================================================
-  # PART 1C.1: Curated List specifically for Reactome ORA
-  # ==============================================================================
   message(" -> Generating Curated List specifically for Reactome ORA...")
   reac_lfc_cutoff <- 1.0 
   
@@ -517,7 +484,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   sig_entrez_reac <- as.character(res_reac_curated$entrezid)
   message("   -> Reactome curated ORA genes available: ", length(sig_entrez_reac))
 
-  # ---- 1D. ORA Reactome
   message("Running Reactome ORA on curated list...")
   reac_org <- ifelse(kegg_code == "hsa", "human", "mouse")
   if (length(sig_entrez_reac) > 0) {
@@ -531,7 +497,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
       label = "Reactome ORA"
     )
     if (!is.null(x) && nrow(as.data.frame(x)) > 0) {
-      # Now create ORA and Reactome subdir
       dir_ora <- safe_dir(dir_ora)
       dir_reac_ora <- safe_dir(file.path(dir_ora, "Reactome"))
       .write_enrich_csv(x, file.path(dir_reac_ora, paste0("Reactome_ORA_", comp_name, ".csv")))
@@ -549,7 +514,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     }
   }
 
-  # ---- 1E. ORA Disease Ontology (Human only)
   message("Running Disease Ontology ORA...")
   if (kegg_code == "hsa" && length(sig_entrez_ids) > 0) {
     do_res <- .run_disease_ontology(sig_entrez_ids, universe_entrez = as.character(res_entrez$entrezid),
@@ -562,11 +526,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     message("      Skipping Disease Ontology ORA (not human or no sig genes)")
   }
 
-  # ==============================================================================
-  # PART 2: GSEA (Properly tracking across genome background vector)
-  # ==============================================================================
-
-  # ---- 2A. GSEA Reactome
   message("Running Reactome GSEA on complete ranked genome background...")
   set.seed(123456)
   gseaReac <- safe_run(
@@ -613,7 +572,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     message("      No significant results for Reactome GSEA")
   }
 
-  # ---- 2B. GSEA KEGG + Pathview
   message("Running KEGG GSEA...")
   set.seed(123456)
   gseaKEGG <- safe_run(
@@ -625,7 +583,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 
   if (!is.null(gseaKEGG) && nrow(as.data.frame(gseaKEGG)) > 0) {
     disease_pattern <- paste0("^", kegg_code, "05")
-    # Safely filter the S4 object using dplyr
     gseaKEGG <- dplyr::filter(gseaKEGG, !grepl(disease_pattern, ID))
     
     if (nrow(as.data.frame(gseaKEGG)) == 0) {
@@ -661,15 +618,11 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     message("      No significant KEGG pathways found in GSEA.")
   }
 
-  # ---- 2C. GSEA GO (BP, MF, CC)
   message("Running GO GSEA...")
   for (ont in c("BP", "MF", "CC")) {
     .run_go_gsea(gsea_list, org_db, ont, padj_cutoff, out_dir, comp_name)
   }
 
-  # ==============================================================================
-  # PART 3: TOPOLOGY SCORING (SPIA)
-  # ==============================================================================
 
   message("Running SPIA analysis...")
   if (length(sig_entrez_ids) > 0) {
@@ -706,10 +659,6 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   list(ego_list = ego_list, spia_result = spia_result, gseaKEGG = gseaKEGG, gseaReac = gseaReac)
 }
 
-# ------------------------------------------------------------------------------
-# FGSEA Analysis (from fgsea.R)
-# ------------------------------------------------------------------------------
-
 #' Run fgsea analysis using DE results and a GMT file (or multiple GMT files)
 #'
 #' @description Performs Gene Set Enrichment Analysis using both `fgsea` and
@@ -735,10 +684,6 @@ run_fgsea_analysis <- function(res_tbl,
                                padj_cutoff = 0.01) {
 
   gmt_list <- if (is.null(gmt_file)) list(NULL) else as.list(gmt_file)
-
-  ## ------------------------------------------------------------------
-  ## Internal helpers
-  ## ------------------------------------------------------------------
 
   .cap_dim <- function(x, min_dim = 3, max_dim = 30) {
     x <- suppressWarnings(as.numeric(x))
@@ -790,9 +735,6 @@ run_fgsea_analysis <- function(res_tbl,
     invisible(ok)
   }
 
-  ## ------------------------------------------------------------------
-  ## Loop over GMT sources / MSigDB collections
-  ## ------------------------------------------------------------------
 
   for (gmt_item in gmt_list) {
 
@@ -928,9 +870,6 @@ run_fgsea_analysis <- function(res_tbl,
       dir.create(fgsea_out, recursive = TRUE)
     }
 
-    ## ----------------------------------------------------------------
-    ## Ranked gene list
-    ## ----------------------------------------------------------------
 
     message("-> Preparing ranked gene list for [", gmt_name, "]...")
 
@@ -953,9 +892,6 @@ run_fgsea_analysis <- function(res_tbl,
     ranks <- ranks + runif(length(ranks), min = -1e-6, max = 1e-6)
     ranks <- sort(ranks, decreasing = TRUE)
 
-    ## ----------------------------------------------------------------
-    ## clusterProfiler GSEA
-    ## ----------------------------------------------------------------
 
     message("-> Running clusterProfiler GSEA for [", gmt_name, "]...")
 
@@ -979,9 +915,6 @@ run_fgsea_analysis <- function(res_tbl,
       }
     )
 
-    ## ----------------------------------------------------------------
-    ## fgseaMultilevel
-    ## ----------------------------------------------------------------
 
     message("-> Running fgseaMultilevel for [", gmt_name, "]...")
 
@@ -1003,9 +936,6 @@ run_fgsea_analysis <- function(res_tbl,
       next
     }
 
-    ## ----------------------------------------------------------------
-    ## Save tables
-    ## ----------------------------------------------------------------
 
     message("-> Saving results table for [", gmt_name, "]...")
 
@@ -1053,9 +983,6 @@ run_fgsea_analysis <- function(res_tbl,
       message("Skipping HTML table generation: 'DT' or 'htmlwidgets' is not installed.")
     }
 
-    ## ----------------------------------------------------------------
-    ## NES barplot
-    ## ----------------------------------------------------------------
 
     message("-> Plotting NES barplot for [", gmt_name, "]...")
 
@@ -1073,7 +1000,6 @@ run_fgsea_analysis <- function(res_tbl,
 
       total_sig <- nrow(fgseaResTidy_filtered)
 
-      ## Sort by strongest adjusted p-value and effect size.
       fgseaResTidy_filtered <- fgseaResTidy_filtered[
         order(
           fgseaResTidy_filtered$padj,
@@ -1176,9 +1102,6 @@ run_fgsea_analysis <- function(res_tbl,
       )
     }
 
-    ## ----------------------------------------------------------------
-    ## Individual clusterProfiler gseaplot2 plots
-    ## ----------------------------------------------------------------
 
     message("-> Generating individual pathway gseaplots for [", gmt_name, "]...")
 
@@ -1266,10 +1189,6 @@ run_fgsea_analysis <- function(res_tbl,
   message("-> FGSEA processing complete across all specified gene sets.")
 }
 
-
-# ------------------------------------------------------------------------------
-# Local enrichment analysis (replaces EnrichR for offline use)
-# ------------------------------------------------------------------------------
 
 #' Run local MSigDB-based enrichment analysis (offline fallback for EnrichR)
 #'

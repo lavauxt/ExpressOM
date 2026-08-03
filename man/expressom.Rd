@@ -162,73 +162,48 @@ run_bulk_pipeline(
 
 \item{zscore_genes}{Optional character vector of gene names for targeted Z-score expression plotting}
 
-\item{gene_sets_zscore}{Optional named list of character vectors of gene names. Produces three
-outputs: (1) a per-sample average Z-score ("module score") per set plotted by condition, plus
-an automatic pooled "Global (All Genes)" panel; and (2) a per-individual-gene Z-score by
-condition plot (one facet per gene), e.g.
-\code{list(Tightness = c("Cdh5","Pdgfa"), "Lipid Scavengers" = c("Cd36","Stab1"))}}
+\item{gene_sets_zscore}{Optional named list of character vectors of gene names.}
 
 \item{run_dge}{Logical: perform standard gene-level differential expression (default: TRUE)}
 
-\item{run_isoform}{Logical: perform isoform-level analysis (DTE, DTU, IsoformSwitchAnalyzeR)}
+\item{run_isoform}{Logical: perform isoform-level analysis (DTE, DTU, Isoform SwitchAnalyzeR)}
 
 \item{run_predictors}{Logical: Run CPAT, Pfam, and SignalP via WSL/Conda during Isoform analysis}
 
-\item{bpparam}{BiocParallel backend for multi-threading (e.g. BiocParallel::MulticoreParam(4))}
+\item{bpparam}{BiocParallel backend for multi-threading}
 
-\item{execution_order}{String: "dge_first" or "isoform_first" to prioritise which analysis runs first}
+\item{execution_order}{String: "dge_first" or "isoform_first"}
 
-\item{isoform_fasta}{Path to transcript FASTA file (auto-downloads if NULL and run_isoform=TRUE)}
+\item{isoform_fasta}{Path to transcript FASTA file}
 
-\item{isoform_gff}{Path to GFF/GTF annotation file (auto-downloads if NULL and run_isoform=TRUE)}
+\item{isoform_gff}{Path to GFF/GTF annotation file}
 
-\item{use_wsl}{Logical: route external predictor tools (CPAT, SignalP,
-Pfam) through WSL. Only meaningful on Windows; defaults to TRUE there.
-Ignored on Linux/macOS, where tools run natively against PATH.}
+\item{use_wsl}{Logical: route external predictor tools through WSL on Windows}
 
-\item{wsl_distro}{Name of WSL distribution (default "Ubuntu-22.04"), only
-used when running on Windows with use_wsl = TRUE}
+\item{wsl_distro}{Name of WSL distribution}
 
-\item{predictor_cpu}{Integer: CPU threads for hmmscan / InterProScan during
-the Pfam prediction step. Default NULL auto-detects available cores
-(\code{parallel::detectCores() - 1}).}
+\item{predictor_cpu}{Integer: CPU threads for hmmscan / InterProScan}
 
 \item{resume_isoform_from}{Path to directory with saved DTE/DTU RDS files to resume isoform analysis}
 
-\item{isoform_report_genes}{Gene symbols (e.g., c("TP53", "BCL2")) for transcript-proportion plots.
-These genes also receive the enhanced isoform-level visualizations: an
-IsoformSwitchAnalyzeR switch summary plot (structure/ORF/domains + gene,
-isoform, and usage expression), a sashimi-style junction usage plot, an
-exon-bin usage comparison plot, and (if run_dexseq = TRUE) a DEXSeq
-transcript-usage plot.}
+\item{isoform_report_genes}{Gene symbols for transcript-proportion plots and enhanced isoform visualizations}
 
-\item{run_dexseq}{Logical: also run a complementary DEXSeq-based DTU engine
-(transcripts treated as DEXSeq exonic bins) alongside the DRIMSeq-based
-DTU test, and unlock DEXSeq-style per-gene transcript-usage plots in the
-HTML report (default: FALSE, since it duplicates Step C at extra runtime cost)}
+\item{run_dexseq}{Logical: also run DEXSeq-based DTU engine}
 
-\item{isoform_plot_top_n}{Number of top isoform switches (by significance)
-to automatically render as switch summary plots, independent of
-isoform_report_genes (default: 10)}
+\item{isoform_plot_top_n}{Number of top isoform switches to render automatically}
 
-\item{eda_only}{Logical: if TRUE, run only import + EDA (PCA, heatmap) then stop (no DGE or isoform).}
+\item{eda_only}{Logical: if TRUE, run only import + EDA then stop}
 
-\item{group_col}{Optional column name in metadata for colouring PCA/heatmap when no model is given.}
+\item{group_col}{Optional column name in metadata for colouring PCA/heatmap when no model is given}
 
-\item{custom_transcript_id_map}{Path to a TSV/CSV with columns `count_id` and `fasta_id`.
-If provided, transcript IDs in the count matrix are renamed to match the FASTA file
-before any filtering; this resolves ID mismatches between custom references.}
+\item{custom_transcript_id_map}{Path to a TSV/CSV with columns `count_id` and `fasta_id`}
 
-\item{skip_fasta_filter}{Logical: if TRUE, skip the pre‑filtering that keeps only transcripts
-present in the FASTA file; rely on `importRdata()`'s own ID tolerance (e.g. `ignoreAfter*`).
-(Default: FALSE)}
+\item{skip_fasta_filter}{Logical: if TRUE, skip FASTA pre-filtering in isoform import}
 
-\item{isoform_test_engine}{Which DTU test engine to use in IsoformSwitchAnalyzeR:
-`"DEXSeq"` (default, built‑in), `"DRIMSeq"` (uses pre‑computed results from `run_dtu()`),
-or `"satuRn"` (state‑of‑the‑art method). See `IsoformSwitchAnalyzeR::isoformSwitchTestSatuRn`.}
+\item{isoform_test_engine}{Which DTU test engine to use in IsoformSwitchAnalyzeR}
 }
 \value{
-NULL (invisibly)
+NULL invisibly
 }
 \description{
 Executes the complete bulk RNA-seq pipeline including data import, exploratory

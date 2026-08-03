@@ -2,26 +2,31 @@
 % Please edit documentation in R/mod_plots.R
 \name{.write_pca_scores}
 \alias{.write_pca_scores}
-\title{Write a PCA sample-scores table (+ companion percent-variance file)}
+\title{Write PCA output tables: per-sample scores, percent variance, and
+per-sample values for the genes/transcripts that went into the PCA}
 \usage{
-.write_pca_scores(pca_scores, plot_dir, file_stub)
+.write_pca_scores(pca_scores, plot_dir, file_stub, gene_values = NULL)
 }
 \arguments{
 \item{pca_scores}{data.frame from plot_custom_pca()'s `pca_scores` return
-element (or NULL, in which case this is a no-op), with a "percentVar"
-attribute set}
+element (or NULL, in which case that file is skipped), with a
+"percentVar" attribute set}
 
 \item{plot_dir}{Output directory}
 
 \item{file_stub}{File name prefix, e.g. "PCA_Treated_vs_Control" -- writes
-"<file_stub>_sample_scores.tsv" and "<file_stub>_variance_explained.tsv"}
+"<file_stub>_sample_scores.tsv", "<file_stub>_variance_explained.tsv",
+and "<file_stub>_top_gene_values.tsv"}
+
+\item{gene_values}{data.frame from plot_custom_pca()'s `gene_values`
+return element (or NULL, in which case that file is skipped)}
 }
 \description{
 Shared by both the gene-level PCA (run_eda(), via plot_custom_pca()) and
 the transcript-level PCA (run_isoform_pca()) so the two stay consistent.
-Writes the actual per-sample coordinate on every PC -- previously the
-only PCA table written to disk was the gene-loadings/variance table
-(which genes went into the PCA and their variance), with no per-sample
-values at all.
+Previously the only PCA table written to disk was the gene-loadings/
+variance table (which genes went into the PCA and their variance), with
+no per-sample values of any kind -- neither each sample's PC coordinates
+nor each gene's actual expression value in each sample.
 }
 \keyword{internal}

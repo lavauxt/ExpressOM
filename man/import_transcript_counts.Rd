@@ -16,28 +16,6 @@ import_transcript_counts(
   custom_gene_map = NULL
 )
 }
-\arguments{
-\item{data_dir}{Folder with quantification files}
-
-\item{sample_table}{Path to sample metadata}
-
-\item{ensembl_package_name}{EnsDb package name}
-
-\item{count_type}{Quantification type ("salmon", "kallisto", etc.)}
-
-\item{matrix_file}{Path to raw counts matrix (if count_type = "matrix")}
-
-\item{subset_sample}{Optional filter expression}
-
-\item{remove_sample}{Optional sample IDs to exclude}
-
-\item{custom_tx2gene}{Optional path to a custom tx2gene file (TSV with columns 'tx_id' and 'gene_id')}
-
-\item{custom_gene_map}{Optional path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')}
-}
-\value{
-List with txi (transcript counts), meta, tx2gene, gene_map
-}
 \description{
 Import transcript-level counts for isoform analysis
 }

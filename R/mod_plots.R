@@ -59,7 +59,6 @@
 run_eda <- function(dds, edb, out_dir, level, base,
                     main_condition = NULL, group_col = NULL,
                     batch_col = NULL, pca_ntop = 500) {
-  # Determine which column to use for grouping: group_col takes precedence
   cond_col <- group_col %||% main_condition
 
   rld <- DESeq2::rlog(dds, blind = TRUE)
@@ -82,14 +81,12 @@ run_eda <- function(dds, edb, out_dir, level, base,
   plot_dir <- file.path(out_dir, "Plots")
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
 
-  # ---- Determine file name base ----
   if (!is.null(level) && !is.null(base)) {
     comp_label <- paste0(level, "_vs_", base)
   } else {
     comp_label <- "EDA"
   }
 
-  # --- PCA before batch correction ---
   if (!is.null(cond_col) && cond_col %in% colnames(SummarizedExperiment::colData(dds))) {
     res_orig <- plot_custom_pca(rld, condition = cond_col, batch = batch_col,
                                  title = paste0("PCA (", cond_col, ")", if (!is.null(level) && !is.null(base)) paste0(" - ", level, " vs ", base) else ""),
@@ -110,7 +107,6 @@ run_eda <- function(dds, edb, out_dir, level, base,
   print(p_orig)
   dev.off()
 
-  # Save gene list if we used top N (or always if return_gene_list was TRUE)
   if (!is.null(gene_info_orig) && nrow(gene_info_orig) > 0) {
     write.table(gene_info_orig,
                 file = file.path(plot_dir, paste0("PCA_", comp_label, ".tsv")),
@@ -120,12 +116,10 @@ run_eda <- function(dds, edb, out_dir, level, base,
   }
   .write_pca_scores(res_orig$pca_scores, plot_dir, paste0("PCA_", comp_label), gene_values = res_orig$gene_values)
 
-  # --- Batch correction + PCA after ---
   if (!is.null(batch_col) && batch_col %in% colnames(SummarizedExperiment::colData(dds)) &&
       requireNamespace("limma", quietly = TRUE)) {
     batch_vec <- SummarizedExperiment::colData(dds)[[batch_col]]
     if (length(unique(batch_vec)) > 1) {
-      # Build a design matrix; if no main_condition, use ~1
       if (!is.null(cond_col) && cond_col %in% colnames(SummarizedExperiment::colData(dds))) {
         design_mat <- model.matrix(as.formula(paste0("~ ", cond_col)),
                                    data = as.data.frame(SummarizedExperiment::colData(dds)))
@@ -161,7 +155,6 @@ run_eda <- function(dds, edb, out_dir, level, base,
     }
   }
 
-  # Check correlation matrix for NA/NaN
   rld_cor <- cor(SummarizedExperiment::assay(rld))
   if (anyNA(rld_cor)) {
     warning("Correlation matrix contains NA/NaN values. ",
@@ -169,7 +162,6 @@ run_eda <- function(dds, edb, out_dir, level, base,
     rld_cor[is.na(rld_cor)] <- 0
   }
 
-  # Build annotation for heatmap (if cond_col available)
   if (!is.null(cond_col) && cond_col %in% colnames(SummarizedExperiment::colData(dds))) {
     anno <- as.data.frame(SummarizedExperiment::colData(dds)[, cond_col, drop = FALSE])
     if (!all(rownames(anno) == colnames(rld_cor))) {
@@ -229,7 +221,6 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
   topx_sigOE_genes <- head(results_data$sig_res[order(results_data$sig_res$padj), "gene"], top_genes)
   topx_sigOE_norm <- results_data$normalized_counts[results_data$normalized_counts$gene %in% topx_sigOE_genes, ]
 
-  # pivot_longer replaces the deprecated tidyr::gather()
   id_cols <- intersect(c("gene", "ensembl", "symbol", "entrezid"), colnames(topx_sigOE_norm))
   gathered_top <- tidyr::pivot_longer(
     topx_sigOE_norm,
@@ -257,12 +248,6 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
     )
   })
 
-  # plot_top_genes_heatmap() is a complete, working function (clustered
-  # heatmap of the top-N DE genes' normalised counts, labelled by symbol) but
-  # had zero call sites anywhere in the package -- built and then never wired
-  # in. The per-gene boxplot above shows the same top genes one at a time;
-  # this adds the clustered-heatmap view (sample-sample structure among just
-  # the DE genes) that boxplots can't show.
   plot_top_genes_heatmap(dds, results_data, main_condition, level, base,
                          top_n = top_genes, padj_cutoff = padj_cutoff,
                          plot_dir = plot_dir, batch_col = batch_col)
@@ -293,7 +278,6 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
     stop("vsd must be a SummarizedExperiment object")
   }
 
-  # --- Subset to top N variable genes if requested ---
   gene_info <- NULL
   if (!is.null(ntop) && is.numeric(ntop) && ntop > 0 && ntop < nrow(mat)) {
     row_var <- apply(mat, 1, var, na.rm = TRUE)
@@ -304,7 +288,6 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
     mat <- mat[top_idx, , drop = FALSE]
     gene_info <- data.frame(gene = gene_names, variance = gene_var, stringsAsFactors = FALSE)
   } else {
-    # Keep all genes; gene_info will have NA for variance (or we could compute it)
     if (return_gene_list) {
       row_var <- apply(mat, 1, var, na.rm = TRUE)
       row_var[is.na(row_var)] <- NA_real_
@@ -324,7 +307,6 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
   gene_values <- data.frame(gene = rownames(mat), as.data.frame(mat, check.names = FALSE),
                             row.names = NULL, check.names = FALSE)
 
-  # ---- Handle NULL or missing condition ----
   if (is.null(condition) || !(condition %in% colnames(pca_df))) {
     pca_df$Group <- "All Samples"
     condition    <- "Group"
@@ -334,7 +316,6 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
   p <- ggplot2::ggplot(pca_df, ggplot2::aes(x = .data[["PC1"]], y = .data[["PC2"]],
                                              color = .data[[condition]]))
 
-  # stat_ellipse needs >= 3 points per group and > 1 group
   if (ellipse && length(unique(pca_df[[condition]])) > 1 &&
       min(table(pca_df[[condition]])) >= 3) {
     p <- p + ggplot2::stat_ellipse(level = 0.95, linetype = 2)
@@ -342,7 +323,6 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
 
   p <- p + ggplot2::geom_point(size = 3.5, alpha = 0.8)
 
-  # Handle batch: if provided and in data, add shape
   if (!is.null(batch) && batch %in% colnames(pca_df)) {
     p <- p + ggplot2::aes(shape = .data[[batch]])
   }
@@ -438,7 +418,6 @@ plot_top_genes_heatmap <- function(dds, results_data, condition_col, level, base
     sym_labels[is.na(sym_labels)] <- present_ids[is.na(sym_labels)]
     rownames(mat) <- make.unique(sym_labels)
   } else {
-    # Fallback: rownames already gene symbols (e.g. dds_rep was passed)
     present_ids <- intersect(top_sig$gene, rownames(norm_counts))
     if (length(present_ids) == 0) {
       message("None of the top genes found in counts matrix – skipping heatmap")
@@ -447,7 +426,6 @@ plot_top_genes_heatmap <- function(dds, results_data, condition_col, level, base
     mat <- norm_counts[present_ids, , drop = FALSE]
   }
 
-  # Optional batch correction
   if (!is.null(batch_col) && batch_col %in% colnames(SummarizedExperiment::colData(dds)) &&
       requireNamespace("limma", quietly = TRUE)) {
     batch_vec <- SummarizedExperiment::colData(dds)[[batch_col]]
@@ -461,7 +439,6 @@ plot_top_genes_heatmap <- function(dds, results_data, condition_col, level, base
     }
   }
 
-  # Drop genes with zero variance before z-scoring (scale() produces NaN otherwise)
   row_sds <- apply(mat, 1, stats::sd, na.rm = TRUE)
   zero_var <- row_sds == 0 | is.na(row_sds)
   if (any(zero_var)) {
@@ -632,13 +609,11 @@ plot_geneset_zscore_avg <- function(dds, gene_sets, condition_col, level, base,
     stop("`gene_sets` must be a named list, e.g. list(SetA = c('Gene1','Gene2'), SetB = c('Gene3')).")
   }
 
-  # If set_name is given, we treat gene_sets as a single set (list of length 1)
   if (!is.null(set_name)) {
     if (length(gene_sets) != 1) {
       warning("set_name provided but gene_sets has length != 1. Using only the first set.")
       gene_sets <- gene_sets[1]
     }
-    # Override include_global: no global panel when plotting a single set separately
     include_global <- FALSE
   }
 
@@ -647,8 +622,6 @@ plot_geneset_zscore_avg <- function(dds, gene_sets, condition_col, level, base,
   meta_data$sample <- rownames(meta_data)
   valid_samples  <- meta_data$sample[meta_data[[condition_col]] %in% c(base, level)]
 
-  # Helper: given a character vector of genes, return a per-sample average
-  # z-score (NULL if none of the genes are present) plus which genes were missing.
   .avg_zscore_for_genes <- function(genes) {
     present_genes <- intersect(genes, rownames(norm_counts))
     missing_genes <- setdiff(genes, rownames(norm_counts))
@@ -704,7 +677,6 @@ plot_geneset_zscore_avg <- function(dds, gene_sets, condition_col, level, base,
   plot_df           <- merge(plot_df, meta_data[, c("sample", condition_col)], by = "sample")
   plot_df$Condition <- factor(plot_df[[condition_col]], levels = c(base, level))
 
-  # For single set, no need to set factor levels for faceting
   if (is.null(set_name)) {
     set_levels <- vapply(names(set_results), function(nm) unique(set_results[[nm]]$gene_set), character(1))
     plot_df$gene_set <- factor(plot_df$gene_set, levels = set_levels)
@@ -815,7 +787,6 @@ plot_gene_zscore_individual <- function(dds, gene_sets, condition_col, level, ba
   meta_data$sample <- rownames(meta_data)
   valid_samples    <- meta_data$sample[meta_data[[condition_col]] %in% c(base, level)]
 
-  # Map each gene to the (first) set it belongs to, preserving list order
   gene_lookup <- unlist(lapply(names(gene_sets), function(nm) {
     stats::setNames(rep(nm, length(gene_sets[[nm]])), gene_sets[[nm]])
   }))
@@ -838,7 +809,6 @@ plot_gene_zscore_individual <- function(dds, gene_sets, condition_col, level, ba
   plot_df      <- merge(plot_df, meta_data[, c("sample", condition_col)], by = "sample")
   plot_df$Condition <- factor(plot_df[[condition_col]], levels = c(base, level))
 
-  # Preserve gene order within each set, and keep genes grouped along the x‑axis
   gene_order       <- present_genes[order(match(gene_lookup[present_genes], names(gene_sets)))]
   plot_df$gene_set <- factor(gene_lookup[plot_df$gene], levels = names(gene_sets))
   plot_df$gene     <- factor(plot_df$gene, levels = gene_order)

@@ -2,7 +2,7 @@
 % Please edit documentation in R/mod_isoform.R
 \name{run_dtu}
 \alias{run_dtu}
-\title{Run DTU (Differential Transcript Usage) using DRIMSeq with improved filtering}
+\title{Run DTU using DRIMSeq}
 \usage{
 run_dtu(
   isoform_obj,
@@ -19,43 +19,6 @@ run_dtu(
   bpparam = NULL
 )
 }
-\arguments{
-\item{isoform_obj}{Output from import_transcript_counts()}
-
-\item{condition}{Column name in metadata}
-
-\item{level}{Foreground level for contrast}
-
-\item{base}{Reference level}
-
-\item{min_gene_expr}{Minimum total expression per gene (default: 10)}
-
-\item{min_transcript_expr}{Minimum transcript proportion per gene (default: 0.05)}
-
-\item{min_samps_gene_expr}{Min samples for gene expression (default: 50% of samples)}
-
-\item{min_samps_feature_expr}{Min samples for transcript expression (default: 3)}
-
-\item{chunk_size}{Number of genes to process at once (default: 5000)}
-
-\item{max_transcripts}{Maximum number of transcripts per gene to keep (default: 300)}
-
-\item{min_transcript_total}{Minimum total counts across all samples for a transcript (default: 10)}
-
-\item{bpparam}{Optional BiocParallel parameter object for DRIMSeq operations}
-}
-\value{
-List with \code{dtu_results}, a TRANSCRIPT-level (feature-level)
-  data.frame with columns \code{gene_id}, \code{feature_id}, \code{lr},
-  \code{df}, \code{pvalue}, and a genome-wide-recomputed \code{adj_pvalue},
-  plus \code{gene_symbol}/\code{entrezid}. Uses
-  \code{DRIMSeq::results(d, level = "feature")} rather than DRIMSeq's
-  default gene-level result: (1) that's the whole point of a
-  *transcript*-usage test, and (2) \code{run_isoform_switch()}'s
-  \code{test_engine = "DRIMSeq"} path requires a \code{feature_id} column
-  that only the feature-level result has -- without this, that path could
-  never succeed (see \code{required_cols} check there).
-}
 \description{
-Run DTU (Differential Transcript Usage) using DRIMSeq with improved filtering
+Run DTU using DRIMSeq
 }

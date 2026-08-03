@@ -4,25 +4,16 @@
 \alias{.wsl_write_env_var}
 \title{Persist an environment variable for later predictor runs}
 \usage{
-.wsl_write_env_var(var, value, wsl_distro = "Ubuntu", use_wsl = TRUE)
-}
-\arguments{
-\item{var}{Environment variable name (e.g. "CPAT_DATA").}
-
-\item{value}{Value to assign (will be shell-quoted).}
-
-\item{wsl_distro}{WSL distribution name.}
-
-\item{use_wsl}{Route through WSL? (only effective on Windows.)}
-}
-\value{
-Invisibly, TRUE/FALSE indicating whether the write succeeded.
+.wsl_write_env_var(
+  var,
+  value,
+  wsl_distro = "Ubuntu",
+  use_wsl = TRUE,
+  log_dir = NULL
+)
 }
 \description{
-Appends (or replaces) an `export VAR="value"` line in the dedicated
-env file that `.wsl_exec_script()` sources on every invocation. This is
-the supported way for install helpers to make a path available to CPAT /
-SignalP / hmmscan at prediction time -- do not write to ~/.bashrc (see
-note above).
+Appends or replaces an `export VAR="value"` line in the dedicated env file
+sourced by `.wsl_exec_script()` on every invocation.
 }
 \keyword{internal}

@@ -9,12 +9,11 @@
   wsl_distro = "Ubuntu",
   use_wsl = TRUE,
   conda_sh = NULL,
-  conda_env = "isoform_tools"
+  conda_env = "isoform_tools",
+  log_dir = NULL
 )
 }
 \description{
-Search order: (1) IsoformSwitchAnalyzeR extdata, (2) CPAT_DATA env var,
-(3) ~/.cpat_data inside the execution environment.
-Returns a path valid inside the execution environment.
+Locate the CPAT logit model RData file for a given organism
 }
 \keyword{internal}

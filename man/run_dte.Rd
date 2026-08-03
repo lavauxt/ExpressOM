@@ -2,7 +2,7 @@
 % Please edit documentation in R/mod_isoform.R
 \name{run_dte}
 \alias{run_dte}
-\title{Run DTE (Differential Transcript Expression) using DESeq2}
+\title{Run DTE using DESeq2}
 \usage{
 run_dte(
   isoform_obj,
@@ -13,20 +13,6 @@ run_dte(
   bpparam = NULL
 )
 }
-\arguments{
-\item{isoform_obj}{Output from import_transcript_counts()}
-
-\item{condition}{Column name in metadata containing groups}
-
-\item{level}{Foreground level for contrast}
-
-\item{base}{Reference level}
-
-\item{padj_cutoff}{Adjusted p-value threshold}
-}
-\value{
-Data frame of DTE results
-}
 \description{
-Run DTE (Differential Transcript Expression) using DESeq2
+Run DTE using DESeq2
 }

@@ -2,8 +2,7 @@
 % Please edit documentation in R/mod_isoform.R
 \name{generate_dte_dtu_report}
 \alias{generate_dte_dtu_report}
-\title{Generate DTE/DTU HTML Report with conditional image includes
-(Now uses eval = file.exists(...) to avoid "Could not fetch resource" warnings)}
+\title{Generate DTE/DTU HTML report}
 \usage{
 generate_dte_dtu_report(
   dte_results,
@@ -24,6 +23,5 @@ generate_dte_dtu_report(
 )
 }
 \description{
-Generate DTE/DTU HTML Report with conditional image includes
-(Now uses eval = file.exists(...) to avoid "Could not fetch resource" warnings)
+Generate DTE/DTU HTML report
 }

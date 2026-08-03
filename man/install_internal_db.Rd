@@ -6,9 +6,6 @@
 \usage{
 install_internal_db(pkg_name = NULL)
 }
-\arguments{
-\item{pkg_name}{Optional string to match a specific database (e.g., "Mmusculus" or "Hsapiens")}
-}
 \description{
 Install Bundled Ensembl Database
 }

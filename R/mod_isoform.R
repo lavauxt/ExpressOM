@@ -1,7 +1,3 @@
-###############################################################################
-# mod_isoform.R - DTE, DTU, and IsoformSwitchAnalyzeR integration
-###############################################################################
-
 #' Convert a PDF plot to a PNG alongside it
 #' @keywords internal
 convert_pdf_to_png <- function(pdf_file, dpi = 200) {
@@ -508,7 +504,6 @@ run_isoform_pca <- function(isoform_obj,
 
   tx2gene <- isoform_obj$tx2gene
 
-  ## Clean transcript IDs in both objects.
   rownames(counts) <- clean_transcript_id(rownames(counts))
   tx2gene$tx_id <- clean_transcript_id(tx2gene$tx_id)
 
@@ -555,7 +550,6 @@ run_isoform_pca <- function(isoform_obj,
 
   message("Mapped transcripts: ", nrow(counts))
 
-  ## Filter by total transcript expression.
   keep_tx <- rowSums(counts) >= min_transcript_total
 
   counts <- counts[keep_tx, , drop = FALSE]
@@ -566,7 +560,6 @@ run_isoform_pca <- function(isoform_obj,
     stop("No transcripts passed min_transcript_total filter.")
   }
 
-  ## Optional gene-level expression filter.
   if (isTRUE(apply_gene_expr_filter)) {
     gene_expr_matrix <- rowsum(counts, group = gene_id_map)
 
@@ -585,7 +578,6 @@ run_isoform_pca <- function(isoform_obj,
     }
   }
 
-  ## Filter by number of samples with transcript expression.
   keep_tx <- rowSums(counts > min_transcript_expr) >= min_samps_feature_expr
 
   counts <- counts[keep_tx, , drop = FALSE]
@@ -596,7 +588,6 @@ run_isoform_pca <- function(isoform_obj,
     stop("No transcripts passed expression filtering.")
   }
 
-  ## Limit transcripts per gene.
   gene_split <- split(seq_len(nrow(counts)), gene_id_map)
 
   keep_idx <- unlist(lapply(gene_split, function(idx) {
@@ -616,7 +607,6 @@ run_isoform_pca <- function(isoform_obj,
     stop("No transcripts remained after limiting transcripts per gene.")
   }
 
-  ## Optional multi-transcript-gene filter.
   if (isTRUE(require_multi_transcript)) {
     gene_counts_tbl <- table(gene_id_map)
     multi_tx_genes <- names(gene_counts_tbl)[gene_counts_tbl > 1]
@@ -1751,9 +1741,6 @@ run_isoform_switch <- function(dte_results = NULL,
   return(switch_list)
 }
 
-###############################################################################
-# Internal: run external predictors
-###############################################################################
 
 .run_external_predictors <- function(switch_list,
                                      fasta_file,
@@ -2417,9 +2404,6 @@ run_isoform_switch <- function(dte_results = NULL,
   return(switch_list)
 }
 
-###############################################################################
-# Enhanced isoform-level visualization
-###############################################################################
 
 .resolve_gene_id <- function(isoform_features, gene) {
   if (is.null(gene) || !nzchar(gene)) return(NULL)

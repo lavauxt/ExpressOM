@@ -6,18 +6,11 @@
 \usage{
 .expressom_rmd_path(filename)
 }
-\arguments{
-\item{filename}{Filename under \code{inst/rmd/} (e.g. \code{"dte_dtu_report.Rmd"})}
-}
-\value{
-Absolute path to the template file
-}
 \description{
-Thin wrapper around \code{system.file()} with a development-mode fallback,
-so templates resolve correctly both for an installed package and under
-\code{devtools::load_all()} (which normally shims \code{system.file()} to
-find \code{inst/} already, but this keeps things working even if invoked
-in a context where that shim isn't active -- the same class of bug noted
-for the SPARKS report templates: "not bundled post-install").
+More robust than the original version:
+- checks installed package first
+- checks common source-checkout locations
+- walks up from the working directory
+- honors EXPRESSOM_RMD_DIR
 }
 \keyword{internal}

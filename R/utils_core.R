@@ -29,8 +29,6 @@ strip_ensembl_version <- function(x) {
 #' @export
 clean_transcript_id <- function(x) {
   x <- as.character(x)
-
-  # Remove leading/trailing whitespace
   x <- trimws(x)
 
   # Remove everything after the first pipe.
@@ -703,12 +701,7 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
     stop("gene_map is empty.")
   }
 
-  ## Make column names safe and unique.
   names(gene_map) <- make.unique(trimws(names(gene_map)))
-
-  ## ------------------------------------------------------------------
-  ## Ensure an "ensembl" column exists.
-  ## ------------------------------------------------------------------
   if (!"ensembl" %in% names(gene_map)) {
     id_candidates <- c(
       "gene_id",
@@ -735,7 +728,6 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
     names(gene_map)[names(gene_map) == id_col[1]] <- "ensembl"
   }
 
-  ## If make.unique() created ensembl.1, ensembl.2, etc., drop the extras.
   extra_ensembl_cols <- grep("^ensembl\\.", names(gene_map), value = TRUE)
 
   if (length(extra_ensembl_cols) > 0) {
@@ -744,9 +736,6 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
 
   gene_map$ensembl <- strip_ensembl_version(as.character(gene_map$ensembl))
 
-  ## ------------------------------------------------------------------
-  ## Ensure a "symbol" column exists.
-  ## ------------------------------------------------------------------
   if (!"symbol" %in% names(gene_map)) {
     symbol_candidates <- c(
       "gene_name",
@@ -772,9 +761,6 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
   gene_map$symbol[is.na(gene_map$symbol) | gene_map$symbol == ""] <-
     gene_map$ensembl[is.na(gene_map$symbol) | gene_map$symbol == ""]
 
-  ## ------------------------------------------------------------------
-  ## Ensure an "entrezid" column exists.
-  ## ------------------------------------------------------------------
   if (!"entrezid" %in% names(gene_map)) {
     entrez_candidates <- c(
       "entrezid",
@@ -795,9 +781,6 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
 
   gene_map$entrezid <- as.character(gene_map$entrezid)
 
-  ## ------------------------------------------------------------------
-  ## Remove invalid/duplicated Ensembl IDs.
-  ## ------------------------------------------------------------------
   gene_map <- gene_map[!is.na(gene_map$ensembl) & gene_map$ensembl != "", , drop = FALSE]
   gene_map <- gene_map[!duplicated(gene_map$ensembl), , drop = FALSE]
 
