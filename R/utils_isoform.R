@@ -38,7 +38,7 @@
 #' Appends or replaces an `export VAR="value"` line in the dedicated env file
 #' sourced by `.wsl_exec_script()` on every invocation.
 #' @keywords internal
-.wsl_write_env_var <- function(var, value, wsl_distro = "Ubuntu", use_wsl = TRUE, log_dir = NULL) {
+.wsl_write_env_var <- function(var, value, wsl_distro = "Ubuntu-22.04", use_wsl = TRUE, log_dir = NULL) {
   export_line <- sprintf("export %s=%s", var, .dq(value))
   tmp_env <- paste0(.ISOFORM_ENV_FILE, ".tmp")
 
@@ -84,7 +84,7 @@
 
 #' Best-effort discovery of a conda profile script (conda.sh)
 #' @keywords internal
-.find_conda_sh <- function(wsl_distro = "Ubuntu", use_wsl = TRUE, log_dir = NULL) {
+.find_conda_sh <- function(wsl_distro = "Ubuntu-22.04", use_wsl = TRUE, log_dir = NULL) {
   body <- c(
     'base="$(conda info --base 2>/dev/null || true)"',
     'if [ -n "$base" ] && [ -f "$base/etc/profile.d/conda.sh" ]; then',
@@ -123,7 +123,7 @@
 
 #' Convert a Windows file path to a WSL-compatible Unix path
 #' @keywords internal
-.to_wsl_path <- function(win_path, distro = "Ubuntu") {
+.to_wsl_path <- function(win_path, distro = "Ubuntu-22.04") {
   if (.Platform$OS.type != "windows") return(win_path)
   if (is.null(win_path) || !nzchar(trimws(as.character(win_path)))) return(win_path)
 
@@ -196,7 +196,7 @@
 #' would explain *why* was thrown away.
 #' @keywords internal
 .wsl_exec_script <- function(bash_body,
-                             wsl_distro = "Ubuntu",
+                             wsl_distro = "Ubuntu-22.04",
                              use_wsl = TRUE,
                              conda_sh = NULL,
                              conda_env = "isoform_tools",
@@ -347,7 +347,7 @@
 #' Check whether a command-line tool is accessible in the execution environment
 #' @keywords internal
 .wsl_tool_exists <- function(tool_name,
-                             wsl_distro = "Ubuntu",
+                             wsl_distro = "Ubuntu-22.04",
                              use_wsl = TRUE,
                              conda_sh = NULL,
                              conda_env = "isoform_tools",
@@ -368,7 +368,7 @@
 
 #' Find the Pfam-A.hmm database in common paths inside the execution environment
 #' @keywords internal
-.find_pfam_db <- function(wsl_distro = "Ubuntu",
+.find_pfam_db <- function(wsl_distro = "Ubuntu-22.04",
                           use_wsl = TRUE,
                           conda_sh = NULL,
                           conda_env = "isoform_tools",
@@ -394,16 +394,21 @@
   if (length(result) > 0) result[1] else NULL
 }
 
-#' Locate the CPAT logit model RData file for a given organism
+#' Locate a CPAT data file (hexamer table or logit model) for a given organism
+#'
+#' CPAT's prebuilt hexamer/logit files are not bundled with the
+#' IsoformSwitchAnalyzeR R package (that package only ships a small
+#' `cpat_results.txt` example, not the actual model files); they are
+#' downloaded by `install_isoform_databases()` into `$HOME/.cpat_data` (or
+#' `$CPAT_DATA`). Both `.find_cpat_hexamer()` and `.find_cpat_logit_model()`
+#' search the same set of locations.
 #' @keywords internal
-.find_cpat_logit_model <- function(organism = "Human",
-                                   wsl_distro = "Ubuntu",
-                                   use_wsl = TRUE,
-                                   conda_sh = NULL,
-                                   conda_env = "isoform_tools",
-                                   log_dir = NULL) {
-  fname <- paste0(organism, "_logitModel.RData")
-
+.find_cpat_data_file <- function(fname,
+                                 wsl_distro = "Ubuntu-22.04",
+                                 use_wsl = TRUE,
+                                 conda_sh = NULL,
+                                 conda_env = "isoform_tools",
+                                 log_dir = NULL) {
   isa_local <- system.file("extdata", fname, package = "IsoformSwitchAnalyzeR")
 
   if (nzchar(isa_local) && file.exists(isa_local)) {
@@ -446,11 +451,47 @@
   if (length(result) > 0) result[1] else NULL
 }
 
+#' Locate the CPAT logit model RData file for a given organism
+#' @keywords internal
+.find_cpat_logit_model <- function(organism = "Human",
+                                   wsl_distro = "Ubuntu-22.04",
+                                   use_wsl = TRUE,
+                                   conda_sh = NULL,
+                                   conda_env = "isoform_tools",
+                                   log_dir = NULL) {
+  .find_cpat_data_file(
+    paste0(organism, "_logitModel.RData"),
+    wsl_distro = wsl_distro,
+    use_wsl = use_wsl,
+    conda_sh = conda_sh,
+    conda_env = conda_env,
+    log_dir = log_dir
+  )
+}
+
+#' Locate the CPAT hexamer frequency table for a given organism
+#' @keywords internal
+.find_cpat_hexamer <- function(organism = "Human",
+                               wsl_distro = "Ubuntu-22.04",
+                               use_wsl = TRUE,
+                               conda_sh = NULL,
+                               conda_env = "isoform_tools",
+                               log_dir = NULL) {
+  .find_cpat_data_file(
+    paste0(organism, "_Hexamer.tsv"),
+    wsl_distro = wsl_distro,
+    use_wsl = use_wsl,
+    conda_sh = conda_sh,
+    conda_env = conda_env,
+    log_dir = log_dir
+  )
+}
+
 #' Check if WSL is available and configured
 #' @param distro WSL distribution name
 #' @return Logical indicating success
 #' @export
-check_wsl <- function(distro = "Ubuntu") {
+check_wsl <- function(distro = "Ubuntu-22.04") {
   if (.Platform$OS.type != "windows") {
     return(FALSE)
   }
@@ -477,7 +518,7 @@ check_wsl <- function(distro = "Ubuntu") {
 
 #' Debug the external-predictor execution environment
 #' @export
-debug_wsl <- function(distro = "Ubuntu",
+debug_wsl <- function(distro = "Ubuntu-22.04",
                       out_dir = NULL,
                       log_dir = NULL,
                       conda_env = "isoform_tools",
@@ -751,7 +792,7 @@ debug_wsl <- function(distro = "Ubuntu",
 #' Install SignalP from a Windows directory into WSL
 #' @export
 install_signalp_from_windows <- function(windows_signalp_dir,
-                                         distro = "Ubuntu",
+                                         distro = "Ubuntu-22.04",
                                          install_path = "/usr/local/signalp",
                                          log_dir = NULL) {
 
@@ -867,9 +908,243 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   TRUE
 }
 
+#' Install SignalP 6.0 from a `signalp-6.0*.tar.gz` distribution archive
+#'
+#' Unlike `install_signalp_from_windows()` (which copies an *already installed*
+#' SignalP directory, e.g. from a prior Linux/native install, and expects a
+#' `bin/signalp` executable + `data/` directory), this installs directly from
+#' the `.tar.gz` package DTU distributes: it is a Python package (`pip install
+#' signalp-6-package/`) that provides the `signalp6` command, plus a separate
+#' `models/` folder of weight files that must be copied into the installed
+#' package's `model_weights/` directory (see the archive's own
+#' `signalp6_fast/signalp-6-package/README.md`).
+#'
+#' @param tarball_path Path to the `signalp-6.0*.tar.gz` archive on Windows
+#'   (or already inside WSL). Defaults to the copy bundled at
+#'   `inst/extdata/signalp-6.0i.fast.tar.gz`, resolved via
+#'   `system.file("extdata", ..., package = "ExpressOM")` with a source-checkout
+#'   fallback -- pass an explicit path to use a different archive (e.g. a
+#'   `.fast.tar.gz`, `.slow.tar.gz`, or a newer release).
+#' @param distro WSL distribution name.
+#' @param conda_env Conda environment to install the `signalp` Python package
+#'   into (created via `install_wsl_isoform_tools()` / `mamba create`).
+#' @param log_dir Directory for `wsl_commands.log`; defaults per
+#'   `.default_wsl_log_dir()`.
+#' @export
+install_signalp_from_tarball <- function(tarball_path = NULL,
+                                         distro = "Ubuntu-22.04",
+                                         conda_env = "isoform_tools",
+                                         log_dir = NULL) {
+
+  if (is.null(tarball_path)) {
+    tarball_path <- system.file("extdata", "signalp-6.0i.fast.tar.gz", package = "ExpressOM")
+
+    if (!nzchar(tarball_path) || !file.exists(tarball_path)) {
+      tarball_path <- "inst/extdata/signalp-6.0i.fast.tar.gz"
+    }
+  }
+
+  if (!file.exists(tarball_path)) {
+    stop(
+      "SignalP archive not found: ", tarball_path,
+      ". Pass tarball_path = ... pointing at your downloaded ",
+      "signalp-6.0*.tar.gz (from https://services.healthtech.dtu.dk/services/SignalP-6.0/)."
+    )
+  }
+
+  effective_log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
+  message("Logging every command to: ", file.path(effective_log_dir, "wsl_commands.log"))
+
+  if (!check_wsl(distro)) {
+    stop("WSL with distro ", distro, " not available.")
+  }
+
+  tarball_path <- normalizePath(tarball_path, winslash = "/", mustWork = TRUE)
+  wsl_tarball_path <- .to_wsl_path(tarball_path, distro)
+
+  message("Installing SignalP 6.0 from archive: ", tarball_path)
+
+  conda_sh <- .find_conda_sh(wsl_distro = distro, use_wsl = TRUE, log_dir = effective_log_dir)
+
+  if (is.null(conda_sh)) {
+    stop(
+      "Could not locate conda.sh in WSL -- install conda/mamba first ",
+      "(see install_wsl_isoform_tools()) before installing SignalP."
+    )
+  }
+
+  env_check <- .wsl_exec_script(
+    bash_body = sprintf(
+      '. %s 2>/dev/null && conda env list | grep -q %s',
+      .dq(conda_sh),
+      shQuote(conda_env, type = "sh")
+    ),
+    wsl_distro = distro,
+    use_wsl = TRUE,
+    intern = FALSE,
+    ignore_stderr = TRUE,
+    log_dir = effective_log_dir
+  )
+
+  if (!isTRUE(env_check == 0L)) {
+    stop(
+      "Conda environment '", conda_env, "' not found. Run install_wsl_isoform_tools() ",
+      "(or create it manually) before installing SignalP into it."
+    )
+  }
+
+  extract_dir <- "/tmp/expressom_signalp6_install"
+
+  message("  Extracting archive inside WSL to ", extract_dir, "...")
+
+  extract_status <- .wsl_exec_script(
+    bash_body = c(
+      sprintf("rm -rf %s", .dq(extract_dir)),
+      sprintf("mkdir -p %s", .dq(extract_dir)),
+      sprintf("tar -xzf %s -C %s", .dq(wsl_tarball_path), .dq(extract_dir))
+    ),
+    wsl_distro = distro,
+    use_wsl = TRUE,
+    log_dir = effective_log_dir
+  )
+
+  if (!isTRUE(extract_status == 0L)) {
+    stop("Failed to extract ", tarball_path, " inside WSL (exit code ", extract_status, ").")
+  }
+
+  pkg_dir_probe <- .wsl_exec_script(
+    bash_body = sprintf(
+      'find %s -maxdepth 3 -type d -name "signalp-6-package" | head -1',
+      .dq(extract_dir)
+    ),
+    wsl_distro = distro,
+    use_wsl = TRUE,
+    intern = TRUE,
+    ignore_stderr = TRUE,
+    log_dir = effective_log_dir
+  )
+
+  pkg_dir <- trimws(pkg_dir_probe[nzchar(trimws(pkg_dir_probe))])
+
+  if (length(pkg_dir) == 0) {
+    stop(
+      "Could not find a 'signalp-6-package' directory inside the extracted archive. ",
+      "The archive layout may differ from the expected 'signalp6_fast/signalp-6-package/' ",
+      "structure -- inspect ", extract_dir, " inside WSL manually."
+    )
+  }
+
+  pkg_dir <- pkg_dir[1]
+  message("  Found package directory: ", pkg_dir)
+  message("  Installing signalp Python package into conda env '", conda_env, "'...")
+
+  pip_status <- .wsl_exec_script(
+    bash_body = sprintf(
+      '. %s && conda activate %s && pip install %s',
+      .dq(conda_sh),
+      shQuote(conda_env, type = "sh"),
+      .dq(pkg_dir)
+    ),
+    wsl_distro = distro,
+    use_wsl = TRUE,
+    log_dir = effective_log_dir
+  )
+
+  if (!isTRUE(pip_status == 0L)) {
+    stop(
+      "pip install of the signalp package failed (exit code ", pip_status,
+      "). See wsl_commands.log for the full pip output."
+    )
+  }
+
+  message("  Copying model weight files into the installed package...")
+
+  signalp_dir_probe <- .wsl_exec_script(
+    bash_body = sprintf(
+      '. %s && conda activate %s && python3 -c "import signalp, os; print(os.path.dirname(signalp.__file__))"',
+      .dq(conda_sh),
+      shQuote(conda_env, type = "sh")
+    ),
+    wsl_distro = distro,
+    use_wsl = TRUE,
+    intern = TRUE,
+    ignore_stderr = TRUE,
+    log_dir = effective_log_dir
+  )
+
+  signalp_dir <- trimws(signalp_dir_probe[nzchar(trimws(signalp_dir_probe))])
+
+  if (length(signalp_dir) == 0) {
+    stop(
+      "pip install appeared to succeed, but could not locate the installed 'signalp' ",
+      "Python package to copy model weights into. Check wsl_commands.log."
+    )
+  }
+
+  signalp_dir <- signalp_dir[1]
+  model_weights_dir <- file.path(signalp_dir, "model_weights")
+
+  copy_status <- .wsl_exec_script(
+    bash_body = sprintf(
+      "mkdir -p %s && cp -r %s/models/* %s/",
+      .dq(model_weights_dir),
+      .dq(pkg_dir),
+      .dq(model_weights_dir)
+    ),
+    wsl_distro = distro,
+    use_wsl = TRUE,
+    log_dir = effective_log_dir
+  )
+
+  if (!isTRUE(copy_status == 0L)) {
+    message(
+      "  ! Failed to copy model weight files into ", model_weights_dir, " (exit code ", copy_status,
+      "). signalp6 will likely fail at runtime with a missing-weights error; copy them manually, ",
+      "e.g. from ", pkg_dir, "/models/ inside WSL."
+    )
+  } else {
+    message("  Model weights copied to: ", model_weights_dir)
+  }
+
+  verify_status <- .wsl_exec_script(
+    bash_body = sprintf(
+      '. %s && conda activate %s && command -v signalp6 >/dev/null 2>&1',
+      .dq(conda_sh),
+      shQuote(conda_env, type = "sh")
+    ),
+    wsl_distro = distro,
+    use_wsl = TRUE,
+    log_dir = effective_log_dir
+  )
+
+  if (isTRUE(verify_status == 0L)) {
+    message(
+      "SignalP 6.0 installed successfully. `signalp6` is available inside conda env '",
+      conda_env, "'. Run debug_wsl() to confirm it is now detected."
+    )
+  } else {
+    message(
+      "  ! 'signalp6' command was not found on PATH inside conda env '", conda_env,
+      "' after installation. The pip install reported success, but check wsl_commands.log ",
+      "for details -- you may need to re-activate the conda env or check for a console-script ",
+      "entry-point issue."
+    )
+  }
+
+  .wsl_exec_script(
+    sprintf("rm -rf %s", .dq(extract_dir)),
+    wsl_distro = distro,
+    use_wsl = TRUE,
+    ignore_stderr = TRUE,
+    log_dir = effective_log_dir
+  )
+
+  invisible(isTRUE(verify_status == 0L))
+}
+
 #' Install required external tools inside WSL using mamba or apt/pip
 #' @export
-install_wsl_isoform_tools <- function(distro = "Ubuntu",
+install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
                                       use_mamba = TRUE,
                                       install_databases = TRUE,
                                       windows_signalp_dir = NULL,
@@ -1015,8 +1290,12 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu",
     } else {
       message(
         "SignalP was not installed (no conda/apt package exists for it -- academic license). ",
-        "Call install_signalp_from_windows(windows_signalp_dir, distro) once you have downloaded ",
-        "a licensed copy from https://services.healthtech.dtu.dk/services/SignalP-6.0/ to enable SignalP predictions."
+        "If you already have a signalp-6.0*.tar.gz distribution archive, call ",
+        "install_signalp_from_tarball(tarball_path, distro) to install it directly; ",
+        "if you have an already-installed SignalP directory (e.g. from a prior native/Linux ",
+        "install), call install_signalp_from_windows(windows_signalp_dir, distro) instead. ",
+        "Download a licensed copy from https://services.healthtech.dtu.dk/services/SignalP-6.0/ ",
+        "if you don't have one yet."
       )
     }
 
@@ -1106,8 +1385,12 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu",
     } else {
       message(
         "SignalP was not installed (no apt package exists for it -- academic license). ",
-        "Call install_signalp_from_windows(windows_signalp_dir, distro) once you have downloaded ",
-        "a licensed copy from https://services.healthtech.dtu.dk/services/SignalP-6.0/ to enable SignalP predictions."
+        "If you already have a signalp-6.0*.tar.gz distribution archive, call ",
+        "install_signalp_from_tarball(tarball_path, distro) to install it directly; ",
+        "if you have an already-installed SignalP directory (e.g. from a prior native/Linux ",
+        "install), call install_signalp_from_windows(windows_signalp_dir, distro) instead. ",
+        "Download a licensed copy from https://services.healthtech.dtu.dk/services/SignalP-6.0/ ",
+        "if you don't have one yet."
       )
     }
 
@@ -1128,7 +1411,7 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu",
 
 #' Install required databases for CPAT, Pfam, and SignalP
 #' @export
-install_isoform_databases <- function(distro = "Ubuntu",
+install_isoform_databases <- function(distro = "Ubuntu-22.04",
                                       use_wsl = (.Platform$OS.type == "windows"),
                                       cpat_data_dir = NULL,
                                       pfam_db_dir = NULL,

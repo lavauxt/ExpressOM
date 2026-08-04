@@ -1050,7 +1050,8 @@ run_isoform_switch <- function(dte_results = NULL,
                                log_dir = NULL,
                                custom_transcript_id_map = NULL,
                                skip_fasta_filter = FALSE,
-                               test_engine = c("DEXSeq", "DRIMSeq", "satuRn")) {
+                               test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
+                               organism = NULL) {
 
   test_engine <- match.arg(test_engine)
 
@@ -1659,11 +1660,20 @@ run_isoform_switch <- function(dte_results = NULL,
         isoform_obj = isoform_obj,
         save_dir = save_dir,
         n_cpu = predictor_cpu,
-        log_dir = log_dir
+        log_dir = log_dir,
+        organism = organism
       )
 
       .ckpt_save(switch_list, "step3_predictors.rds")
     }
+  } else {
+    message(
+      "Skipping external isoform predictors (CPAT / SignalP / Pfam) because ",
+      "run_predictors = FALSE. No WSL commands will be run and no wsl_commands.log / ",
+      "wsl_debug.json will be written for this step. Pass run_predictors = TRUE ",
+      "(and use_wsl = TRUE if the tools live in WSL) to enable coding-potential, ",
+      "signal-peptide, and domain predictions."
+    )
   }
 
   if (isTRUE(run_predictors)) {
@@ -1750,7 +1760,8 @@ run_isoform_switch <- function(dte_results = NULL,
                                      isoform_obj,
                                      save_dir,
                                      n_cpu = NULL,
-                                     log_dir = NULL) {
+                                     log_dir = NULL,
+                                     organism = NULL) {
 
   is_windows <- .Platform$OS.type == "windows"
   via_wsl <- is_windows && isTRUE(use_wsl)
@@ -1937,15 +1948,32 @@ run_isoform_switch <- function(dte_results = NULL,
   }
 
   w2l <- function(p) {
-    if (is.null(p) || !nzchar(p)) return(p)
+    if (is.null(p) || length(p) == 0 || !any(nzchar(p))) return(p)
+    if (length(p) > 1) {
+      return(vapply(p, w2l, character(1), USE.NAMES = FALSE))
+    }
+    if (!nzchar(p)) return(p)
     if (is_windows && use_wsl) .to_wsl_path(p, wsl_distro) else p
   }
 
   syms <- isoform_obj$gene_map$symbol[!is.na(isoform_obj$gene_map$symbol)]
   first_sym <- if (length(syms) > 0) syms[1] else ""
 
-  organism <- if (grepl("^[A-Z]+$", first_sym) && nchar(first_sym) > 2) "Human" else "Mouse"
-  message("Organism detected for CPAT: ", organism)
+  organism_cpat <- if (!is.null(organism) && grepl("Homo sapiens", organism, ignore.case = TRUE)) {
+    "Human"
+  } else if (!is.null(organism) && grepl("Mus musculus", organism, ignore.case = TRUE)) {
+    "Mouse"
+  } else {
+    if (!is.null(organism)) {
+      message(
+        "  Organism '", organism, "' is not Human or Mouse (CPAT only ships prebuilt logit ",
+        "models for those two); falling back to a gene-symbol-casing guess for the CPAT model choice."
+      )
+    }
+    if (grepl("^[A-Z]+$", first_sym) && nchar(first_sym) > 2) "Human" else "Mouse"
+  }
+
+  message("Organism detected for CPAT: ", organism_cpat, if (!is.null(organism)) paste0(" (from EnsDb: ", organism, ")") else " (guessed from gene symbol casing -- pass organism = ... for a reliable result)")
 
   seq_dir <- file.path(out_dir, "sequences")
   dir.create(seq_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1998,7 +2026,19 @@ run_isoform_switch <- function(dte_results = NULL,
     )
   )
 
-  cpat_fa_local <- if (file.exists(nt_fa_local)) nt_fa_local else fasta_file
+  cpat_fa_local <- if (file.exists(nt_fa_local)) {
+    nt_fa_local
+  } else {
+    if (length(fasta_file) > 1) {
+      message(
+        "  fasta_file has ", length(fasta_file), " entries (e.g. combined cDNA + ncRNA ",
+        "references); CPAT takes a single FASTA, so only the first (", fasta_file[1],
+        ") will be used as a fallback. Sequence extraction from the SwitchList failed above, ",
+        "which is why this fallback path was needed at all -- CPAT results may be incomplete."
+      )
+    }
+    fasta_file[1]
+  }
   sp_fa_local <- if (file.exists(aa_fa_local)) aa_fa_local else NULL
   pfam_fa_local <- if (file.exists(aa_fa_local)) aa_fa_local else NULL
 
@@ -2009,28 +2049,33 @@ run_isoform_switch <- function(dte_results = NULL,
 
   message("\n--- CPAT (coding potential) ---")
 
-  hexamer_local <- system.file(
-    "extdata",
-    paste0(organism, "_Hexamer.tsv"),
-    package = "IsoformSwitchAnalyzeR"
-  )
-
-  logit_local <- .find_cpat_logit_model(
-    organism,
+  hexamer_local <- .find_cpat_hexamer(
+    organism_cpat,
     wsl_distro,
     via_wsl,
     active_conda,
     log_dir = log_dir
   )
 
-  if (!nzchar(hexamer_local) || !file.exists(hexamer_local)) {
-    message("  Hexamer table not found in ISA package. Skipping CPAT.")
-    .log_predictor_status("CPAT", "SKIPPED", "hexamer table not found in ISA package")
+  logit_local <- .find_cpat_logit_model(
+    organism_cpat,
+    wsl_distro,
+    via_wsl,
+    active_conda,
+    log_dir = log_dir
+  )
+
+  if (is.null(hexamer_local)) {
+    message(
+      "  Hexamer table (", organism_cpat, "_Hexamer.tsv) not found in $CPAT_DATA / $HOME/.cpat_data. ",
+      "Run install_isoform_databases() first. Skipping CPAT."
+    )
+    .log_predictor_status("CPAT", "SKIPPED", "hexamer table not found (run install_isoform_databases())")
   } else if (is.null(logit_local)) {
     message("  Logit model not found. Run install_isoform_databases() first. Skipping CPAT.")
     .log_predictor_status("CPAT", "SKIPPED", "logit model not found (run install_isoform_databases())")
   } else {
-    hexamer_w <- w2l(hexamer_local)
+    hexamer_w <- hexamer_local
     logit_w <- logit_local
     cpat_prefix_w <- paste0(out_dir_w, "/cpat_out")
     cpat_prefix_l <- file.path(out_dir, "cpat_out")

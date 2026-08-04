@@ -204,6 +204,13 @@ expressom <- function(count_type        = "salmon",
       verbose = TRUE,
       use_wsl = use_wsl
     )
+  } else if (run_isoform) {
+    message(
+      "run_predictors = FALSE: skipping debug_wsl() environment check and all ",
+      "external predictor (CPAT / SignalP / Pfam) steps for the isoform analysis. ",
+      "No WSL commands will be run, so no wsl_commands.log or wsl_debug.json will ",
+      "be produced. Pass run_predictors = TRUE to expressom() to enable this."
+    )
   }
 
   comp_name <- if (!is.null(level) && !is.null(base)) {
@@ -842,7 +849,8 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         log_dir        = file.path(out_dir, "Log", "Isoform"),
         custom_transcript_id_map = custom_transcript_id_map,
         skip_fasta_filter        = skip_fasta_filter,
-        test_engine              = isoform_test_engine
+        test_engine              = isoform_test_engine,
+        organism                 = get_organism_info(edb_obj)$name
       )
 
       if (!is.null(dte_res) && !is.null(dtu_res) && !is.null(isoform_import)) {
