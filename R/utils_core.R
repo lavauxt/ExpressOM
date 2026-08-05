@@ -201,6 +201,45 @@ clean_transcript_id <- function(x) {
   )
 }
 
+#' Safely relevel a condition factor to a specified base/reference level
+#'
+#' Centralizes the guard that used to live inline (and inconsistently) in
+#' both create_dds_object() and run_dte(): skips releveling -- with a
+#' message that says *why* -- instead of either (a) silently doing nothing
+#' while claiming "not provided" when a value actually was supplied but
+#' just didn't apply to this call, or (b) crashing with relevel()'s opaque
+#' "'ref' must be an existing level" error when `base` doesn't match any
+#' actual level of the factor (e.g. mismatched default level/base values
+#' for this dataset's condition labels).
+#'
+#' @param x a factor (or character vector, which will be coerced) to relevel
+#' @param base the level that should become the reference; NULL/"" skips releveling
+#' @param label a short name for the factor/column, used in messages only
+#' @return the releveled factor, or `x` unchanged (as a factor) if releveling was skipped
+#' @keywords internal
+.safe_relevel_condition <- function(x, base, label = "condition") {
+  if (!is.factor(x)) x <- as.factor(x)
+
+  if (is.null(base) || length(base) == 0 || !nzchar(as.character(base))) {
+    message(
+      "Note: no base level supplied for '", label,
+      "'; skipping releveling (using existing factor level order: ",
+      paste(levels(x), collapse = ", "), ")."
+    )
+    return(x)
+  }
+
+  if (!(as.character(base) %in% levels(x))) {
+    message(
+      "Note: base level '", base, "' not found among the levels of '", label,
+      "' (found: ", paste(levels(x), collapse = ", "), "); skipping releveling."
+    )
+    return(x)
+  }
+
+  relevel(x, ref = as.character(base))
+}
+
 #' Safely create a directory
 #' @keywords internal
 safe_dir <- function(path) {
@@ -216,7 +255,7 @@ safe_pdf <- function(path, expr, width = 10, height = 8) {
 
   tryCatch(
     {
-      pdf(path, width = width, height = height)
+      grDevices::cairo_pdf(path, width = width, height = height)
       eval(expr_sub, envir = caller_env)
       dev.off()
     },
@@ -676,6 +715,54 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
   height <- max(min_dim, min(height, max_dim))
 
   list(width = width, height = height)
+}
+
+#' Safely save a ggplot to file, capping runaway width/height and defaulting
+#' to a Cairo-backed PDF device so text renders correctly
+#'
+#' ggsave()'s default "pdf" device only *references* the base-14 PDF fonts
+#' by name instead of embedding glyphs; as soon as a plot uses a character
+#' outside those fonts' basic set, later PDF -> PNG rasterization (e.g. for
+#' report embedding via convert_pdf_to_png()) fails with "No display font
+#' for 'Symbol'" / "'ArialUnicode'" from Poppler/Ghostscript, and the plot
+#' silently never appears in the report. cairo_pdf() embeds real glyphs via
+#' Cairo/fontconfig, which avoids that class of error entirely.
+#' @keywords internal
+.safe_ggsave <- function(filename,
+                         plot,
+                         width,
+                         height,
+                         device = grDevices::cairo_pdf,
+                         ...) {
+
+  if (is.null(plot)) {
+    message("   -> Skipping plot save, plot object is NULL: ", basename(filename))
+    return(invisible(FALSE))
+  }
+
+  dims <- .cap_plot_dims(width, height, max_dim = 30, min_dim = 4)
+
+  tryCatch(
+    {
+      ggplot2::ggsave(
+        filename = filename,
+        plot = plot,
+        device = device,
+        width = dims$width,
+        height = dims$height,
+        ...
+      )
+
+      invisible(TRUE)
+    },
+    error = function(e) {
+      message(
+        "   -> Failed to save plot: ", basename(filename),
+        "\n      Error: ", conditionMessage(e)
+      )
+      invisible(FALSE)
+    }
+  )
 }
 
 #' Standardize a gene annotation table so downstream code can rely on

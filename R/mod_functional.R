@@ -685,56 +685,7 @@ run_fgsea_analysis <- function(res_tbl,
 
   gmt_list <- if (is.null(gmt_file)) list(NULL) else as.list(gmt_file)
 
-  .cap_dim <- function(x, min_dim = 3, max_dim = 30) {
-    x <- suppressWarnings(as.numeric(x))
-
-    if (length(x) == 0 || is.na(x)) {
-      x <- 8
-    }
-
-    max(min_dim, min(max_dim, x))
-  }
-
-  .safe_ggsave <- function(filename,
-                           plot,
-                           width,
-                           height,
-                           device = "pdf",
-                           ...) {
-
-    if (is.null(plot)) {
-      message("   -> Skipping plot save, plot object is NULL: ", basename(filename))
-      return(invisible(FALSE))
-    }
-
-    width <- .cap_dim(width, min_dim = 4, max_dim = 30)
-    height <- .cap_dim(height, min_dim = 4, max_dim = 30)
-
-    ok <- tryCatch(
-      {
-        ggplot2::ggsave(
-          filename = filename,
-          plot = plot,
-          device = device,
-          width = width,
-          height = height,
-          ...
-        )
-
-        TRUE
-      },
-      error = function(e) {
-        message(
-          "   -> Failed to save plot: ", basename(filename),
-          "\n      Error: ", conditionMessage(e)
-        )
-        FALSE
-      }
-    )
-
-    invisible(ok)
-  }
-
+  # .safe_ggsave() is defined once, package-level, in utils_core.R.
 
   for (gmt_item in gmt_list) {
 
@@ -1091,8 +1042,7 @@ run_fgsea_analysis <- function(res_tbl,
         ),
         plot = p_bar,
         width = 12,
-        height = height_adjustment,
-        device = "pdf"
+        height = height_adjustment
       )
 
     } else {
@@ -1155,7 +1105,6 @@ run_fgsea_analysis <- function(res_tbl,
                 paste0("GSEA_plot_", gmt_name, "_", clean_pid, ".pdf")
               ),
               plot = p,
-              device = "pdf",
               width = 8,
               height = 6
             )

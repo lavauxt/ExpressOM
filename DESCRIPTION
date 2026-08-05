@@ -14,14 +14,6 @@ Description: A fully modularized R package for bulk RNA-seq analysis, wrapping
 License: GPL-3
 Encoding: UTF-8
 LazyData: true
-Collate:
-    'utils_core.R'
-    'utils_isoform.R'
-    'mod_dge.R'
-    'mod_functional.R'
-    'mod_isoform.R'
-    'mod_plots.R'
-    'main.R'
 Imports:
     AnnotationDbi,
     BiocManager,

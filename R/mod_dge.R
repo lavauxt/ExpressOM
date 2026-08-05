@@ -248,11 +248,7 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
                                    colData = meta, design = design_formula)
   }
 
-  if (!is.null(level) && !is.null(base)) {
-    dds[[main_condition]] <- relevel(dds[[main_condition]], base)
-  } else {
-    message("Note: level/base not provided; skipping releveling.")
-  }
+  dds[[main_condition]] <- .safe_relevel_condition(dds[[main_condition]], base, label = main_condition)
 
   keep <- rowSums(DESeq2::counts(dds)) >= 1
   dds <- dds[keep, ]

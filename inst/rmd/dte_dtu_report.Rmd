@@ -64,14 +64,6 @@ suppressPackageStartupMessages({
   }
 }
 
-.plot_rel <- function(fname, subdir = NULL) {
-  if (is.null(subdir)) {
-    file.path("plots", fname)
-  } else {
-    file.path("plots", subdir, fname)
-  }
-}
-
 .plot_exists <- function(fname, subdir = NULL) {
   png_name <- sub("\\.pdf$", ".png", fname)
 
@@ -82,11 +74,8 @@ suppressPackageStartupMessages({
 .fig <- function(fname, cap = NULL, subdir = NULL) {
   png_name <- sub("\\.pdf$", ".png", fname)
 
-  png_abs <- .plot_abs(png_name, subdir)
-  pdf_abs <- .plot_abs(fname, subdir)
-
-  png_rel <- .plot_rel(png_name, subdir)
-  pdf_rel <- .plot_rel(fname, subdir)
+  png_abs <- normalizePath(.plot_abs(png_name, subdir), winslash = "/", mustWork = FALSE)
+  pdf_abs <- normalizePath(.plot_abs(fname, subdir), winslash = "/", mustWork = FALSE)
 
   caption <- if (is.null(cap) || !nzchar(cap)) {
     tools::file_path_sans_ext(basename(fname))
@@ -94,13 +83,22 @@ suppressPackageStartupMessages({
     cap
   }
 
+  # NOTE: this Rmd is knit from a temp copy outside the report's own
+  # directory, and html_document defaults to self_contained = TRUE, so
+  # pandoc embeds each image at *knit* time relative to that temp
+  # location -- a "plots/..." relative link (the old behavior here) never
+  # resolves and the image is silently dropped, even though the file
+  # exists on disk once the report is moved into place. Using the
+  # already-computed absolute path sidesteps that entirely and matches
+  # the pattern already used successfully in
+  # dge_regionreport_customcode.Rmd's .expressom_fig().
   if (file.exists(png_abs)) {
-    cat(sprintf("\n![%s](%s)\n\n", caption, .md_path(png_rel)))
+    cat(sprintf("\n![%s](%s)\n\n", caption, .md_path(png_abs)))
     return(invisible(TRUE))
   }
 
   if (file.exists(pdf_abs)) {
-    cat(sprintf("\n[Download PDF: %s](%s)\n\n", caption, .md_path(pdf_rel)))
+    cat(sprintf("\n[Download PDF: %s](%s)\n\n", caption, .md_path(pdf_abs)))
     return(invisible(TRUE))
   }
 
