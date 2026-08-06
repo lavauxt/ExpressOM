@@ -534,7 +534,7 @@ plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL, sp
 
     ok <- tryCatch(
       {
-        grDevices::cairo_pdf(pdf_path, width = 9, height = 6)
+        .pdf_device()(pdf_path, width = 9, height = 6)
 
         DEXSeq::plotDEXSeq(
           dxr,

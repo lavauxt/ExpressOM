@@ -296,9 +296,9 @@ debug_wsl <- function(distro = "Ubuntu-22.04",
     )
   }
 
-  tools_list <- c("cpat", "run_cpat.py", "signalp6", "hmmscan", "interproscan.sh")
+  tools_list <- c("cpat", "signalp6", "hmmscan", "interproscan.sh")
 
-  for (tool in tools_list) {
+  .check_tool <- function(tool) {
     found <- .wsl_tool_exists(
       tool,
       wsl_distro = distro,
@@ -319,10 +319,30 @@ debug_wsl <- function(distro = "Ubuntu-22.04",
       )
     }
 
+    found
+  }
+
+  for (tool in tools_list) {
+    found <- .check_tool(tool)
     results$tools[[tool]] <- found
 
     if (verbose) {
       message("   ", if (found) "\u2713" else "\u2717", "  ", tool)
+    }
+  }
+
+  if (isTRUE(results$tools[["cpat"]])) {
+    results$tools[["run_cpat.py"]] <- NA
+
+    if (verbose) {
+      message("   -  run_cpat.py (skipped, not needed: 'cpat' already found)")
+    }
+  } else {
+    found <- .check_tool("run_cpat.py")
+    results$tools[["run_cpat.py"]] <- found
+
+    if (verbose) {
+      message("   ", if (found) "\u2713" else "\u2717", "  run_cpat.py")
     }
   }
 

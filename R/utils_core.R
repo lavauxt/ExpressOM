@@ -247,15 +247,47 @@ safe_dir <- function(path) {
   invisible(path)
 }
 
+#' Whether this R build has Cairo support compiled in
+#'
+#' cairo_pdf()/cairo_ps() are optional at R's build time (see
+#' ?grDevices::cairo) -- R's own docs say packages should check
+#' capabilities("cairo") before relying on them. This is common enough to
+#' hit in practice on native-Windows R (Cairo not compiled in, or a cairo
+#' DLL issue) that a hard dependency on cairo_pdf() would silently produce
+#' zero output files on some machines instead of merely mis-rendering a
+#' few special characters. Checked once and cached: capabilities() doesn't
+#' change during a session, and this is consulted from many call sites.
+#' @keywords internal
+.cairo_pdf_available <- local({
+  cached <- NULL
+  function() {
+    if (is.null(cached)) cached <<- isTRUE(capabilities("cairo"))
+    cached
+  }
+})
+
+#' The best available vector PDF device function for this R session
+#'
+#' cairo_pdf() when available (embeds real glyphs, avoiding "No display
+#' font for 'Symbol'/'ArialUnicode'" when the PDF is later rasterized to
+#' PNG for report embedding); the base pdf() device otherwise, so plots
+#' still get saved -- with the original font-substitution risk, but that
+#' is strictly better than not being saved at all.
+#' @keywords internal
+.pdf_device <- function() {
+  if (.cairo_pdf_available()) grDevices::cairo_pdf else grDevices::pdf
+}
+
 #' Safely save a ggplot or base R plot to PDF
 #' @keywords internal
 safe_pdf <- function(path, expr, width = 10, height = 8) {
   expr_sub <- substitute(expr)
   caller_env <- parent.frame()
+  dev_fun <- .pdf_device()
 
   tryCatch(
     {
-      grDevices::cairo_pdf(path, width = width, height = height)
+      dev_fun(path, width = width, height = height)
       eval(expr_sub, envir = caller_env)
       dev.off()
     },
@@ -718,7 +750,7 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
 }
 
 #' Safely save a ggplot to file, capping runaway width/height and defaulting
-#' to a Cairo-backed PDF device so text renders correctly
+#' to the best available PDF device so text renders correctly
 #'
 #' ggsave()'s default "pdf" device only *references* the base-14 PDF fonts
 #' by name instead of embedding glyphs; as soon as a plot uses a character
@@ -726,13 +758,16 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
 #' report embedding via convert_pdf_to_png()) fails with "No display font
 #' for 'Symbol'" / "'ArialUnicode'" from Poppler/Ghostscript, and the plot
 #' silently never appears in the report. cairo_pdf() embeds real glyphs via
-#' Cairo/fontconfig, which avoids that class of error entirely.
+#' Cairo/fontconfig, which avoids that class of error entirely -- but it
+#' requires Cairo support compiled into R (see .pdf_device()), so the
+#' default here falls back to plain pdf() rather than hard-failing when
+#' Cairo isn't available.
 #' @keywords internal
 .safe_ggsave <- function(filename,
                          plot,
                          width,
                          height,
-                         device = grDevices::cairo_pdf,
+                         device = .pdf_device(),
                          ...) {
 
   if (is.null(plot)) {

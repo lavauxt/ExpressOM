@@ -189,13 +189,16 @@
                     "loci can leave canonical pathway genes without a valid Entrez ID.)")
           }
         }
-        for (ext in c(".xml", ".png")) {
-          f <- paste0(pid, ext)
-          if (file.exists(f)) file.remove(f)
-        }
         TRUE
       })
     }, label = paste("KEGG pathview", pid))
+
+    withr::with_dir(dir_kegg, {
+      for (ext in c(".xml", ".png")) {
+        f <- paste0(pid, ext)
+        if (file.exists(f)) file.remove(f)
+      }
+    })
 
     devs_after <- grDevices::dev.list()
     stray <- setdiff(devs_after, devs_before)

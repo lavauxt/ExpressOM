@@ -122,7 +122,7 @@ run_isoform_pca <- function(isoform_obj,
     ntop = pca_ntop
   )
 
-  grDevices::cairo_pdf(file.path(plot_dir, paste0("PCA_transcripts_", comp_label, ".pdf")), width = 9, height = 7)
+  .pdf_device()(file.path(plot_dir, paste0("PCA_transcripts_", comp_label, ".pdf")), width = 9, height = 7)
   print(res$plot)
   dev.off()
 

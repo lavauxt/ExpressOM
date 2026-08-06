@@ -103,7 +103,7 @@ run_eda <- function(dds, edb, out_dir, level, base,
     gene_info_orig <- res_orig$gene_info
   }
 
-  grDevices::cairo_pdf(file.path(plot_dir, paste0("PCA_", comp_label, ".pdf")), width = 9, height = 7)
+  .pdf_device()(file.path(plot_dir, paste0("PCA_", comp_label, ".pdf")), width = 9, height = 7)
   print(p_orig)
   dev.off()
 
@@ -140,7 +140,7 @@ run_eda <- function(dds, edb, out_dir, level, base,
                                      ntop = pca_ntop)
         p_corr <- res_corr$plot
         gene_info_corr <- res_corr$gene_info
-        grDevices::cairo_pdf(file.path(plot_dir, paste0("PCA_BatchCorrected_", comp_label, ".pdf")), width = 9, height = 7)
+        .pdf_device()(file.path(plot_dir, paste0("PCA_BatchCorrected_", comp_label, ".pdf")), width = 9, height = 7)
         print(p_corr)
         dev.off()
         if (!is.null(gene_info_corr) && nrow(gene_info_corr) > 0) {
@@ -460,7 +460,7 @@ plot_top_genes_heatmap <- function(dds, results_data, condition_col, level, base
 
   col_pal <- colorRampPalette(c("navy", "white", "firebrick3"))(50)
 
-  grDevices::cairo_pdf(file.path(plot_dir, paste0("TopGenes_Heatmap_", level, "_vs_", base, ".pdf")),
+  .pdf_device()(file.path(plot_dir, paste0("TopGenes_Heatmap_", level, "_vs_", base, ".pdf")),
       width = 10, height = max(6, nrow(mat_z) * 0.3))
   pheatmap::pheatmap(mat_z,
                      annotation_col = annotation_col,
@@ -534,7 +534,7 @@ plot_sample_zscore <- function(dds, selected_genes, condition_col, level, base, 
     ggplot2::labs(title = "Sample Expression Heatmap", x = NULL, y = NULL)
   calc_height <- max(4, length(present_genes) * 0.4)
   calc_width  <- max(5, length(valid_samples) * 0.6 + 2)
-  ggplot2::ggsave(filename = pdf_path, plot = p, width = calc_width, height = calc_height, device = grDevices::cairo_pdf)
+  ggplot2::ggsave(filename = pdf_path, plot = p, width = calc_width, height = calc_height, device = .pdf_device())
   message("   -> Sample Heatmap successfully exported to: ", pdf_path)
 }
 
@@ -574,7 +574,7 @@ plot_l2fc_heatmap <- function(dds, selected_genes, condition_col, level, base, p
     ) +
     ggplot2::labs(title = "Log2 Fold Change Heatmap", x = NULL, y = NULL)
   calc_height <- max(4, length(present_genes) * 0.4)
-  ggplot2::ggsave(filename = pdf_path, plot = p, width = 4, height = calc_height, device = grDevices::cairo_pdf)
+  ggplot2::ggsave(filename = pdf_path, plot = p, width = 4, height = calc_height, device = .pdf_device())
   message("   -> L2FC Heatmap successfully exported to: ", pdf_path)
 }
 
@@ -742,7 +742,7 @@ plot_geneset_zscore_avg <- function(dds, gene_sets, condition_col, level, base,
   } else {
     width <- 4.5 * length(set_results) + 1
   }
-  ggplot2::ggsave(filename = pdf_path, plot = p, width = width, height = 5, device = grDevices::cairo_pdf)
+  ggplot2::ggsave(filename = pdf_path, plot = p, width = width, height = 5, device = .pdf_device())
   message("   -> Gene set average Z‑score plot saved to: ", pdf_path)
   return(invisible(p))
 }
@@ -880,7 +880,7 @@ plot_gene_zscore_individual <- function(dds, gene_sets, condition_col, level, ba
 
   plot_width <- max(6, 0.9 * length(present_genes) + 2)
   ggplot2::ggsave(filename = pdf_path, plot = p,
-                  width = plot_width, height = 5, device = grDevices::cairo_pdf, limitsize = FALSE)
+                  width = plot_width, height = 5, device = .pdf_device(), limitsize = FALSE)
   message("   -> Individual gene Z‑score plot saved to: ", pdf_path)
   return(invisible(p))
 }

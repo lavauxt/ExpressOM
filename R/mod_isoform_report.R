@@ -504,7 +504,7 @@ generate_dte_dtu_report <- function(dte_results,
 
       ok <- tryCatch(
         {
-          grDevices::cairo_pdf(pdf_path, width = width, height = height)
+          .pdf_device()(pdf_path, width = width, height = height)
 
           res <- do.call(isa_fn, plot_args)
 

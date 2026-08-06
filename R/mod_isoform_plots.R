@@ -117,7 +117,7 @@ plot_isoform_switch_summary <- function(switch_list,
 
       ok <- tryCatch(
         {
-          grDevices::cairo_pdf(pdf_path, onefile = FALSE, width = 11, height = 9)
+          .pdf_device()(pdf_path, onefile = FALSE, width = 11, height = 9)
 
           IsoformSwitchAnalyzeR::switchPlot(
             switch_list,
@@ -342,7 +342,7 @@ plot_isoform_sashimi <- function(switch_list, gene, level, base, plot_dir, min_i
     plot = p,
     width = 11,
     height = 5,
-    device = grDevices::cairo_pdf
+    device = .pdf_device()
   )
 
   message("   -> Isoform sashimi-style junction plot saved to: ", pdf_path)
@@ -464,7 +464,7 @@ plot_exon_usage_comparison <- function(switch_list, gene, level, base, plot_dir)
     plot = p,
     width = max(7, 0.35 * nrow(bin_summary) + 2),
     height = 5,
-    device = grDevices::cairo_pdf
+    device = .pdf_device()
   )
 
   message("   -> Exon-bin expression comparison plot saved to: ", pdf_path)
