@@ -702,16 +702,41 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
       .dq(url)
     ))
 
-    if (isTRUE(status == 0L)) {
+    # wget's exit code only reflects that the HTTP transaction completed --
+    # it says nothing about whether the bytes it saved are the file we
+    # asked for. SourceForge's "/files/.../download" alias can resolve to
+    # an HTML mirror-selection or error page with an HTTP 200 status, which
+    # wget then writes to `dest` and happily reports as success. Confirm
+    # the saved file is plausible data (not tiny, not an HTML page) before
+    # trusting it -- this is what was letting an HTML page silently take
+    # the place of Human_Hexamer.tsv and crash CPAT later.
+    content_ok <- isTRUE(status == 0L) && isTRUE(.run(sprintf(
+      'sz=$(wc -c < %1$s 2>/dev/null || echo 0); [ "$sz" -ge 100 ] && ! head -c 512 %1$s | grep -qi "<!doctype html\\|<html[ >]"',
+      .dq(dest)
+    )) == 0L)
+
+    if (content_ok) {
       message("  \u2713 Downloaded: ", fname)
     } else {
       cpat_ok <- FALSE
-      message(
-        "  \u2717 FAILED to download ", fname, " (exit code ", status,
-        "). Check network access to sourceforge.net inside the execution environment, ",
-        "or download it manually from https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/ ",
-        "and place it in ", cpat_data_dir
-      )
+
+      if (isTRUE(status == 0L)) {
+        .run(sprintf("rm -f %s", .dq(dest)))
+        message(
+          "  \u2717 Downloaded ", fname, " but it isn't the expected data file (empty, or an HTML ",
+          "page -- SourceForge's download link served a mirror-selection/error page instead of the ",
+          "file, which happens intermittently). Download it manually from ",
+          "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/ and place it in ",
+          cpat_data_dir
+        )
+      } else {
+        message(
+          "  \u2717 FAILED to download ", fname, " (exit code ", status,
+          "). Check network access to sourceforge.net inside the execution environment, ",
+          "or download it manually from https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/ ",
+          "and place it in ", cpat_data_dir
+        )
+      }
     }
   }
 

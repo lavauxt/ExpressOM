@@ -1,6 +1,173 @@
 # mod_isoform_predictors.R -- external predictor tools for isoform switch analysis
 # (CPAT, SignalP, DeepTMHMM, Pfam/hmmscan/InterProScan), run via WSL
 
+# ---------------------------------------------------------------------------
+# Pfam result-format converters
+#
+# IsoformSwitchAnalyzeR::analyzePFAM() only parses the pfam_scan.pl 16-column
+# layout (seq_id, alignment_start/end, envelope_start/end, hmm_acc, hmm_name,
+# type, hmm_start/end, hmm_length, bit_score, E_value, significant, clan,
+# [residue]) -- confirmed against the current source (R/analyze_external_
+# sequence_analysis.R): it hard-checks that column 6 matches '^PF|^PB' and
+# that column 15 (or 16) contains at least one '^CL...' clan accession,
+# stopping with "not recogniced as a pfam output" otherwise. Neither
+# interproscan.sh's TSV output nor hmmscan's --domtblout use that layout, so
+# both need to be remapped before analyzePFAM() will accept them. There is
+# also no analyzeInterProScan() anywhere in IsoformSwitchAnalyzeR (checked
+# the NAMESPACE and full R/ source directly) -- calling it always errored
+# with "could not find function", regardless of whether InterProScan itself
+# ran fine, which is why this path funnels into analyzePFAM() too.
+#
+# Caveat: neither source gives us real Pfam clan membership (that's a
+# separate Pfam-A.clans.tsv mapping we don't fetch), so clan is filled with
+# a sentinel ("CL_unknown") that only exists to satisfy the '^CL' style
+# check -- it is not a real clan id. hmmscan's domtblout carries every other
+# column (coordinates, hmm length, bit score, E-value) through exactly;
+# InterProScan's TSV doesn't report hmm-model coordinates, hmm length, or
+# bit score at all, so those are left NA for that path. If exact domain
+# boundaries/scores matter, prefer the hmmscan path.
+# ---------------------------------------------------------------------------
+
+#' @keywords internal
+.write_pfam_scan_table <- function(df16, dest_path) {
+  header <- paste(
+    "# <seq id> <alignment start> <alignment end> <envelope start> <envelope end>",
+    "<hmm acc> <hmm name> <type> <hmm start> <hmm end> <hmm length> <bit score>",
+    "<E-value> <significance> <clan> <predicted_active_site_residues>"
+  )
+
+  con <- file(dest_path, "wb")
+  writeLines(header, con, sep = "\n")
+  close(con)
+
+  utils::write.table(
+    df16,
+    dest_path,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE,
+    col.names = FALSE,
+    na = "NA",
+    append = TRUE
+  )
+
+  dest_path
+}
+
+#' Convert an InterProScan '-f tsv' (Pfam-filtered) file into pfam_scan.pl format
+#' @keywords internal
+.pfam_from_interproscan_tsv <- function(ips_tsv_path, dest_path) {
+  if (!file.exists(ips_tsv_path) || file.info(ips_tsv_path)$size == 0) return(NULL)
+
+  raw <- tryCatch(
+    utils::read.delim(
+      ips_tsv_path,
+      header = FALSE,
+      sep = "\t",
+      stringsAsFactors = FALSE,
+      fill = TRUE,
+      quote = "",
+      col.names = paste0("V", 1:15)
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(raw) || nrow(raw) == 0) return(NULL)
+
+  # -appl Pfam already restricts the run to Pfam, and status "T" = successful
+  # match; filter on both defensively rather than assuming.
+  keep <- raw$V4 == "Pfam" & grepl("^PF|^PB", raw$V5) & toupper(raw$V10) == "T"
+  raw <- raw[keep, , drop = FALSE]
+  if (nrow(raw) == 0) return(NULL)
+
+  clean_text <- function(x) {
+    x <- gsub("[\t\r\n]+", " ", x)
+    trimws(x)
+  }
+
+  hmm_name <- clean_text(raw$V6)
+  hmm_name[!nzchar(hmm_name)] <- raw$V5[!nzchar(hmm_name)]
+
+  out <- data.frame(
+    V1  = raw$V1,
+    V2  = raw$V7,
+    V3  = raw$V8,
+    V4  = raw$V7,
+    V5  = raw$V8,
+    V6  = raw$V5,
+    V7  = hmm_name,
+    V8  = "Domain",
+    V9  = NA_character_,
+    V10 = NA_character_,
+    V11 = NA_character_,
+    V12 = NA_character_,
+    V13 = raw$V9,
+    V14 = 1,
+    V15 = "CL_unknown",
+    V16 = "",
+    stringsAsFactors = FALSE
+  )
+
+  .write_pfam_scan_table(out, dest_path)
+}
+
+#' Convert hmmscan '--domtblout' output into pfam_scan.pl format
+#' @keywords internal
+.pfam_from_hmmscan_domtblout <- function(domtblout_path, dest_path) {
+  if (!file.exists(domtblout_path) || file.info(domtblout_path)$size == 0) return(NULL)
+
+  lines <- readLines(domtblout_path, warn = FALSE)
+  lines <- lines[!grepl("^#", lines)]
+  lines <- lines[nzchar(trimws(lines))]
+  if (length(lines) == 0) return(NULL)
+
+  # domtblout is whitespace-delimited with 23 fixed columns; column 23
+  # ("description of target") can itself contain spaces, so cap the split.
+  fields <- strsplit(trimws(lines), "\\s+")
+  fields <- lapply(fields, function(f) {
+    if (length(f) > 22) f[1:22] else f
+  })
+
+  ok <- vapply(fields, length, integer(1)) == 22
+  fields <- fields[ok]
+  if (length(fields) == 0) return(NULL)
+
+  raw <- as.data.frame(
+    do.call(rbind, fields),
+    stringsAsFactors = FALSE
+  )
+  colnames(raw) <- c(
+    "target_name", "target_acc", "tlen", "query_name", "query_acc", "qlen",
+    "seq_evalue", "seq_score", "seq_bias", "dom_num", "dom_of",
+    "c_evalue", "i_evalue", "dom_score", "dom_bias",
+    "hmm_from", "hmm_to", "ali_from", "ali_to", "env_from", "env_to", "acc"
+  )
+
+  raw <- raw[grepl("^PF|^PB", raw$target_acc), , drop = FALSE]
+  if (nrow(raw) == 0) return(NULL)
+
+  out <- data.frame(
+    V1  = raw$query_name,
+    V2  = raw$ali_from,
+    V3  = raw$ali_to,
+    V4  = raw$env_from,
+    V5  = raw$env_to,
+    V6  = raw$target_acc,
+    V7  = raw$target_name,
+    V8  = "Domain",
+    V9  = raw$hmm_from,
+    V10 = raw$hmm_to,
+    V11 = raw$tlen,
+    V12 = raw$dom_score,
+    V13 = raw$i_evalue,
+    V14 = 1,
+    V15 = "CL_unknown",
+    V16 = "",
+    stringsAsFactors = FALSE
+  )
+
+  .write_pfam_scan_table(out, dest_path)
+}
 
 .run_external_predictors <- function(switch_list,
                                      fasta_file,
@@ -348,14 +515,36 @@
     } else {
       cpat_exe <- if (has_cpat3) "cpat" else "run_cpat.py"
 
-      cpat_cmd <- sprintf(
-        "%s -g %s -x %s -d %s -o %s",
-        cpat_exe,
-        shQuote(cpat_fa_w, type = "sh"),
-        shQuote(hexamer_w, type = "sh"),
-        shQuote(logit_w, type = "sh"),
-        shQuote(cpat_prefix_w, type = "sh")
-      )
+      # CPAT's --log-file defaults to a bare "CPAT_run_info.log" (see `cpat
+      # -h`), written relative to the shell's cwd at invocation time -- NOT
+      # next to the -o outputs. Since that cwd is wherever WSL starts the
+      # script (not out_dir), the log was landing outside the results
+      # folder entirely. Pointing it at out_dir_w explicitly keeps it next
+      # to cpat_out.* like every other tool's log here. Only cpat (3.x)
+      # is confirmed to support this flag, so it's gated to that binary --
+      # the legacy run_cpat.py (2.x) command below is left as-is.
+      cpat_log_w <- paste0(out_dir_w, "/CPAT_run_info.log")
+
+      cpat_cmd <- if (has_cpat3) {
+        sprintf(
+          "%s -g %s -x %s -d %s -o %s --log-file %s",
+          cpat_exe,
+          shQuote(cpat_fa_w, type = "sh"),
+          shQuote(hexamer_w, type = "sh"),
+          shQuote(logit_w, type = "sh"),
+          shQuote(cpat_prefix_w, type = "sh"),
+          shQuote(cpat_log_w, type = "sh")
+        )
+      } else {
+        sprintf(
+          "%s -g %s -x %s -d %s -o %s",
+          cpat_exe,
+          shQuote(cpat_fa_w, type = "sh"),
+          shQuote(hexamer_w, type = "sh"),
+          shQuote(logit_w, type = "sh"),
+          shQuote(cpat_prefix_w, type = "sh")
+        )
+      }
 
       message("  Running: ", cpat_exe)
       cpat_status <- run_tool(cpat_cmd, tool_name = "CPAT")
@@ -368,6 +557,7 @@
 
       if (cpat_status == 0L && file.exists(cpat_result)) {
         cpat_import_ok <- FALSE
+        cpat_err <- NULL
 
         switch_list <- tryCatch(
           {
@@ -383,6 +573,7 @@
             sl
           },
           error = function(e) {
+            cpat_err <<- e$message
             message("  analyzeCPAT(): ", e$message)
             switch_list
           }
@@ -393,7 +584,7 @@
           .log_predictor_status("CPAT", "OK", paste("result file:", cpat_result))
         } else {
           message("  CPAT import failed; coding-potential annotation NOT added to switch_list.")
-          .log_predictor_status("CPAT", "IMPORT_FAILED", "analyzeCPAT() errored")
+          .log_predictor_status("CPAT", "IMPORT_FAILED", paste("analyzeCPAT() errored:", cpat_err))
         }
       } else {
         message("  CPAT failed or result file not found (", basename(cpat_result), "). Skipping.")
@@ -451,10 +642,15 @@
 
     if (!is.null(sp_result_file)) {
       sp_import_ok <- FALSE
+      sp_err <- NULL
 
       switch_list <- tryCatch(
         {
-          sl <- IsoformSwitchAnalyzeR::analyzeSignalIP(
+          # NB: the function is analyzeSignalP() (no "I") -- analyzeSignalIP()
+          # has never existed as an exported IsoformSwitchAnalyzeR function;
+          # calling it always errored with "could not find function",
+          # independent of whether SignalP itself ran fine.
+          sl <- IsoformSwitchAnalyzeR::analyzeSignalP(
             switchAnalyzeRlist = switch_list,
             pathToSignalPresultFile = sp_result_file,
             quiet = FALSE
@@ -464,7 +660,8 @@
           sl
         },
         error = function(e) {
-          message("  analyzeSignalIP(): ", e$message)
+          sp_err <<- e$message
+          message("  analyzeSignalP(): ", e$message)
           switch_list
         }
       )
@@ -474,7 +671,7 @@
         .log_predictor_status("SignalP", "OK", paste("result file:", sp_result_file))
       } else {
         message("  SignalP import failed; signal-peptide annotation NOT added to switch_list.")
-        .log_predictor_status("SignalP", "IMPORT_FAILED", "analyzeSignalIP() errored")
+        .log_predictor_status("SignalP", "IMPORT_FAILED", paste("analyzeSignalP() errored:", sp_err))
       }
     } else if (sp_attempted && !is.na(sp_status) && sp_status != 0L) {
       message("  SignalP execution failed (exit ", sp_status, "). Skipping.")
@@ -512,6 +709,7 @@
 
     if (tmhmm_status == 0L && file.exists(tmhmm_gff)) {
       tmhmm_import_ok <- FALSE
+      tmhmm_err <- NULL
 
       switch_list <- tryCatch(
         {
@@ -526,6 +724,7 @@
           sl
         },
         error = function(e) {
+          tmhmm_err <<- e$message
           message("  analyzeDeepTMHMM(): ", e$message)
           switch_list
         }
@@ -536,7 +735,7 @@
         .log_predictor_status("DeepTMHMM", "OK", paste("result file:", tmhmm_gff))
       } else {
         message("  DeepTMHMM import failed; topology annotation NOT added to switch_list.")
-        .log_predictor_status("DeepTMHMM", "IMPORT_FAILED", "analyzeDeepTMHMM() errored")
+        .log_predictor_status("DeepTMHMM", "IMPORT_FAILED", paste("analyzeDeepTMHMM() errored:", tmhmm_err))
       }
     } else {
       message("  DeepTMHMM failed or result file not found (", tmhmm_gff, "). Skipping.")
@@ -557,54 +756,78 @@
     pfam_done <- FALSE
 
     if (tool_ok("interproscan.sh")) {
-      iprscan_xml_l <- file.path(out_dir, "interproscan.xml")
-      iprscan_xml_w <- w2l(iprscan_xml_l)
+      # TSV instead of XML: IsoformSwitchAnalyzeR has no analyzeInterProScan()
+      # (verified against the current NAMESPACE / R source), so the output
+      # has to be reformatted into pfam_scan.pl's layout ourselves before
+      # analyzePFAM() will read it -- TSV is a plain, documented column
+      # format we can parse directly, XML would need an extra dependency
+      # (xml2) for no benefit here.
+      iprscan_tsv_l <- file.path(out_dir, "interproscan.tsv")
+      iprscan_tsv_w <- w2l(iprscan_tsv_l)
 
       ips_cmd <- sprintf(
-        "interproscan.sh -i %s -f XML -o %s -dp -appl Pfam -goterms -iprlookup -cpu %d",
+        "interproscan.sh -i %s -f tsv -o %s -dp -appl Pfam -goterms -iprlookup -cpu %d",
         shQuote(pfam_fa_w, type = "sh"),
-        shQuote(iprscan_xml_w, type = "sh"),
+        shQuote(iprscan_tsv_w, type = "sh"),
         n_cpu
       )
 
       message("  Running InterProScan...")
       ips_status <- run_tool(ips_cmd, tool_name = "Pfam_InterProScan")
 
-      if (ips_status == 0L && file.exists(iprscan_xml_l)) {
+      if (ips_status == 0L && file.exists(iprscan_tsv_l)) {
         ips_import_ok <- FALSE
+        ips_err <- NULL
 
-        switch_list <- tryCatch(
-          {
-            sl <- IsoformSwitchAnalyzeR::analyzeInterProScan(
-              switchAnalyzeRlist = switch_list,
-              pathToInterProScanResultFile = iprscan_xml_l,
-              quiet = FALSE
-            )
+        ips_pfam_l <- file.path(out_dir, "interproscan_as_pfam_scan.txt")
+        ips_converted <- .pfam_from_interproscan_tsv(iprscan_tsv_l, ips_pfam_l)
 
-            ips_import_ok <- TRUE
-            sl
-          },
-          error = function(e) {
-            message("  analyzeInterProScan(): ", e$message)
-            switch_list
-          }
-        )
-
-        pfam_done <- ips_import_ok
-
-        if (ips_import_ok) {
-          message("  InterProScan Pfam results imported successfully.")
-          .log_predictor_status("Pfam-InterProScan", "OK", paste("result file:", iprscan_xml_l))
+        if (is.null(ips_converted)) {
+          message("  No Pfam hits could be parsed from InterProScan's output; trying hmmscan fallback...")
+          .log_predictor_status(
+            "Pfam-InterProScan",
+            "IMPORT_FAILED",
+            paste("no Pfam rows parsed from", iprscan_tsv_l)
+          )
         } else {
-          message("  InterProScan import failed; trying hmmscan fallback...")
-          .log_predictor_status("Pfam-InterProScan", "IMPORT_FAILED", "analyzeInterProScan() errored")
+          switch_list <- tryCatch(
+            {
+              sl <- IsoformSwitchAnalyzeR::analyzePFAM(
+                switchAnalyzeRlist = switch_list,
+                pathToPFAMresultFile = ips_converted,
+                quiet = FALSE
+              )
+
+              ips_import_ok <- TRUE
+              sl
+            },
+            error = function(e) {
+              ips_err <<- e$message
+              message("  analyzePFAM() [from InterProScan]: ", e$message)
+              switch_list
+            }
+          )
+
+          pfam_done <- ips_import_ok
+
+          if (ips_import_ok) {
+            message("  InterProScan Pfam results imported successfully.")
+            .log_predictor_status("Pfam-InterProScan", "OK", paste("result file:", ips_converted))
+          } else {
+            message("  InterProScan import failed; trying hmmscan fallback...")
+            .log_predictor_status(
+              "Pfam-InterProScan",
+              "IMPORT_FAILED",
+              paste("analyzePFAM() errored:", ips_err)
+            )
+          }
         }
       } else {
         message("  InterProScan failed (exit ", ips_status, "). Trying hmmscan fallback...")
         .log_predictor_status(
           "Pfam-InterProScan",
           "FAILED",
-          sprintf("exit code %s, result file exists: %s", ips_status, file.exists(iprscan_xml_l))
+          sprintf("exit code %s, result file exists: %s", ips_status, file.exists(iprscan_tsv_l))
         )
       }
     } else {
@@ -638,30 +861,52 @@
 
           if (hm_status == 0L && file.exists(pfam_tbl_l)) {
             hm_import_ok <- FALSE
+            hm_err <- NULL
 
-            switch_list <- tryCatch(
-              {
-                sl <- IsoformSwitchAnalyzeR::analyzePFAM(
-                  switchAnalyzeRlist = switch_list,
-                  pathToPFAMresultFile = pfam_tbl_l,
-                  quiet = FALSE
-                )
+            # hmmscan's --domtblout is a different, incompatible column
+            # layout from what analyzePFAM() parses (pfam_scan.pl's 16
+            # columns) -- feeding it in raw is what was erroring here even
+            # though hmmscan itself succeeded. Convert first.
+            hm_pfam_l <- file.path(out_dir, "hmmscan_as_pfam_scan.txt")
+            hm_converted <- .pfam_from_hmmscan_domtblout(pfam_tbl_l, hm_pfam_l)
 
-                hm_import_ok <- TRUE
-                sl
-              },
-              error = function(e) {
-                message("  analyzePFAM(): ", e$message)
-                switch_list
-              }
-            )
-
-            if (hm_import_ok) {
-              message("  hmmscan Pfam results imported successfully.")
-              .log_predictor_status("Pfam-hmmscan", "OK", paste("result file:", pfam_tbl_l))
+            if (is.null(hm_converted)) {
+              message("  No Pfam hits could be parsed from hmmscan's domtblout output.")
+              .log_predictor_status(
+                "Pfam-hmmscan",
+                "IMPORT_FAILED",
+                paste("no Pfam rows parsed from", pfam_tbl_l)
+              )
             } else {
-              message("  hmmscan import failed; Pfam domain annotation NOT added to switch_list.")
-              .log_predictor_status("Pfam-hmmscan", "IMPORT_FAILED", "analyzePFAM() errored")
+              switch_list <- tryCatch(
+                {
+                  sl <- IsoformSwitchAnalyzeR::analyzePFAM(
+                    switchAnalyzeRlist = switch_list,
+                    pathToPFAMresultFile = hm_converted,
+                    quiet = FALSE
+                  )
+
+                  hm_import_ok <- TRUE
+                  sl
+                },
+                error = function(e) {
+                  hm_err <<- e$message
+                  message("  analyzePFAM(): ", e$message)
+                  switch_list
+                }
+              )
+
+              if (hm_import_ok) {
+                message("  hmmscan Pfam results imported successfully.")
+                .log_predictor_status("Pfam-hmmscan", "OK", paste("result file:", hm_converted))
+              } else {
+                message("  hmmscan import failed; Pfam domain annotation NOT added to switch_list.")
+                .log_predictor_status(
+                  "Pfam-hmmscan",
+                  "IMPORT_FAILED",
+                  paste("analyzePFAM() errored:", hm_err)
+                )
+              }
             }
           } else {
             message("  hmmscan failed (exit ", hm_status, "). Skipping Pfam.")

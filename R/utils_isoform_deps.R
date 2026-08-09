@@ -29,6 +29,40 @@
   if (length(result) > 0) result[1] else NULL
 }
 
+#' Cheap sanity check that a local file is plausible downloaded data and not
+#' an HTML error/mirror-selection page saved in its place (see the wget
+#' validation in install_isoform_databases() for how that happens). Reads
+#' raw bytes rather than text so it's safe to call on the binary
+#' *_logitModel.RData files too.
+#' @keywords internal
+.data_file_looks_valid <- function(path, min_size = 100L) {
+  if (!file.exists(path)) return(FALSE)
+
+  sz <- file.info(path)$size
+  if (is.na(sz) || sz < min_size) return(FALSE)
+
+  con <- file(path, "rb")
+  on.exit(close(con), add = TRUE)
+  head_raw <- tryCatch(readBin(con, "raw", n = 512L), error = function(e) raw(0))
+  if (length(head_raw) == 0) return(FALSE)
+
+  hay <- as.integer(head_raw)
+  n <- length(hay)
+
+  contains_bytes <- function(needle) {
+    nb <- as.integer(charToRaw(needle))
+    m <- length(nb)
+    if (n < m) return(FALSE)
+    for (i in seq_len(n - m + 1)) {
+      if (identical(hay[i:(i + m - 1)], nb)) return(TRUE)
+    }
+    FALSE
+  }
+
+  !(contains_bytes("<!DOCTYPE") || contains_bytes("<!doctype") ||
+    contains_bytes("<html") || contains_bytes("<HTML"))
+}
+
 #' Locate a CPAT data file (hexamer table or logit model) for a given organism
 #'
 #' CPAT's prebuilt hexamer/logit files are not bundled with the
@@ -46,7 +80,7 @@
                                  log_dir = NULL) {
   isa_local <- system.file("extdata", fname, package = "IsoformSwitchAnalyzeR")
 
-  if (nzchar(isa_local) && file.exists(isa_local)) {
+  if (nzchar(isa_local) && .data_file_looks_valid(isa_local)) {
     if (.Platform$OS.type == "windows" && use_wsl) {
       return(.to_wsl_path(isa_local, wsl_distro))
     }
@@ -58,7 +92,7 @@
   if (nzchar(cpat_data_env)) {
     candidate <- file.path(cpat_data_env, fname)
 
-    if (file.exists(candidate)) {
+    if (.data_file_looks_valid(candidate)) {
       if (.Platform$OS.type == "windows" && use_wsl) {
         return(.to_wsl_path(candidate, wsl_distro))
       }
@@ -66,11 +100,21 @@
     }
   }
 
+  # A candidate can exist and still be garbage -- e.g. a previous
+  # install_isoform_databases() run that saved an HTML error/mirror page in
+  # place of the real file (see the wget validation added there). Checking
+  # existence alone was letting that silently pass through to CPAT, which
+  # then failed deep inside cpmodule instead of here, where it's actually
+  # diagnosable. Skip anything too small or HTML-looking and keep searching.
   result <- .wsl_exec_script(
-    bash_body = sprintf(
-      'for _p in "$HOME/.cpat_data/%s" "${CPAT_DATA:-.}/%s"; do if [ -f "$_p" ]; then echo "$_p"; break; fi; done',
-      fname,
-      fname
+    bash_body = c(
+      sprintf('for _p in "$HOME/.cpat_data/%s" "${CPAT_DATA:-.}/%s"; do', fname, fname),
+      '  [ -f "$_p" ] || continue',
+      '  sz=$(wc -c < "$_p" 2>/dev/null || echo 0)',
+      '  [ "$sz" -ge 100 ] || continue',
+      '  head -c 512 "$_p" | grep -qi "<!doctype html\\|<html[ >]" && continue',
+      '  echo "$_p"; break',
+      'done'
     ),
     wsl_distro = wsl_distro,
     use_wsl = use_wsl,
