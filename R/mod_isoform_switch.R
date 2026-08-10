@@ -88,6 +88,13 @@ run_isoform_switch <- function(dte_results = NULL,
       stdout = capture.output(print(debug_info)),
       log_dir = log_dir
     )
+  } else {
+    message(
+      "run_predictors = FALSE: skipping debug_wsl() environment check and all ",
+      "external predictor (CPAT / SignalP / Pfam) steps for the isoform analysis. ",
+      "No WSL commands will be run, so no wsl_commands.log or wsl_debug.json will ",
+      "be produced. Pass run_predictors = TRUE to run_isoform_switch() to enable this."
+    )
   }
 
   .ckpt_path <- function(nm) if (!is.null(save_dir)) file.path(save_dir, nm) else ""
@@ -296,7 +303,11 @@ run_isoform_switch <- function(dte_results = NULL,
       }
     }
 
-    clean_ref_dir <- file.path(out_dir, "cleaned_reference")
+    clean_ref_dir <- if (!is.null(save_dir)) {
+      file.path(save_dir, "cleaned_reference")
+    } else {
+      file.path(out_dir, "cleaned_reference")
+    }
     if (!dir.exists(clean_ref_dir)) dir.create(clean_ref_dir, recursive = TRUE)
 
     fasta_file_clean <- file.path(clean_ref_dir, "isoform_fasta_ids_cleaned.fasta")
@@ -655,7 +666,19 @@ run_isoform_switch <- function(dte_results = NULL,
     } else {
       message("Refreshing switch consequence analysis and plots with predictor annotations...")
 
-      plot_refresh_dir <- file.path(out_dir, "plots", "switch_plots_with_predictors")
+      # Lives under DTU_DTE_report/plots (not out_dir/plots) so it's inside
+      # the same tree generate_dte_dtu_report() already scans for its PDF
+      # -> PNG conversion, and so dte_dtu_report.Rmd can list it (see the
+      # switch_by_consequence_section chunk there) -- it used to sit in an
+      # entirely separate out_dir/plots/switch_plots_with_predictors tree
+      # that neither of those ever looked inside, making it invisible to
+      # the HTML report and just a second, disconnected pile of PDFs next
+      # to top_switches/. "with predictors" was also a misleading name: by
+      # the time either this step or the report's top_switches step runs,
+      # switch_list already carries predictor annotations either way -- the
+      # actual difference is that this set is filtered to switches with an
+      # identified consequence and split by consequence type.
+      plot_refresh_dir <- file.path(out_dir, "DTU_DTE_report", "plots", "by_consequence")
 
       switch_list <- tryCatch(
         {

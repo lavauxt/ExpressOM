@@ -115,15 +115,55 @@ plot_isoform_switch_summary <- function(switch_list,
 
       pdf_path <- file.path(plot_dir, paste0("SwitchPlot_", gene_sym, ".pdf"))
 
+      n_domain_labels <- tryCatch(
+        {
+          da <- switch_list$domainAnalysis
+          if (is.null(da) || !all(c("isoform_id", "hmm_name") %in% colnames(da))) {
+            0L
+          } else {
+            iso_ids <- feat$isoform_id[feat$gene_id == gene_id]
+            da_gene <- da[da$isoform_id %in% iso_ids & !is.na(da$hmm_name), ]
+
+            labels <- if ("domain_isotype_simple" %in% colnames(da)) {
+              paste0(
+                da_gene$hmm_name,
+                ifelse(
+                  is.na(da_gene$domain_isotype_simple) | da_gene$domain_isotype_simple == "Reference",
+                  "",
+                  " (Non-ref Isotype)"
+                )
+              )
+            } else {
+              da_gene$hmm_name
+            }
+
+            length(unique(labels))
+          }
+        },
+        error = function(e) 0L
+      )
+
+      # Baseline matches the previous fixed 11x9; grows once there are more
+      # labels than comfortably fit at that size (empirically ~10-12).
+      plot_height <- 9 + 0.22 * max(0, n_domain_labels - 10)
+      legend_theme <- ggplot2::theme_bw(base_size = 8) +
+        ggplot2::theme(
+          legend.text = ggplot2::element_text(size = 5),
+          legend.title = ggplot2::element_text(size = 6),
+          legend.key.size = ggplot2::unit(0.3, "lines"),
+          legend.spacing.y = ggplot2::unit(0.1, "lines")
+        )
+
       ok <- tryCatch(
         {
-          .pdf_device()(pdf_path, onefile = FALSE, width = 11, height = 9)
+          .pdf_device()(pdf_path, onefile = FALSE, width = 11, height = plot_height)
 
           IsoformSwitchAnalyzeR::switchPlot(
             switch_list,
             gene = gene_id,
             condition1 = cond1,
-            condition2 = cond2
+            condition2 = cond2,
+            localTheme = legend_theme
           )
 
           dev.off()

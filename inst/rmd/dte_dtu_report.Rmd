@@ -106,8 +106,8 @@ suppressPackageStartupMessages({
   invisible(FALSE)
 }
 
-.list_top_switch_figs <- function() {
-  d <- file.path(params$plot_dir, "top_switches")
+.list_switch_figs <- function(subdir) {
+  d <- file.path(params$plot_dir, subdir)
 
   if (!dir.exists(d)) {
     return(character(0))
@@ -145,6 +145,9 @@ suppressPackageStartupMessages({
 
   out[!is.na(out)]
 }
+
+.list_top_switch_figs <- function() .list_switch_figs("top_switches")
+.list_by_consequence_figs <- function() .list_switch_figs("by_consequence")
 ```
 
 # Overview
@@ -362,6 +365,27 @@ if (length(top_switch_files) > 0) {
 
     cat("### ", fig_label, "\n\n", sep = "")
     .fig(fn, fig_label, subdir = "top_switches")
+  }
+}
+```
+
+```{r by_consequence_section, results='asis', eval=isTRUE(params$has_switch)}
+by_consequence_files <- .list_by_consequence_figs()
+
+if (length(by_consequence_files) > 0) {
+  cat(
+    "\n## Isoform Switches by Functional Consequence\n\n",
+    "The same switch-plot type as above, but filtered to switches with at least one ",
+    "identified functional consequence (domain/signal-peptide/coding-potential/NMD change) ",
+    "and grouped by which consequence it is.\n\n",
+    sep = ""
+  )
+
+  for (fn in by_consequence_files) {
+    fig_label <- tools::file_path_sans_ext(basename(fn))
+
+    cat("### ", fig_label, "\n\n", sep = "")
+    .fig(fn, fig_label, subdir = "by_consequence")
   }
 }
 ```

@@ -195,23 +195,13 @@ expressom <- function(count_type        = "salmon",
     main_condition <- tail(all.vars(stats::as.formula(model)), 1)
   }
 
-  if (run_isoform && isTRUE(run_predictors)) {
-    debug_wsl(
-      distro = wsl_distro,
-      out_dir = out_dir,
-      log_dir = file.path(out_dir, "Log", "Isoform"),
-      conda_env = "isoform_tools",
-      verbose = TRUE,
-      use_wsl = use_wsl
-    )
-  } else if (run_isoform) {
-    message(
-      "run_predictors = FALSE: skipping debug_wsl() environment check and all ",
-      "external predictor (CPAT / SignalP / Pfam) steps for the isoform analysis. ",
-      "No WSL commands will be run, so no wsl_commands.log or wsl_debug.json will ",
-      "be produced. Pass run_predictors = TRUE to expressom() to enable this."
-    )
-  }
+  # NOTE: the environment check itself (debug_wsl()) now lives solely in
+  # run_isoform_switch() -- it used to also run here first, unconditionally
+  # and with its result discarded, duplicating every WSL probe command
+  # (command -v cpat, signalp6, hmmscan, interproscan.sh, ...) for no
+  # benefit. run_isoform_switch() performs the same check plus validates
+  # wsl_available/conda_env_exists/pfam_db_indexed against it and logs it,
+  # so it's the single source of truth now.
 
   comp_name <- if (!is.null(level) && !is.null(base)) {
     paste0(level, "vs", base)
@@ -769,7 +759,8 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
           level,
           base,
           out_dir = iso_dir,
-          batch_col = batch_col
+          batch_col = batch_col,
+          save_dir = iso_save_dir
         ),
         label = "Transcript-level PCA"
       )
@@ -871,9 +862,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
       }
 
       if (!dir.exists(iso_dir)) dir.create(iso_dir, recursive = TRUE)
-
-      saveRDS(dte_res, file.path(iso_dir, "dte_results.rds"))
-      saveRDS(dtu_res, file.path(iso_dir, "dtu_results.rds"))
 
       switch_rds_src <- file.path(iso_save_dir, "switch_list.rds")
 

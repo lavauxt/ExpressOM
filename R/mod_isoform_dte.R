@@ -73,7 +73,8 @@ run_isoform_pca <- function(isoform_obj,
                             base = NULL,
                             out_dir,
                             batch_col = NULL,
-                            pca_ntop = 500) {
+                            pca_ntop = 500,
+                            save_dir = NULL) {
 
   if (!requireNamespace("DESeq2", quietly = TRUE)) {
     stop("DESeq2 is required for transcript-level PCA. Please install it.")
@@ -105,6 +106,13 @@ run_isoform_pca <- function(isoform_obj,
 
   plot_dir <- file.path(out_dir, "Plots")
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
+
+  # PCA_transcripts_*.tsv/.rds data tables (as opposed to the PDF plot
+  # itself, which stays in Plots/) go to save_dir when one is configured --
+  # this was previously the one isoform-side intermediary left behind in
+  # Plots/ instead of alongside the RDS checkpoints and cleaned_reference.
+  data_dir <- if (!is.null(save_dir)) save_dir else plot_dir
+  if (!dir.exists(data_dir)) dir.create(data_dir, recursive = TRUE)
 
   comp_label <- if (!is.null(level) && !is.null(base)) paste0(level, "vs", base) else "AllSamples"
   cond_arg <- if (!is.null(condition) && condition %in% colnames(isoform_obj$meta)) condition else NULL
@@ -153,7 +161,7 @@ run_isoform_pca <- function(isoform_obj,
 
     write.table(
       tx_info,
-      file = file.path(plot_dir, paste0("PCA_transcripts_", comp_label, ".tsv")),
+      file = file.path(data_dir, paste0("PCA_transcripts_", comp_label, ".tsv")),
       sep = "\t",
       row.names = FALSE,
       quote = FALSE
@@ -161,7 +169,7 @@ run_isoform_pca <- function(isoform_obj,
 
     message(
       "   -> Saved top variable transcripts (with gene names) used in PCA to: ",
-      file.path(plot_dir, paste0("PCA_transcripts_", comp_label, ".tsv"))
+      file.path(data_dir, paste0("PCA_transcripts_", comp_label, ".tsv"))
     )
   }
 
@@ -189,12 +197,12 @@ run_isoform_pca <- function(isoform_obj,
 
   .write_pca_scores(
     res$pca_scores,
-    plot_dir,
+    data_dir,
     paste0("PCA_transcripts_", comp_label),
     gene_values = tx_values
   )
 
-  message("Transcript-level PCA completed. Plots saved in: ", plot_dir)
+  message("Transcript-level PCA completed. Plot saved in: ", plot_dir, "; data tables in: ", data_dir)
 
   invisible(res)
 }

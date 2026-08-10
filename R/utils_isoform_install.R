@@ -683,60 +683,123 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
     message("  ! Could not create ", cpat_data_dir, " (exit code ", mkdir_status, ") -- check permissions.")
   }
 
-  cpat_urls <- c(
-    "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_Hexamer.tsv/download",
-    "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_Hexamer.tsv/download",
-    "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_logitModel.RData/download",
-    "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_logitModel.RData/download"
+  # Each entry is one target file with an ordered list of source URLs to try.
+  # SourceForge is first everywhere (it's the canonical source and has both
+  # species), with a realistic full browser user-agent + Accept headers --
+  # a bare "Mozilla/5.0" with nothing else was getting flagged and rejected
+  # with an HTTP error (wget exit 8) even though the exact same URLs serve
+  # the file fine from an actual browser. The two Human files also get a
+  # Zenodo mirror (zenodo.org/record/5076056, used as-is by the sheynkman-lab
+  # Long-Read-Proteogenomics pipeline for these same files) as a fallback if
+  # SourceForge still rejects the request -- e.g. if a network/proxy is
+  # blocking sourceforge.net outright rather than this being bot-detection,
+  # better headers won't help and a different host is the only fix. No
+  # equivalent second mirror was found for the Mouse files.
+  cpat_targets <- list(
+    list(fname = "Human_Hexamer.tsv", urls = c(
+      "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_Hexamer.tsv/download",
+      "https://zenodo.org/record/5076056/files/Human_Hexamer.tsv"
+    )),
+    list(fname = "Mouse_Hexamer.tsv", urls = c(
+      "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_Hexamer.tsv/download"
+    )),
+    list(fname = "Human_logitModel.RData", urls = c(
+      "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_logitModel.RData/download",
+      "https://zenodo.org/record/5076056/files/Human_logitModel.RData.gz"
+    )),
+    list(fname = "Mouse_logitModel.RData", urls = c(
+      "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_logitModel.RData/download"
+    ))
   )
 
-  cpat_ok <- TRUE
-
-  for (url in cpat_urls) {
-    fname <- basename(sub("/download$", "", url))
-    dest <- paste0(cpat_data_dir, "/", fname)
+  .browser_wget <- function(url, dest) {
+    gz <- endsWith(url, ".gz")
+    raw_dest <- if (gz) paste0(dest, ".gz") else dest
 
     status <- .run(sprintf(
-      'wget -q --max-redirect=20 --user-agent="Mozilla/5.0" -O %s %s',
-      .dq(dest),
+      paste(
+        "wget -q --max-redirect=20 --tries=2",
+        '--user-agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        '(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"',
+        '--header="Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"',
+        '--header="Accept-Language: en-US,en;q=0.9"',
+        "-O %s %s"
+      ),
+      .dq(raw_dest),
       .dq(url)
     ))
 
-    # wget's exit code only reflects that the HTTP transaction completed --
-    # it says nothing about whether the bytes it saved are the file we
-    # asked for. SourceForge's "/files/.../download" alias can resolve to
-    # an HTML mirror-selection or error page with an HTTP 200 status, which
-    # wget then writes to `dest` and happily reports as success. Confirm
-    # the saved file is plausible data (not tiny, not an HTML page) before
-    # trusting it -- this is what was letting an HTML page silently take
-    # the place of Human_Hexamer.tsv and crash CPAT later.
-    content_ok <- isTRUE(status == 0L) && isTRUE(.run(sprintf(
-      'sz=$(wc -c < %1$s 2>/dev/null || echo 0); [ "$sz" -ge 100 ] && ! head -c 512 %1$s | grep -qi "<!doctype html\\|<html[ >]"',
-      .dq(dest)
-    )) == 0L)
+    if (isTRUE(status == 0L) && gz) {
+      gz_status <- .run(sprintf("gunzip -f %s", .dq(raw_dest)))
+      if (!isTRUE(gz_status == 0L)) return(gz_status)
+    }
 
-    if (content_ok) {
-      message("  \u2713 Downloaded: ", fname)
-    } else {
-      cpat_ok <- FALSE
+    status
+  }
+
+  cpat_ok <- TRUE
+
+  for (target in cpat_targets) {
+    fname <- target$fname
+    dest <- paste0(cpat_data_dir, "/", fname)
+    downloaded <- FALSE
+
+    extdata_local <- system.file("extdata", fname, package = "ExpressOM")
+
+    if (nzchar(extdata_local) && .data_file_looks_valid(extdata_local)) {
+      extdata_w <- if (via_wsl) {
+        .to_wsl_path(extdata_local, distro)
+      } else {
+        extdata_local
+      }
+
+      cp_status <- .run(sprintf("cp %s %s", .dq(extdata_w), .dq(dest)))
+
+      if (isTRUE(cp_status == 0L) && isTRUE(.run(sprintf(
+        'sz=$(wc -c < %1$s 2>/dev/null || echo 0); [ "$sz" -ge 100 ] && ! head -c 512 %1$s | grep -qi "<!doctype html\\|<html[ >]"',
+        .dq(dest)
+      )) == 0L)) {
+        message("  \u2713 Installed: ", fname, " (from ExpressOM's inst/extdata)")
+        downloaded <- TRUE
+      }
+    }
+
+    for (url in if (downloaded) character(0) else target$urls) {
+      status <- .browser_wget(url, dest)
+
+      # wget's exit code only reflects that the HTTP transaction completed --
+      # it says nothing about whether the bytes it saved are the file we
+      # asked for. A server can resolve a download link to an HTML
+      # mirror-selection or error page with an HTTP 200 status, which wget
+      # then writes to `dest` and happily reports as success. Confirm the
+      # saved file is plausible data (not tiny, not an HTML page) before
+      # trusting it -- this is what was letting an HTML page silently take
+      # the place of Human_Hexamer.tsv and crash CPAT later.
+      content_ok <- isTRUE(status == 0L) && isTRUE(.run(sprintf(
+        'sz=$(wc -c < %1$s 2>/dev/null || echo 0); [ "$sz" -ge 100 ] && ! head -c 512 %1$s | grep -qi "<!doctype html\\|<html[ >]"',
+        .dq(dest)
+      )) == 0L)
+
+      if (content_ok) {
+        message("  \u2713 Downloaded: ", fname, " (from ", sub("^(https?://[^/]+).*", "\\1", url), ")")
+        downloaded <- TRUE
+        break
+      }
 
       if (isTRUE(status == 0L)) {
         .run(sprintf("rm -f %s", .dq(dest)))
-        message(
-          "  \u2717 Downloaded ", fname, " but it isn't the expected data file (empty, or an HTML ",
-          "page -- SourceForge's download link served a mirror-selection/error page instead of the ",
-          "file, which happens intermittently). Download it manually from ",
-          "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/ and place it in ",
-          cpat_data_dir
-        )
-      } else {
-        message(
-          "  \u2717 FAILED to download ", fname, " (exit code ", status,
-          "). Check network access to sourceforge.net inside the execution environment, ",
-          "or download it manually from https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/ ",
-          "and place it in ", cpat_data_dir
-        )
       }
+    }
+
+    if (!downloaded) {
+      cpat_ok <- FALSE
+      message(
+        "  \u2717 FAILED to download ", fname, " from ", length(target$urls),
+        if (length(target$urls) > 1) " sources tried" else " source tried",
+        ". Download it manually from ",
+        "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/ (a browser succeeds ",
+        "even when scripted downloads are being blocked/rejected) and place it in ", cpat_data_dir
+      )
     }
   }
 

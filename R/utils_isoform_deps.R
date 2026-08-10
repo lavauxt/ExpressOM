@@ -69,8 +69,11 @@
 #' IsoformSwitchAnalyzeR R package (that package only ships a small
 #' `cpat_results.txt` example, not the actual model files); they are
 #' downloaded by `install_isoform_databases()` into `$HOME/.cpat_data` (or
-#' `$CPAT_DATA`). Both `.find_cpat_hexamer()` and `.find_cpat_logit_model()`
-#' search the same set of locations.
+#' `$CPAT_DATA`). ExpressOM's own `inst/extdata` is checked first, so a file
+#' placed there manually (e.g. as a workaround when the automated download
+#' can't reach its source) takes precedence over a downloaded copy. Both
+#' `.find_cpat_hexamer()` and `.find_cpat_logit_model()` search the same set
+#' of locations.
 #' @keywords internal
 .find_cpat_data_file <- function(fname,
                                  wsl_distro = "Ubuntu-22.04",
@@ -78,6 +81,15 @@
                                  conda_sh = NULL,
                                  conda_env = "isoform_tools",
                                  log_dir = NULL) {
+  expressom_local <- system.file("extdata", fname, package = "ExpressOM")
+
+  if (nzchar(expressom_local) && .data_file_looks_valid(expressom_local)) {
+    if (.Platform$OS.type == "windows" && use_wsl) {
+      return(.to_wsl_path(expressom_local, wsl_distro))
+    }
+    return(expressom_local)
+  }
+
   isa_local <- system.file("extdata", fname, package = "IsoformSwitchAnalyzeR")
 
   if (nzchar(isa_local) && .data_file_looks_valid(isa_local)) {

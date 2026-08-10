@@ -765,8 +765,15 @@
       iprscan_tsv_l <- file.path(out_dir, "interproscan.tsv")
       iprscan_tsv_w <- w2l(iprscan_tsv_l)
 
+      ips_temp_dir_w <- paste0("$HOME/.isoform_tools_tmp/ips_", basename(tempfile("")))
+
       ips_cmd <- sprintf(
-        "interproscan.sh -i %s -f tsv -o %s -dp -appl Pfam -goterms -iprlookup -cpu %d",
+        paste(
+          "set +e; mkdir -p %1$s &&",
+          "interproscan.sh -i %2$s -f tsv -o %3$s -dp -appl Pfam -goterms -iprlookup -cpu %4$d -T %1$s;",
+          "_ips_status=$?; set -e; rm -rf %1$s; exit $_ips_status"
+        ),
+        .dq(ips_temp_dir_w),
         shQuote(pfam_fa_w, type = "sh"),
         shQuote(iprscan_tsv_w, type = "sh"),
         n_cpu
@@ -775,7 +782,30 @@
       message("  Running InterProScan...")
       ips_status <- run_tool(ips_cmd, tool_name = "Pfam_InterProScan")
 
-      if (ips_status == 0L && file.exists(iprscan_tsv_l)) {
+      # InterProScan can report success (exit 0) with a technically-existing
+      # but still-empty output file, if the write to a WSL-mounted
+      # (/mnt/c/...) destination hasn't fully synced by the time this check
+      # runs. A short wait-and-recheck absorbs that without silently
+      # mistaking it for "genuinely zero Pfam hits" or a parsing problem.
+      ips_output_empty <- file.exists(iprscan_tsv_l) && isTRUE(file.info(iprscan_tsv_l)$size == 0)
+
+      if (ips_status == 0L && ips_output_empty) {
+        Sys.sleep(2)
+        ips_output_empty <- file.exists(iprscan_tsv_l) && isTRUE(file.info(iprscan_tsv_l)$size == 0)
+      }
+
+      if (ips_status == 0L && ips_output_empty) {
+        message(
+          "  InterProScan reported success but its output file is still empty (0 bytes) after a ",
+          "brief re-check -- this looks like a filesystem sync issue writing to a WSL-mounted path, ",
+          "not a parsing problem. Trying hmmscan fallback..."
+        )
+        .log_predictor_status(
+          "Pfam-InterProScan",
+          "FAILED",
+          paste("exit code 0 but output file is empty (0 bytes):", iprscan_tsv_l)
+        )
+      } else if (ips_status == 0L && file.exists(iprscan_tsv_l)) {
         ips_import_ok <- FALSE
         ips_err <- NULL
 
