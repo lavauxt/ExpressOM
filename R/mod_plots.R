@@ -194,8 +194,11 @@ run_eda <- function(dds, edb, out_dir, level, base,
 #' @param top_genes N top genes
 #' @param padj_cutoff Adjusted p-value significance cutoff
 #' @param highlight_genes Optional character vector of gene names to highlight in the Volcano plot
+#' @param pca_ntop Number of most variable genes to use for the supplementary
+#'   comparison-only PCA (default 500; set NULL to use all). Matches the
+#'   `pca_ntop` used for the main EDA PCA in run_eda().
 #' @return NULL
-generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken, results_data, out_dir, level, base, main_condition, top_genes, padj_cutoff, highlight_genes = NULL, batch_col = NULL) {
+generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken, results_data, out_dir, level, base, main_condition, top_genes, padj_cutoff, highlight_genes = NULL, batch_col = NULL, pca_ntop = 500) {
   plot_dir <- file.path(out_dir, "Plots")
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
   org_info <- get_organism_info(edb)
@@ -206,6 +209,11 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
     vsd <- tryCatch(DESeq2::vst(dds, blind = TRUE),
                     error = function(e) DESeq2::varianceStabilizingTransformation(dds, blind = TRUE))
     plot_sample_correlation(vsd, main_condition, plot_dir, paste0(level, "_vs_", base))
+
+    # Supplementary PCA restricted to just this comparison's samples (per
+    # the sample table's main_condition column) -- see plot_comparison_pca().
+    plot_comparison_pca(vsd, main_condition, level, base, batch = batch_col,
+                        plot_dir = plot_dir, ntop = pca_ntop)
   }
 
   safe_pdf(file.path(plot_dir, paste0("MAplot_unshrunken_", level, "_vs_", base, ".pdf")), expr = {
@@ -342,6 +350,95 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
   } else {
     if (return_plot) return(p) else { print(p); invisible(p) }
   }
+}
+
+#' Supplementary PCA restricted to the samples in the current comparison
+#'
+#' run_eda()'s PCA is computed once, up front, across every sample in the
+#' sample table -- including groups that aren't part of the current level
+#' vs. base contrast (e.g. a third group sitting alongside a two-group
+#' comparison). That's the right view for a global overview, but variance
+#' coming from the excluded group(s) can dilute or obscure how well `level`
+#' and `base` actually separate from each other. This subsets the
+#' already-computed `vsd`/`rld` down to just those two groups (per the
+#' sample table's condition column) and re-runs plot_custom_pca() on that
+#' subset alone, so the comparison can be inspected on its own.
+#'
+#' Does not recompute the variance-stabilizing transform -- it subsets the
+#' one already fit across the full cohort, which is more stable for small
+#' comparison subsets than re-fitting vst()/rlog() dispersion from scratch
+#' on just a handful of samples.
+#'
+#' @param vsd VST/rlog-transformed DESeqDataSet (already computed for ALL
+#'   samples)
+#' @param condition_col Column name in colData holding the contrasted
+#'   factor -- i.e. main_condition, the column `level`/`base` are values of
+#' @param level Foreground group of the comparison
+#' @param base Reference group of the comparison
+#' @param batch Optional batch column for shape grouping
+#' @param plot_dir Output directory for the PDF/TSVs
+#' @param ntop Number of most variable genes to use for PCA (NULL = all genes)
+#' @return The ggplot object, invisibly (NULL if skipped)
+#' @export
+plot_comparison_pca <- function(vsd, condition_col, level, base, batch = NULL,
+                                plot_dir, ntop = 500) {
+  coldata <- as.data.frame(SummarizedExperiment::colData(vsd))
+
+  if (is.null(condition_col) || !condition_col %in% colnames(coldata)) {
+    message("   -> Skipping comparison-only PCA: '", condition_col, "' not found in colData.")
+    return(invisible(NULL))
+  }
+
+  keep <- coldata[[condition_col]] %in% c(level, base)
+
+  if (sum(keep) < 2) {
+    message("   -> Skipping comparison-only PCA: fewer than 2 samples match '",
+            level, "' / '", base, "'.")
+    return(invisible(NULL))
+  }
+
+  vsd_sub <- vsd[, keep]
+
+  # Drop unused factor levels left over from the full cohort (e.g. a third
+  # group not part of this contrast) -- otherwise plot_custom_pca()'s
+  # min(table(condition)) ellipse check sees a phantom zero-count group and
+  # silently disables the ellipse even when level/base both qualify.
+  if (is.factor(SummarizedExperiment::colData(vsd_sub)[[condition_col]])) {
+    SummarizedExperiment::colData(vsd_sub)[[condition_col]] <-
+      droplevels(SummarizedExperiment::colData(vsd_sub)[[condition_col]])
+  }
+
+  n_groups <- length(unique(SummarizedExperiment::colData(vsd_sub)[[condition_col]]))
+  if (n_groups < 2) {
+    message("   -> Skipping comparison-only PCA: only one group present after ",
+            "subsetting to '", level, "' / '", base, "'.")
+    return(invisible(NULL))
+  }
+
+  res <- plot_custom_pca(vsd_sub, condition = condition_col, batch = batch,
+                         title = paste0("PCA (Comparison Samples Only) - ", level, " vs ", base),
+                         return_plot = TRUE, return_gene_list = TRUE,
+                         ntop = ntop)
+
+  file_stub <- paste0("PCA_ComparisonOnly_", level, "_vs_", base)
+
+  safe_pdf(file.path(plot_dir, paste0(file_stub, ".pdf")), width = 9, height = 7,
+          expr = print(res$plot))
+
+  if (!is.null(res$gene_info) && nrow(res$gene_info) > 0) {
+    write.table(res$gene_info,
+               file = file.path(plot_dir, paste0(file_stub, ".tsv")),
+               sep = "\t", row.names = FALSE, quote = FALSE)
+    message("   -> Saved top variable genes used in comparison-only PCA to: ",
+           file.path(plot_dir, paste0(file_stub, ".tsv")))
+  }
+
+  .write_pca_scores(res$pca_scores, plot_dir, file_stub, gene_values = res$gene_values)
+
+  message("   -> Comparison-only PCA (", level, " vs ", base, ", n=", sum(keep),
+          " samples) saved to: ", plot_dir)
+
+  invisible(res$plot)
 }
 
 #' Sample Correlation Heatmap

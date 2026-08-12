@@ -243,6 +243,46 @@
   return(gseago)
 }
 
+#' Resolve an MSigDB collection code for the detected organism
+#'
+#' MSigDB category codes are human-centric ("H", "C1"..."C9"). The native
+#' Mouse MSigDB adds a parallel "M" series ("MH", "M1", "M2", "M3", "M5",
+#' "M7", "M8" -- there is no native M4/M6/M9). Previously a "C" code was
+#' sent to msigdbr as-is regardless of organism, so a mouse run defaulting
+#' to e.g. "C2"/"C5"/"C8" would fetch those human-native collections and
+#' rely on msigdbr's ortholog mapping via `species =` instead of using the
+#' curated mouse-native collection. This maps a requested code to the
+#' correct one for `msig_org`: mouse-native when one exists and the
+#' organism is mouse, the human/C-style code otherwise (still resolved via
+#' `species =` ortholog mapping for organisms/categories with no native
+#' collection, e.g. rat, or C4/C6/C9 for mouse).
+#'
+#' Only ever called with a code already validated against the
+#' `valid_collections` whitelist below, so an "M"-prefixed match is always
+#' one of the six that actually exist (M1/M2/M3/M5/M7/M8).
+#'
+#' @param input_cat MSigDB category code, e.g. "C2", "H", "M2", "MH", "HALLMARK"
+#' @param msig_org Organism string as returned by get_organism_info()$msig_org
+#' @keywords internal
+.resolve_msigdbr_collection <- function(input_cat, msig_org) {
+  mouse_native <- c("MH", "M1", "M2", "M3", "M5", "M7", "M8")
+  is_mouse     <- identical(msig_org, "Mus musculus")
+
+  if (input_cat %in% c("H", "MH", "HALLMARK")) {
+    return(if (is_mouse) "MH" else "H")
+  }
+
+  if (grepl("^M[0-9]", input_cat)) {
+    return(if (is_mouse) input_cat else paste0("C", sub("^M", "", input_cat)))
+  }
+
+  # Remaining case: a "C"-style code. Only promote it to the mouse-native
+  # equivalent if that equivalent actually exists (C4/C6/C9 have none, and
+  # fall through to ortholog-mapped "C" for mouse same as any other organism).
+  candidate <- paste0("M", sub("^C", "", input_cat))
+  if (is_mouse && candidate %in% mouse_native) candidate else input_cat
+}
+
 #' Run Functional Analysis with Directional Stat Management
 #'
 #' @export
@@ -369,16 +409,17 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
         message("      EnrichR TF: No DBs returned valid results.")
       }
     } else {
-      message("      EnrichR API unreachable; falling back to local TF enrichment using MSigDB C3 (TFT).")
-      msig_org <- org_info$msig_org
-      message("      Using MSigDB C3 (TFT) for ", msig_org)
+      msig_org  <- org_info$msig_org
+      tf_collection <- .resolve_msigdbr_collection("C3", msig_org)
+      message("      EnrichR API unreachable; falling back to local TF enrichment using MSigDB ", tf_collection, " (TFT).")
+      message("      Using MSigDB ", tf_collection, " (TFT) for ", msig_org)
 
       local_res <- safe_run(
         run_local_enrichment(
           gene_list     = sigOE_genes,
           universe      = allOE_genes,
           organism      = msig_org,
-          collection    = "C3",
+          collection    = tf_collection,
           subcategory   = "TFT",
           pvalue_cutoff = go_pvalue_cutoff,
           qvalue_cutoff = go_qvalue_cutoff
@@ -388,7 +429,7 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 
       if (!is.null(local_res) && nrow(as.data.frame(local_res)) > 0) {
         dir_tf <- safe_dir(file.path(out_dir, "Transcription_Factors"))
-        write.csv(as.data.frame(local_res), file.path(dir_tf, paste0("Local_TF_Enrichment_C3_", comp_name, ".csv")), row.names = FALSE)
+        write.csv(as.data.frame(local_res), file.path(dir_tf, paste0("Local_TF_Enrichment_", tf_collection, "_", comp_name, ".csv")), row.names = FALSE)
         message("      Local TF enrichment completed with ", nrow(as.data.frame(local_res)), " terms.")
         if (nrow(local_res@result) > 5) {
           safe_pdf(file.path(dir_tf, paste0("Local_TF_Dotplot_", comp_name, ".pdf")),
@@ -677,7 +718,12 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 #'   containing 'gene' and 'log2FoldChange'.
 #' @param gmt_file Path to a local `.gmt` file, a character vector/list of
 #'   multiple `.gmt` files, or MSigDB category names (e.g., "H", "C2") to
-#'   download via msigdbr.
+#'   download via msigdbr. Category names are resolved per-organism (see
+#'   `edb`): for mouse, "C" codes are automatically promoted to their
+#'   native Mouse MSigDB "M" equivalent where one exists (e.g. "C2" ->
+#'   "M2", "H" -> "MH") via `.resolve_msigdbr_collection()`, rather than
+#'   being sent to msigdbr as human-native collections regardless of
+#'   species.
 #' @param edb Ensembl Database (used to detect species for msigdbr).
 #' @param out_dir Output directory for fgsea results.
 #' @param comp_name Comparison name for file naming.
@@ -718,17 +764,14 @@ run_fgsea_analysis <- function(res_tbl,
 
       if (!is.null(gmt_item) && input_cat %in% valid_collections) {
 
-        if (input_cat %in% c("MH", "HALLMARK")) {
-          msig_cat <- "H"
-        } else if (grepl("^M[0-9]", input_cat)) {
-          msig_cat <- paste0("C", gsub("M", "", input_cat))
-        } else {
-          msig_cat <- input_cat
-        }
+        msig_cat <- .resolve_msigdbr_collection(input_cat, msig_org)
 
+        # Named after the resolved collection (msig_cat), not the raw input,
+        # so mouse runs get e.g. "msigdbr_M2..." output folders/files rather
+        # than a "C2" name that would misrepresent what's actually inside.
         gmt_name <- paste0(
           "msigdbr_",
-          input_cat,
+          msig_cat,
           if (!is.null(input_subcat)) paste0("_", gsub(":", "_", input_subcat)) else ""
         )
 
@@ -744,7 +787,7 @@ run_fgsea_analysis <- function(res_tbl,
           "' not recognized as MSigDB category. Falling back to Hallmark..."
         )
 
-        msig_cat <- "H"
+        msig_cat <- .resolve_msigdbr_collection("H", msig_org)
         input_subcat <- NULL
         gmt_name <- "hallmark_msigdbr"
       }
@@ -771,16 +814,17 @@ run_fgsea_analysis <- function(res_tbl,
       m_t2g <- tryCatch(
         .msigdbr_fetch(msig_org, msig_cat, input_subcat),
         error = function(e) {
+          hallmark_cat <- .resolve_msigdbr_collection("H", msig_org)
           message(
             "   -> msigdbr collection '", msig_cat,
             if (!is.null(input_subcat)) paste0(" / subcategory '", input_subcat, "'") else "",
-            "' not available, falling back to 'H'"
+            "' not available, falling back to '", hallmark_cat, "'"
           )
 
           tryCatch(
-            .msigdbr_fetch(msig_org, "H"),
+            .msigdbr_fetch(msig_org, hallmark_cat),
             error = function(e2) {
-              stop("msigdbr failed for both '", msig_cat, "' and 'H': ", e2$message)
+              stop("msigdbr failed for both '", msig_cat, "' and '", hallmark_cat, "': ", e2$message)
             }
           )
         }

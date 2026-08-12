@@ -353,7 +353,8 @@ expressom <- function(count_type        = "salmon",
         top_genes      = top_genes,
         padj_cutoff    = padj_cutoff,
         highlight_genes = highlight_genes,
-        batch_col      = batch_col
+        batch_col      = batch_col,
+        pca_ntop       = pca_ntop
       )
 
       while (grDevices::dev.cur() > 1) grDevices::dev.off()
