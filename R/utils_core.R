@@ -589,9 +589,9 @@ get_organism_info <- function(edb) {
 #' @keywords internal
 .getP2 <- function(p, method = "fisher") {
   if (method == "fisher") {
-    exp(-qchisq(p, df = 4, lower.tail = FALSE) / 2)
+    sqrt(exp(-qchisq(p, df = 4, lower.tail = FALSE) / 2))
   } else {
-    pnorm(sqrt(2) * qnorm(p), lower.tail = FALSE)
+    pnorm(qnorm(p) * sqrt(2) / 2)
   }
 }
 

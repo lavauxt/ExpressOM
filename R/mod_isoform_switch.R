@@ -23,7 +23,8 @@ run_isoform_switch <- function(dte_results = NULL,
                                custom_transcript_id_map = NULL,
                                skip_fasta_filter = FALSE,
                                test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
-                               organism = NULL) {
+                               organism = NULL,
+                               plot_topology = TRUE) {
 
   test_engine <- match.arg(test_engine)
 
@@ -710,15 +711,26 @@ run_isoform_switch <- function(dte_results = NULL,
 
           if (!dir.exists(plot_refresh_dir)) dir.create(plot_refresh_dir, recursive = TRUE)
 
-          IsoformSwitchAnalyzeR::switchPlotTopSwitches(
-            switchAnalyzeRlist = sl,
-            n = 50,
-            filterForConsequences = TRUE,
-            splitFunctionalConsequences = TRUE,
-            sortByQvals = TRUE,
-            pathToOutput = plot_refresh_dir,
-            fileType = "pdf"
-          )
+          # switchPlotTopSwitches() doesn't expose plotTopology as a
+          # parameter (verified against its signature and the
+          # additionalArguments whitelist it forwards to switchPlot() --
+          # plotTopology isn't in either), so suppressMessages() is the
+          # only way to silence its "Omitting topology visualization..."
+          # message from here when there's no DeepTMHMM data to plot.
+          run_switch_plots <- function() {
+            IsoformSwitchAnalyzeR::switchPlotTopSwitches(
+              switchAnalyzeRlist = sl,
+              n = 50,
+              filterForConsequences = TRUE,
+              splitComparison = FALSE,
+              splitFunctionalConsequences = FALSE,
+              sortByQvals = TRUE,
+              pathToOutput = plot_refresh_dir,
+              fileType = "pdf"
+            )
+          }
+
+          if (isTRUE(plot_topology)) run_switch_plots() else suppressMessages(run_switch_plots())
 
           message(
             "  Refreshed switch plots (now including predictor annotations) saved to: ",

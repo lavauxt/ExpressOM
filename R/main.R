@@ -53,6 +53,10 @@
 #' @param custom_transcript_id_map Path to a TSV/CSV with columns `count_id` and `fasta_id`
 #' @param skip_fasta_filter Logical: if TRUE, skip FASTA pre-filtering in isoform import
 #' @param isoform_test_engine Which DTU test engine to use in IsoformSwitchAnalyzeR
+#' @param plot_topology Logical: include the topology (DeepTMHMM) track in switch plots.
+#'   Set FALSE to silence "Omitting topology visualization..." when DeepTMHMM hasn't been run.
+#' @param run_spia Logical: also run SPIA (pathway impact analysis). Off by default --
+#'   its bootstrap permutation testing is slow and less commonly needed than GSEA/ORA.
 #' @return NULL invisibly
 expressom <- function(count_type        = "salmon",
                       data_dir          = "./data",
@@ -101,7 +105,9 @@ expressom <- function(count_type        = "salmon",
                       group_col         = NULL,
                       custom_transcript_id_map = NULL,
                       skip_fasta_filter = FALSE,
-                      isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn")) {
+                      isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
+                      plot_topology     = TRUE,
+                      run_spia          = FALSE) {
 
   execution_order <- match.arg(execution_order)
   isoform_test_engine <- match.arg(isoform_test_engine)
@@ -625,7 +631,8 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
           go_pvalue_cutoff = go_pvalue_cutoff,
           go_qvalue_cutoff = go_qvalue_cutoff,
           gsea_metric      = gsea_metric,
-          test_type        = test
+          test_type        = test,
+          run_spia         = run_spia
         ),
         label = "Functional analysis"
       )
@@ -841,7 +848,8 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         custom_transcript_id_map = custom_transcript_id_map,
         skip_fasta_filter        = skip_fasta_filter,
         test_engine              = isoform_test_engine,
-        organism                 = get_organism_info(edb_obj)$name
+        organism                 = get_organism_info(edb_obj)$name,
+        plot_topology            = plot_topology
       )
 
       if (!is.null(dte_res) && !is.null(dtu_res) && !is.null(isoform_import)) {
@@ -857,27 +865,12 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
           top_n             = 15,
           switch_list       = switch_res,
           dexseq_results    = dexseq_res,
-          switch_plot_top_n = isoform_plot_top_n
+          switch_plot_top_n = isoform_plot_top_n,
+          plot_topology     = plot_topology
         )
       }
 
       if (!dir.exists(iso_dir)) dir.create(iso_dir, recursive = TRUE)
-
-      switch_rds_src <- file.path(iso_save_dir, "switch_list.rds")
-
-      if (!is.null(switch_res) && file.exists(switch_rds_src)) {
-        file.copy(
-          switch_rds_src,
-          file.path(iso_dir, "switch_list.rds"),
-          overwrite = TRUE
-        )
-      } else if (!is.null(switch_res)) {
-        saveRDS(switch_res, file.path(iso_dir, "switch_list.rds"))
-      }
-
-      if (!is.null(dexseq_res)) {
-        saveRDS(dexseq_res, file.path(iso_dir, "dexseq_results.rds"))
-      }
 
       message("Isoform analysis complete. Results saved in: ", iso_dir)
 

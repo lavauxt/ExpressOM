@@ -1,7 +1,7 @@
 Package: ExpressOM
 Type: Package
 Title: Expression Overview and Mapping
-Version: 0.1.1
+Version: 0.1.2
 Author: TL
 Maintainer: TL <lavauxt@gmail.com>
 Description: A fully modularized R package for bulk RNA-seq analysis, wrapping
@@ -52,8 +52,7 @@ Imports:
     tidyr,
     tidyverse,
     tximport,
-    withr,
-    pdftools
+    withr
 Suggests:
     Biostrings,
     DRIMSeq,
@@ -73,7 +72,8 @@ Suggests:
     rmarkdown,
     testthat (>= 3.0.0),
     mockery,
-    BSgenome.Hsapiens.UCSC.hg38
+    BSgenome.Hsapiens.UCSC.hg38,
+    xfun
 VignetteBuilder: knitr
 Config/testthat/edition: 3
 RoxygenNote: 8.0.0

@@ -83,16 +83,24 @@ suppressPackageStartupMessages({
     cap
   }
 
-  # NOTE: this Rmd is knit from a temp copy outside the report's own
-  # directory, and html_document defaults to self_contained = TRUE, so
-  # pandoc embeds each image at *knit* time relative to that temp
-  # location -- a "plots/..." relative link (the old behavior here) never
-  # resolves and the image is silently dropped, even though the file
-  # exists on disk once the report is moved into place. Using the
-  # already-computed absolute path sidesteps that entirely and matches
-  # the pattern already used successfully in
-  # dge_regionreport_customcode.Rmd's .expressom_fig().
+  # Embedding as a base64 data URI (rather than a markdown image path,
+  # even an absolute one) sidesteps pandoc/rmarkdown's own path
+  # post-processing entirely -- html_document_base() rewrites absolute
+  # image paths that happen to sit inside output_dir (which plot_dir does)
+  # back to relative ones before handing off to pandoc for self-contained
+  # embedding, and that step has had real version-specific regressions
+  # (see rmarkdown's own NEWS.md). A data URI has no path left to get
+  # rewritten or silently fail to resolve.
   if (file.exists(png_abs)) {
+    data_uri <- tryCatch(xfun::base64_uri(png_abs), error = function(e) NULL)
+
+    if (!is.null(data_uri)) {
+      cat(sprintf('\n<img src="%s" alt="%s" style="max-width:100%%;" />\n\n', data_uri, caption))
+      return(invisible(TRUE))
+    }
+
+    # xfun unavailable/failed -- fall back to the old path-based link,
+    # which works on most rmarkdown versions, just not reliably on all.
     cat(sprintf("\n![%s](%s)\n\n", caption, .md_path(png_abs)))
     return(invisible(TRUE))
   }

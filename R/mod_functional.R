@@ -264,7 +264,8 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
                                     go_pvalue_cutoff = 0.05,
                                     go_qvalue_cutoff = 0.2,
                                     gsea_metric = "stat",
-                                    test_type = "Wald") { 
+                                    test_type = "Wald",
+                                    run_spia = FALSE) { 
   
   comp_name <- paste0(level, "_vs_", base)
   org_info  <- get_organism_info(edb)
@@ -627,35 +628,39 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   }
 
 
-  message("Running SPIA analysis...")
-  if (length(sig_entrez_ids) > 0) {
-    spia_de <- purrr::set_names(as.numeric(res_entrez$log2FoldChange), as.character(res_entrez$entrezid))
-    spia_de <- spia_de[names(spia_de) %in% sig_entrez_ids]
-    spia_de <- spia_de[!is.na(spia_de) & !duplicated(names(spia_de))]
-    
-    message("   -> SPIA: ", length(spia_de), " DE genes, ", length(gsea_list), " background genes")
-    spia_result <- safe_run(
-      SPIA::spia(de = spia_de, all = as.character(res_entrez$entrezid),
-                 organism = kegg_code, plots = FALSE),
-      label = "SPIA"
-    )
-    
-    if (!is.null(spia_result) && nrow(spia_result) > 0) {
-      dir_spia <- safe_dir(file.path(out_dir, "SPIA"))
-      write.csv(spia_result, file.path(dir_spia, paste0("SPIA_Results_", comp_name, ".csv")), row.names = FALSE)
-      message("   -> SPIA: ", nrow(spia_result), " pathways saved to CSV.")
-      
-      safe_pdf(file.path(dir_spia, paste0("SPIA_Evidence_", comp_name, ".pdf")),
-               width = 8, height = 8,
-               expr = plotP_fork(spia_result, threshold = padj_cutoff))
-               
-    } else if (!is.null(spia_result) && nrow(spia_result) == 0) {
-      message("      SPIA returned an empty result (no pathways perturbed).")
+  if (isTRUE(run_spia)) {
+    message("Running SPIA analysis...")
+    if (length(sig_entrez_ids) > 0) {
+      spia_de <- purrr::set_names(as.numeric(res_entrez$log2FoldChange), as.character(res_entrez$entrezid))
+      spia_de <- spia_de[names(spia_de) %in% sig_entrez_ids]
+      spia_de <- spia_de[!is.na(spia_de) & !duplicated(names(spia_de))]
+
+      message("   -> SPIA: ", length(spia_de), " DE genes, ", length(gsea_list), " background genes")
+      spia_result <- safe_run(
+        SPIA::spia(de = spia_de, all = as.character(res_entrez$entrezid),
+                   organism = kegg_code, plots = FALSE),
+        label = "SPIA"
+      )
+
+      if (!is.null(spia_result) && nrow(spia_result) > 0) {
+        dir_spia <- safe_dir(file.path(out_dir, "SPIA"))
+        write.csv(spia_result, file.path(dir_spia, paste0("SPIA_Results_", comp_name, ".csv")), row.names = FALSE)
+        message("   -> SPIA: ", nrow(spia_result), " pathways saved to CSV.")
+
+        safe_pdf(file.path(dir_spia, paste0("SPIA_Evidence_", comp_name, ".pdf")),
+                 width = 8, height = 8,
+                 expr = plotP_fork(spia_result, threshold = padj_cutoff))
+
+      } else if (!is.null(spia_result) && nrow(spia_result) == 0) {
+        message("      SPIA returned an empty result (no pathways perturbed).")
+      } else {
+        message("      SPIA failed — check Log/Warnings.txt for details.")
+      }
     } else {
-      message("      SPIA failed — check Log/Warnings.txt for details.")
+      message("      Skipping SPIA: no significant Entrez genes available.")
     }
   } else {
-    message("      Skipping SPIA: no significant Entrez genes available.")
+    message("Skipping SPIA (run_spia = FALSE).")
   }
 
   message("Functional analysis complete.")

@@ -50,7 +50,8 @@ plot_isoform_switch_summary <- function(switch_list,
                                         base = NULL,
                                         top_n = 10,
                                         alpha = 0.05,
-                                        dIFcutoff = 0.1) {
+                                        dIFcutoff = 0.1,
+                                        plot_topology = TRUE) {
 
   if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE)) {
     message("IsoformSwitchAnalyzeR is required for switch summary plots. Skipping.")
@@ -71,17 +72,22 @@ plot_isoform_switch_summary <- function(switch_list,
 
   auto_ok <- tryCatch(
     {
-      IsoformSwitchAnalyzeR::switchPlotTopSwitches(
-        switchAnalyzeRlist = switch_list,
-        n = top_n,
-        filterForConsequences = FALSE,
-        splitFunctionalConsequences = FALSE,
-        sortByQvals = TRUE,
-        alpha = alpha,
-        dIFcutoff = dIFcutoff,
-        pathToOutput = top_dir,
-        fileType = "pdf"
-      )
+      run_switch_plots <- function() {
+        IsoformSwitchAnalyzeR::switchPlotTopSwitches(
+          switchAnalyzeRlist = switch_list,
+          n = top_n,
+          filterForConsequences = FALSE,
+          splitComparison = FALSE,
+          splitFunctionalConsequences = FALSE,
+          sortByQvals = TRUE,
+          alpha = alpha,
+          dIFcutoff = dIFcutoff,
+          pathToOutput = top_dir,
+          fileType = "pdf"
+        )
+      }
+
+      if (isTRUE(plot_topology)) run_switch_plots() else suppressMessages(run_switch_plots())
 
       TRUE
     },
@@ -163,7 +169,8 @@ plot_isoform_switch_summary <- function(switch_list,
             gene = gene_id,
             condition1 = cond1,
             condition2 = cond2,
-            localTheme = legend_theme
+            localTheme = legend_theme,
+            plotTopology = plot_topology
           )
 
           dev.off()

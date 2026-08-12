@@ -1,32 +1,19 @@
 # mod_isoform_predictors.R -- external predictor tools for isoform switch analysis
 # (CPAT, SignalP, DeepTMHMM, Pfam/hmmscan/InterProScan), run via WSL
 
-# ---------------------------------------------------------------------------
-# Pfam result-format converters
+# Pfam result-format converters: analyzePFAM() only parses the pfam_scan.pl
+# 16-column layout (requires col 6 = hmm_acc matching '^PF|^PB' and a
+# '^CL...' clan id in col 15/16). Neither interproscan.sh's TSV nor
+# hmmscan's --domtblout use that layout, and analyzeInterProScan() doesn't
+# exist in IsoformSwitchAnalyzeR at all, so both tools' output is remapped
+# here before analyzePFAM() will accept either.
 #
-# IsoformSwitchAnalyzeR::analyzePFAM() only parses the pfam_scan.pl 16-column
-# layout (seq_id, alignment_start/end, envelope_start/end, hmm_acc, hmm_name,
-# type, hmm_start/end, hmm_length, bit_score, E_value, significant, clan,
-# [residue]) -- confirmed against the current source (R/analyze_external_
-# sequence_analysis.R): it hard-checks that column 6 matches '^PF|^PB' and
-# that column 15 (or 16) contains at least one '^CL...' clan accession,
-# stopping with "not recogniced as a pfam output" otherwise. Neither
-# interproscan.sh's TSV output nor hmmscan's --domtblout use that layout, so
-# both need to be remapped before analyzePFAM() will accept them. There is
-# also no analyzeInterProScan() anywhere in IsoformSwitchAnalyzeR (checked
-# the NAMESPACE and full R/ source directly) -- calling it always errored
-# with "could not find function", regardless of whether InterProScan itself
-# ran fine, which is why this path funnels into analyzePFAM() too.
-#
-# Caveat: neither source gives us real Pfam clan membership (that's a
-# separate Pfam-A.clans.tsv mapping we don't fetch), so clan is filled with
-# a sentinel ("CL_unknown") that only exists to satisfy the '^CL' style
-# check -- it is not a real clan id. hmmscan's domtblout carries every other
-# column (coordinates, hmm length, bit score, E-value) through exactly;
-# InterProScan's TSV doesn't report hmm-model coordinates, hmm length, or
-# bit score at all, so those are left NA for that path. If exact domain
-# boundaries/scores matter, prefer the hmmscan path.
-# ---------------------------------------------------------------------------
+# Caveat: neither source gives real Pfam clan membership, so clan is filled
+# with a sentinel ("CL_unknown") that only exists to satisfy the '^CL'
+# check. hmmscan's domtblout carries every other column through exactly;
+# InterProScan's TSV doesn't report hmm-model coordinates/length/bit score,
+# so those are left NA for that path -- prefer hmmscan if exact domain
+# boundaries/scores matter.
 
 #' @keywords internal
 .write_pfam_scan_table <- function(df16, dest_path) {
@@ -186,6 +173,17 @@
   if (is.null(log_dir)) log_dir <- file.path(out_dir, "Log")
   if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
 
+  # Each tool's own raw output (CPAT's ORF/probability tables, SignalP's
+  # prediction_results.txt, the InterProScan/hmmscan Pfam tables and their
+  # pfam_scan.pl-converted counterparts) goes into saved/<Tool>/ instead of
+  # out_dir root, so results_.../IsoformSwitch stops accumulating a flat
+  # pile of per-tool files next to Plots/, Log/, sequences/, etc.
+  tool_save_dir <- function(family) {
+    d <- if (!is.null(save_dir)) file.path(save_dir, family) else file.path(out_dir, family)
+    if (!dir.exists(d)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    d
+  }
+
   predictor_log_path <- file.path(log_dir, "predictor_status.log")
 
   message(
@@ -280,7 +278,10 @@
   active_conda <- if (has_conda_env) conda_sh else NULL
 
   run_tool <- function(cmd_str, show_stderr = TRUE, tool_name = "tool") {
-    tool_log <- file.path(log_dir, paste0(tool_name, ".log"))
+    tool_family <- sub("_.*$", "", tool_name)
+    tool_log_dir <- file.path(log_dir, tool_family)
+    if (!dir.exists(tool_log_dir)) dir.create(tool_log_dir, recursive = TRUE, showWarnings = FALSE)
+    tool_log <- file.path(tool_log_dir, paste0(tool_name, ".log"))
 
     cat(sprintf("\n===== %s — %s =====\n", tool_name, format(Sys.time())), file = tool_log, append = TRUE)
     cat(sprintf("Working dir: %s\n", getwd()), file = tool_log, append = TRUE)
@@ -503,8 +504,8 @@
   } else {
     hexamer_w <- hexamer_local
     logit_w <- logit_local
-    cpat_prefix_w <- paste0(out_dir_w, "/cpat_out")
-    cpat_prefix_l <- file.path(out_dir, "cpat_out")
+    cpat_prefix_l <- file.path(tool_save_dir("CPAT"), "cpat_out")
+    cpat_prefix_w <- w2l(cpat_prefix_l)
 
     has_cpat3 <- tool_ok("cpat")
     has_cpat2 <- if (!has_cpat3) tool_ok("run_cpat.py") else FALSE
@@ -515,15 +516,18 @@
     } else {
       cpat_exe <- if (has_cpat3) "cpat" else "run_cpat.py"
 
+      cpat_log_dir_l <- file.path(log_dir, "CPAT")
+      if (!dir.exists(cpat_log_dir_l)) dir.create(cpat_log_dir_l, recursive = TRUE, showWarnings = FALSE)
+
       # CPAT's --log-file defaults to a bare "CPAT_run_info.log" (see `cpat
       # -h`), written relative to the shell's cwd at invocation time -- NOT
       # next to the -o outputs. Since that cwd is wherever WSL starts the
       # script (not out_dir), the log was landing outside the results
-      # folder entirely. Pointing it at out_dir_w explicitly keeps it next
-      # to cpat_out.* like every other tool's log here. Only cpat (3.x)
-      # is confirmed to support this flag, so it's gated to that binary --
-      # the legacy run_cpat.py (2.x) command below is left as-is.
-      cpat_log_w <- paste0(out_dir_w, "/CPAT_run_info.log")
+      # folder entirely. Pointing it at Log/Isoform/CPAT/ explicitly keeps
+      # it grouped with this tool's other logs. Only cpat (3.x) is
+      # confirmed to support this flag, so it's gated to that binary -- the
+      # legacy run_cpat.py (2.x) command below is left as-is.
+      cpat_log_w <- paste0(w2l(cpat_log_dir_l), "/CPAT_run_info.log")
 
       cpat_cmd <- if (has_cpat3) {
         sprintf(
@@ -559,12 +563,16 @@
         cpat_import_ok <- FALSE
         cpat_err <- NULL
 
+        # CPAT's own published optimum coding-probability cutoffs (from the
+        # CPAT paper's TG-ROC analysis): 0.364 for human, 0.44 for mouse.
+        coding_cutoff <- if (organism_cpat == "Human") 0.364 else 0.44
+
         switch_list <- tryCatch(
           {
             sl <- IsoformSwitchAnalyzeR::analyzeCPAT(
               switchAnalyzeRlist = switch_list,
-              pathToAllCPATresultFiles = cpat_result,
-              codingCutoff = NULL,
+              pathToCPATresultFile = cpat_result,
+              codingCutoff = coding_cutoff,
               removeNoncodinORFs = TRUE,
               quiet = FALSE
             )
@@ -603,7 +611,7 @@
     message("  No AA FASTA available. Skipping SignalP.")
     .log_predictor_status("SignalP", "SKIPPED", "no AA FASTA extracted")
   } else {
-    sp_out_dir_l <- file.path(out_dir, "signalp_out")
+    sp_out_dir_l <- file.path(tool_save_dir("SignalP"), "signalp_out")
     dir.create(sp_out_dir_l, recursive = TRUE, showWarnings = FALSE)
 
     sp_out_dir_w <- w2l(sp_out_dir_l)
@@ -762,7 +770,7 @@
       # analyzePFAM() will read it -- TSV is a plain, documented column
       # format we can parse directly, XML would need an extra dependency
       # (xml2) for no benefit here.
-      iprscan_tsv_l <- file.path(out_dir, "interproscan.tsv")
+      iprscan_tsv_l <- file.path(tool_save_dir("Pfam"), "interproscan.tsv")
       iprscan_tsv_w <- w2l(iprscan_tsv_l)
 
       ips_temp_dir_w <- paste0("$HOME/.isoform_tools_tmp/ips_", basename(tempfile("")))
@@ -809,7 +817,7 @@
         ips_import_ok <- FALSE
         ips_err <- NULL
 
-        ips_pfam_l <- file.path(out_dir, "interproscan_as_pfam_scan.txt")
+        ips_pfam_l <- file.path(tool_save_dir("Pfam"), "interproscan_as_pfam_scan.txt")
         ips_converted <- .pfam_from_interproscan_tsv(iprscan_tsv_l, ips_pfam_l)
 
         if (is.null(ips_converted)) {
@@ -875,7 +883,7 @@
           message("  Pfam-A.hmm not found. Run install_isoform_databases() first. Skipping.")
           .log_predictor_status("Pfam-hmmscan", "SKIPPED", "Pfam-A.hmm not found")
         } else {
-          pfam_tbl_l <- file.path(out_dir, "pfam_domtblout.txt")
+          pfam_tbl_l <- file.path(tool_save_dir("Pfam"), "pfam_domtblout.txt")
           pfam_tbl_w <- w2l(pfam_tbl_l)
 
           hm_cmd <- sprintf(
@@ -897,7 +905,7 @@
             # layout from what analyzePFAM() parses (pfam_scan.pl's 16
             # columns) -- feeding it in raw is what was erroring here even
             # though hmmscan itself succeeded. Convert first.
-            hm_pfam_l <- file.path(out_dir, "hmmscan_as_pfam_scan.txt")
+            hm_pfam_l <- file.path(tool_save_dir("Pfam"), "hmmscan_as_pfam_scan.txt")
             hm_converted <- .pfam_from_hmmscan_domtblout(pfam_tbl_l, hm_pfam_l)
 
             if (is.null(hm_converted)) {
@@ -999,9 +1007,12 @@
   message("  Log directory: ", log_dir)
   message("  Per-tool logs:")
 
-  for (lf in list.files(log_dir, pattern = "\\.log$", full.names = TRUE)) {
-    sz <- file.info(lf)$size
-    message("     ", basename(lf), " (", format(round(sz / 1024, 1)), " KB)")
+  all_logs <- list.files(log_dir, pattern = "\\.log$", full.names = TRUE, recursive = TRUE)
+  log_rel_paths <- sub(paste0("^", gsub("([][{}()+*^$|\\\\.?])", "\\\\\\1", log_dir), "[/\\\\]?"), "", all_logs)
+
+  for (i in seq_along(all_logs)) {
+    sz <- file.info(all_logs[i])$size
+    message("     ", log_rel_paths[i], " (", format(round(sz / 1024, 1)), " KB)")
   }
 
   message("  Status summary: ", summary_msg)
@@ -1015,7 +1026,7 @@
     n_domain = n_domain,
     n_sigp = n_sigp,
     n_topology = n_topology,
-    tool_logs = list.files(log_dir, pattern = "\\.log$", full.names = FALSE)
+    tool_logs = log_rel_paths
   )
 
   if (requireNamespace("jsonlite", quietly = TRUE)) {

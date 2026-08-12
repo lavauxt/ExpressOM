@@ -17,7 +17,8 @@ generate_dte_dtu_report <- function(dte_results,
                                     plot_switch_summary = TRUE,
                                     switch_plot_top_n = 10,
                                     plot_sashimi = TRUE,
-                                    plot_exon_usage = TRUE) {
+                                    plot_exon_usage = TRUE,
+                                    plot_topology = TRUE) {
 
   if (!requireNamespace("ggplot2", quietly = TRUE)) stop("ggplot2 is required for plotting")
   if (!requireNamespace("DT", quietly = TRUE)) stop("DT is required for interactive tables")
@@ -621,7 +622,8 @@ generate_dte_dtu_report <- function(dte_results,
           genes_of_interest = genes_of_interest,
           level = level,
           base = base,
-          top_n = switch_plot_top_n
+          top_n = switch_plot_top_n,
+          plot_topology = plot_topology
         ),
         label = "Isoform switch summary plots"
       )

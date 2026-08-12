@@ -926,7 +926,7 @@ plotP_fork <- function(x, threshold = 0.01) {
 
   tr_red <- threshold / nrow(na.omit(x))
   if (combinemethod == "fisher") {
-    val_red  <- .getP2(tr_red, "fisher") / 2
+    val_red  <- -log(.getP2(tr_red, "fisher")^2)
     if (is.finite(val_red)) {
       line_red <- data.frame(x = c(0, val_red), y = c(val_red, 0))
       p <- p + ggplot2::geom_path(data = line_red, ggplot2::aes(x = x, y = y), color = "red", linewidth = 1)
@@ -934,7 +934,7 @@ plotP_fork <- function(x, threshold = 0.01) {
       message("   -> plotP_fork: could not compute a finite FDR threshold value; skipping that line.")
     }
   } else {
-    somep1  <- exp(seq(from = min(log(ph)), to = max(log(ph)), length = 200))
+    somep1  <- exp(seq(from = min(log(ph), na.rm = TRUE), to = max(log(ph), na.rm = TRUE), length = 200))
     somep2  <- pnorm(qnorm(tr_red) * sqrt(2) - qnorm(somep1))
     line_df <- data.frame(x = -log(somep1), y = -log(somep2))
     line_df <- line_df[is.finite(line_df$x) & is.finite(line_df$y), ]
@@ -949,7 +949,7 @@ plotP_fork <- function(x, threshold = 0.01) {
   tr_blue     <- suppressWarnings(max(df$pG[df$pGFdr <= threshold], na.rm = TRUE))
   if (is.infinite(tr_blue) || tr_blue <= tr_blue_old) tr_blue <- tr_blue_old * 1.03
   if (combinemethod == "fisher") {
-    val_blue  <- .getP2(tr_blue, "fisher") / 2
+    val_blue  <- -log(.getP2(tr_blue, "fisher")^2)
     if (is.finite(val_blue)) {
       line_blue <- data.frame(x = c(0, val_blue), y = c(val_blue, 0))
       p <- p + ggplot2::geom_path(data = line_blue, ggplot2::aes(x = x, y = y), color = "blue", linewidth = 1)
@@ -957,7 +957,7 @@ plotP_fork <- function(x, threshold = 0.01) {
       message("   -> plotP_fork: could not compute a finite FWER threshold value; skipping that line.")
     }
   } else {
-    somep1  <- exp(seq(from = min(log(ph)), to = max(log(ph)), length = 200))
+    somep1  <- exp(seq(from = min(log(ph), na.rm = TRUE), to = max(log(ph), na.rm = TRUE), length = 200))
     somep2  <- pnorm(qnorm(tr_blue) * sqrt(2) - qnorm(somep1))
     line_df <- data.frame(x = -log(somep1), y = -log(somep2))
     line_df <- line_df[is.finite(line_df$x) & is.finite(line_df$y), ]

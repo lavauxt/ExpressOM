@@ -43,14 +43,14 @@ ExpressOM::run_bulk_pipeline(
 )
 ```
 
-### 1. Automated Ensembl Annotation Database Handling
+### 2. Automated Ensembl Annotation Database Handling
 
 The pipeline fully automates annotation package installation. If the package assigned to the `ensembl_package_name` parameter (e.g., `"EnsDb.Hsapiens.v107"`) is missing from the local R environment, the runtime automatically:
 1. Parses out the target species (`human` or `mouse`) and Ensembl release version (`107`).
 2. Fetches appropriate remote `.gtf` files and generates a custom backend mapping table (`create_homemade_db`).
 3. Bundles and local-installs the structured R package wrapper securely on the fly.
 
-> 💡 **Tip:** Use https://www.gencodegenes.org/ to check for proper version of Ensembl fur Human and Mouse
+> 💡 **Tip:** Use https://www.gencodegenes.org/ to check for the correct Ensembl version for Human and Mouse
 
 Every run starts with a pre-flight dependency check (`validate_environment()`): missing core packages (`DESeq2`, `tximport`, `dplyr`, `ggplot2`, `pheatmap`) stop the run immediately with a clear install message, while missing functional-analysis or isoform-analysis packages (only relevant if `run_dge`/`run_isoform` are enabled) produce an early warning instead of failing hours into a run.
 
@@ -152,13 +152,15 @@ The `run_bulk_pipeline` function generates a heavily organized output structure 
 * **`ORA/` & `GSEA/`**: Extensive targets and plots for GO mapping, Reactome, Disease Ontology, and KEGG generic pathways (Dotplots, Ridgeplots, Pathway Graphs).
 * **`SPIA/`**: Signaling Pathway Impact Analysis graphs and Evidence CSVs.
 * **`Transcription_Factors/`**: Output mapping active transcription factor perturbations based on dynamically mapped Enrichr libraries.
-* **`RegionReport/`**: Auto-generated interactive `RegionReport` HTML documents. Figures embedded in this report (and in the isoform `DTU_DTE_report/report.html`) are automatically converted from PDF to PNG for display, since browsers can't render a PDF through an `<img>` tag; install the `pdftools` package if you want these figures to appear inline (otherwise the underlying `.pdf` plot files are still written to `Plots/`, just not embedded in the HTML report).
+* **`RegionReport/`**: Auto-generated interactive `RegionReport` HTML documents. Figures in this report (and in the isoform `DTU_DTE_report/report.html`) are converted from PDF to PNG and embedded directly in the HTML; install the `pdftools` package if you want them to appear inline (otherwise the underlying `.pdf` plot files are still written to `Plots/`, just linked instead of embedded).
 * **`Save_rdata/`**: The complete populated R environment serialized as an `.RData` file.
 * **`Log/`**: A single, unified log tree for the whole run — always check here first if something looks like it didn't run:
   * `Log/SessionInfo.txt`, `Log/Warnings.txt` — captured at the very end of the run, regardless of what was enabled.
   * `Log/DGE/DGE_params_<comparison>.json` — one file per DGE comparison (design formula, contrast, filters, up/down counts).
-  * `Log/Isoform/wsl_debug.json` — output of `debug_wsl()`: which predictor tools were found, whether the Pfam database is present *and* `hmmpress`-indexed, whether the `isoform_tools` conda env exists, etc. Re-run `debug_wsl()` any time to refresh this without re-running the whole pipeline.
-  * `Log/Isoform/wsl_commands.log` — a timestamped audit trail of every command run inside WSL/bash for CPAT, SignalP, hmmscan, and the install helpers, with exit codes and captured output. This is the first place to look if a predictor "silently" didn't produce results.
+  * `Log/Isoform/wsl_debug.json` — output of `debug_wsl()`: which predictor tools were found, whether the Pfam database is present *and* `hmmpress`-indexed, whether the `isoform_tools` conda env exists, etc.
+  * `Log/Isoform/wsl_commands.log` — a timestamped audit trail of every command run inside WSL/bash, with exit codes and captured output. First place to look if a predictor "silently" didn't produce results.
+  * `Log/Isoform/predictor_status.log` — one line per tool per run (OK/SKIPPED/FAILED/IMPORT_FAILED) with the actual error message where relevant.
+  * `Log/Isoform/CPAT/`, `Log/Isoform/SignalP6/`, `Log/Isoform/Pfam/` — each tool's own log, grouped by tool (`Pfam/` holds both the InterProScan and hmmscan attempts).
 
 ## Windows / WSL Troubleshooting
 
@@ -331,30 +333,30 @@ switch_list <- run_isoform_switch(
 See `vignette("isoform-predictors", package = "ExpressOM")` for a full
 walkthrough, including troubleshooting and performance notes.
 
+> 💡 **`plot_topology = FALSE`:** if you haven't run DeepTMHMM
+> (`analyzeDeepTMHMM()`), every switch plot prints "Omitting topology
+> visualization..." once per gene. Pass `plot_topology = FALSE` to
+> `expressom()` / `run_isoform_switch()` to silence it. Note this only
+> reaches the `genes_of_interest` plots directly (`switchPlot()` exposes
+> `plotTopology`); the `top_switches`/`by_consequence` batch plots use
+> `switchPlotTopSwitches()`, which doesn't expose this parameter at all, so
+> those messages are suppressed via `suppressMessages()` instead -- same
+> effect, just no parameter to hand off to.
+
 > 💡 **Custom `fasta_file`/`gff_file` compatibility:** `run_isoform_switch()`
-> normalizes transcript IDs (stripping Ensembl-style version suffixes,
-> GENCODE-style `|`-delimited header fields, and space-separated
-> descriptions) itself, consistently across the count matrix, the FASTA, and
-> the annotation, *before* they ever reach `importRdata()` -- rewriting the
-> FASTA headers and the GTF's `transcript_id` values in place via the same
-> selective, per-ID logic as `clean_id()`. Because the files `importRdata()`
-> sees are already normalized to match exactly, `ignoreAfterBar` /
-> `ignoreAfterSpace` / `ignoreAfterPeriod` are all passed as `FALSE`: turning
-> them on would ask `importRdata()` to do its own, cruder, unconditional
-> truncation on top of that already-precise cleanup, which can create new
-> collisions of its own (e.g. truncating `PB.1.1`/`PB.1.2` down to the same
-> `PB.1`). It also runs a fast pre-check comparing the number of sequences in
-> `isoform_fasta` against the number of `transcript` rows in `isoform_gff`
-> *before* handing off to `importRdata()`; if the two describe wildly
-> different-sized transcript sets it warns immediately, in terms of your
-> actual input files, rather than letting you wait through DTE/DTU only to
-> hit `importRdata()`'s own (accurate, but easy to misdiagnose) Jaccard
-> similarity error at the very end. If you still see a "no transcripts
-> match" / near-zero-overlap error with a custom reference, it means the
-> FASTA/GTF and the quantification were genuinely built from different
-> pipeline runs or transcriptome versions, not just a naming-convention
-> mismatch -- see the SQANTI3 guide below for the most common way this
-> happens with long-read references.
+> normalizes transcript IDs (Ensembl version suffixes, GENCODE-style
+> `|`-delimited fields, space-separated descriptions) consistently across
+> the count matrix, FASTA, and GTF before they reach `importRdata()`, so
+> `ignoreAfterBar`/`ignoreAfterSpace`/`ignoreAfterPeriod` are passed as
+> `FALSE` — `importRdata()`'s own cruder truncation would just re-introduce
+> collisions this already avoids (e.g. `PB.1.1`/`PB.1.2` → `PB.1`). It also
+> pre-checks the FASTA sequence count against the GTF's transcript-row count
+> before calling `importRdata()`, so a mismatched reference fails fast with
+> a clear message instead of at `importRdata()`'s own Jaccard-similarity
+> error after a full DTE/DTU run. A "no transcripts match" error with a
+> custom reference means the FASTA/GTF/quantification are genuinely from
+> different pipeline runs, not a naming mismatch — see the SQANTI3 guide
+> below.
 
 ### Using a Custom SQANTI3 Long-Read Reference
 
@@ -530,22 +532,38 @@ results/
     │   └── plots/
     │       ├── DTE_volcano.pdf, DTE_MA.pdf, DTU_pvalue_hist.pdf, ...
     │       ├── IsoformSwitch_overview.pdf     # dIF vs. switch q-value, genome-wide
-    │       ├── ConsequenceSummary.pdf         # genome-wide functional consequence bar chart (NEW)
-    │       ├── ConsequenceEnrichment.pdf      # gain-vs-loss enrichment per consequence (NEW)
-    │       ├── SplicingSummary.pdf            # genome-wide alt. splicing event-type bar chart (NEW)
-    │       ├── SplicingEnrichment.pdf         # gain-vs-loss enrichment per splice type (NEW)
+    │       ├── ConsequenceSummary.pdf         # genome-wide functional consequence bar chart
+    │       ├── ConsequenceEnrichment.pdf      # gain-vs-loss enrichment per consequence
+    │       ├── SplicingSummary.pdf            # genome-wide alt. splicing event-type bar chart
+    │       ├── SplicingEnrichment.pdf         # gain-vs-loss enrichment per splice type
     │       ├── top_switches/                  # auto-selected top isoform_plot_top_n switches
-    │       │   └── *.pdf
+    │       │   └── *.pdf, *.png
+    │       ├── by_consequence/                # switches with an identified consequence, refreshed
+    │       │   └── *.pdf, *.png               # with CPAT/SignalP/Pfam annotations (run_predictors = TRUE)
     │       ├── proportions_<GENE>.pdf
     │       ├── SwitchPlot_<GENE>.pdf
     │       ├── DEXSeq_<GENE>.pdf              # only if run_dexseq = TRUE
     │       ├── Sashimi_<GENE>.pdf
     │       └── ExonUsage_<GENE>.pdf
-    ├── plots/switch_plots_with_predictors/    # refreshed switch plots incl. domains/coding potential
-    │   └── ...                                # (only if run_predictors = TRUE)
-    ├── dexseq_results.rds                     # only if run_dexseq = TRUE
-    └── switch_list.rds
+    ├── saved/                                 # every isoform RDS checkpoint, tsv, and raw predictor
+    │   │                                      # output in one place (see load_isoform_results())
+    │   ├── switch_list.rds, dte_results.rds, dtu_results.rds, dexseq_results.rds
+    │   ├── step1_imported.rds ... step3_5_refreshed.rds
+    │   ├── cleaned_reference/                 # cleaned FASTA/GTF used for this run
+    │   ├── PCA_transcripts_*.tsv
+    │   ├── CPAT/                              # cpat_out.ORF_prob*.tsv, cpat_out.ORF_seqs.fa, ...
+    │   ├── SignalP/                           # signalp_out/
+    │   └── Pfam/                              # interproscan.tsv, pfam_domtblout.txt, and both
+    │                                          # converted to pfam_scan.pl format for analyzePFAM()
+    ├── sequences/                              # isoform_NT.fa / isoform_AA.fa fed to the predictors
+    └── Log/                                    # see Log/ below
 ```
+
+`Log/Isoform/` mirrors the same by-tool grouping: `Log/Isoform/CPAT/`,
+`Log/Isoform/SignalP6/`, `Log/Isoform/Pfam/` (InterProScan and hmmscan both
+land here) each hold that tool's own log, while `predictor_status.log` and
+`wsl_commands.log` stay at the top of `Log/Isoform/` since they're a
+cross-tool summary/live feed, not any one tool's log.
 
 ## License
 
