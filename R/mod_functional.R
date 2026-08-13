@@ -804,7 +804,25 @@ run_fgsea_analysis <- function(res_tbl,
         }
 
         if (!is.null(subcat)) {
-          args$subcategory <- subcat
+          if ("subcollection" %in% fmls) {
+            args$subcollection <- subcat
+          } else {
+            args$subcategory <- subcat
+          }
+        }
+
+        # Mouse-native collections (MH/M1/M2/M3/M5/M7/M8) live in msigdbr's
+        # "MM" database division. msigdbr defaults db_species to "HS", under
+        # which those collection codes don't exist and the call errors out
+        # (e.g. collection = "M2" against the default "HS" division) --
+        # this is what was actually causing FGSEA to fail outright on mouse
+        # runs rather than just falling back to Hallmark. The collection
+        # code itself tells us which division it belongs to regardless of
+        # the requested output species (e.g. cat = "C4" for a mouse run
+        # correctly still queries "HS", since C4 has no native mouse
+        # collection -- see .resolve_msigdbr_collection()).
+        if ("db_species" %in% fmls) {
+          args$db_species <- if (grepl("^M[H0-9]", cat)) "MM" else "HS"
         }
 
         do.call(msigdbr::msigdbr, args) |>
@@ -1218,8 +1236,15 @@ run_local_enrichment <- function(gene_list, universe, organism = "Homo sapiens",
   }
 
   .fetch <- function(subcat) {
+    fmls <- names(formals(msigdbr::msigdbr))
     args <- list(species = organism, collection = collection)
     if (!is.null(subcat)) args$subcategory <- subcat
+    # Same db_species requirement as .msigdbr_fetch() in run_fgsea_analysis()
+    # -- mouse-native collections (M1/M2/M3/M5/M7/M8/MH) only exist under
+    # msigdbr's "MM" database division, not the default "HS".
+    if ("db_species" %in% fmls) {
+      args$db_species <- if (grepl("^M[H0-9]", collection)) "MM" else "HS"
+    }
     do.call(msigdbr::msigdbr, args)
   }
 
