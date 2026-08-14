@@ -17,7 +17,8 @@ generate_bulk_visualizations(
   top_genes,
   padj_cutoff,
   highlight_genes = NULL,
-  batch_col = NULL
+  batch_col = NULL,
+  pca_ntop = 500
 )
 }
 \arguments{
@@ -44,6 +45,10 @@ generate_bulk_visualizations(
 \item{padj_cutoff}{Adjusted p-value significance cutoff}
 
 \item{highlight_genes}{Optional character vector of gene names to highlight in the Volcano plot}
+
+\item{pca_ntop}{Number of most variable genes to use for the supplementary
+comparison-only PCA (default 500; set NULL to use all). Matches the
+`pca_ntop` used for the main EDA PCA in run_eda().}
 }
 \description{
 This function generates a series of visualizations to summarize the differential expression results.

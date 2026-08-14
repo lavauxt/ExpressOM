@@ -19,7 +19,12 @@ containing 'gene' and 'log2FoldChange'.}
 
 \item{gmt_file}{Path to a local `.gmt` file, a character vector/list of
 multiple `.gmt` files, or MSigDB category names (e.g., "H", "C2") to
-download via msigdbr.}
+download via msigdbr. Category names are resolved per-organism (see
+`edb`): for mouse, "C" codes are automatically promoted to their
+native Mouse MSigDB "M" equivalent where one exists (e.g. "C2" ->
+"M2", "H" -> "MH") via `.resolve_msigdbr_collection()`, rather than
+being sent to msigdbr as human-native collections regardless of
+species.}
 
 \item{edb}{Ensembl Database (used to detect species for msigdbr).}
 

@@ -25,7 +25,8 @@ run_isoform_switch(
   custom_transcript_id_map = NULL,
   skip_fasta_filter = FALSE,
   test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
-  organism = NULL
+  organism = NULL,
+  plot_topology = TRUE
 )
 }
 \description{

@@ -11,7 +11,8 @@ run_isoform_pca(
   base = NULL,
   out_dir,
   batch_col = NULL,
-  pca_ntop = 500
+  pca_ntop = 500,
+  save_dir = NULL
 )
 }
 \description{

@@ -22,7 +22,8 @@ expressom(
   pca_ntop = 500,
   ensembl_package_name = "EnsDb.Hsapiens.v107",
   top_genes = 30,
-  gmt_file = c("C2", "C3", "C5", "C8"),
+  gmt_file = c("C2:CP:BIOCARTA", "C2:CP:KEGG_LEGACY", "C2:CP:PID", "C2:CP:REACTOME",
+    "C2:CP:WIKIPATHWAYS", "C3:TFT", "C5:GO:BP", "C5:GO:CC", "C5:GO:MF", "C8"),
   padj_cutoff = 0.01,
   go_pvalue_cutoff = 0.05,
   go_qvalue_cutoff = 0.2,
@@ -53,7 +54,9 @@ expressom(
   group_col = NULL,
   custom_transcript_id_map = NULL,
   skip_fasta_filter = FALSE,
-  isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn")
+  isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
+  plot_topology = TRUE,
+  run_spia = FALSE
 )
 
 run_bulk_pipeline(
@@ -73,7 +76,8 @@ run_bulk_pipeline(
   pca_ntop = 500,
   ensembl_package_name = "EnsDb.Hsapiens.v107",
   top_genes = 30,
-  gmt_file = c("C2", "C3", "C5", "C8"),
+  gmt_file = c("C2:CP:BIOCARTA", "C2:CP:KEGG_LEGACY", "C2:CP:PID", "C2:CP:REACTOME",
+    "C2:CP:WIKIPATHWAYS", "C3:TFT", "C5:GO:BP", "C5:GO:CC", "C5:GO:MF", "C8"),
   padj_cutoff = 0.01,
   go_pvalue_cutoff = 0.05,
   go_qvalue_cutoff = 0.2,
@@ -104,7 +108,9 @@ run_bulk_pipeline(
   group_col = NULL,
   custom_transcript_id_map = NULL,
   skip_fasta_filter = FALSE,
-  isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn")
+  isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
+  plot_topology = TRUE,
+  run_spia = FALSE
 )
 }
 \arguments{
@@ -201,6 +207,12 @@ run_bulk_pipeline(
 \item{skip_fasta_filter}{Logical: if TRUE, skip FASTA pre-filtering in isoform import}
 
 \item{isoform_test_engine}{Which DTU test engine to use in IsoformSwitchAnalyzeR}
+
+\item{plot_topology}{Logical: include the topology (DeepTMHMM) track in switch plots.
+Set FALSE to silence "Omitting topology visualization..." when DeepTMHMM hasn't been run.}
+
+\item{run_spia}{Logical: also run SPIA (pathway impact analysis). Off by default --
+its bootstrap permutation testing is slow and less commonly needed than GSEA/ORA.}
 }
 \value{
 NULL invisibly

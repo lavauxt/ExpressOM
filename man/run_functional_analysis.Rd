@@ -16,7 +16,8 @@ run_functional_analysis(
   go_pvalue_cutoff = 0.05,
   go_qvalue_cutoff = 0.2,
   gsea_metric = "stat",
-  test_type = "Wald"
+  test_type = "Wald",
+  run_spia = FALSE
 )
 }
 \arguments{

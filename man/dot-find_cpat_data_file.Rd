@@ -18,7 +18,10 @@ CPAT's prebuilt hexamer/logit files are not bundled with the
 IsoformSwitchAnalyzeR R package (that package only ships a small
 `cpat_results.txt` example, not the actual model files); they are
 downloaded by `install_isoform_databases()` into `$HOME/.cpat_data` (or
-`$CPAT_DATA`). Both `.find_cpat_hexamer()` and `.find_cpat_logit_model()`
-search the same set of locations.
+`$CPAT_DATA`). ExpressOM's own `inst/extdata` is checked first, so a file
+placed there manually (e.g. as a workaround when the automated download
+can't reach its source) takes precedence over a downloaded copy. Both
+`.find_cpat_hexamer()` and `.find_cpat_logit_model()` search the same set
+of locations.
 }
 \keyword{internal}

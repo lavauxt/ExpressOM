@@ -19,7 +19,8 @@ generate_dte_dtu_report(
   plot_switch_summary = TRUE,
   switch_plot_top_n = 10,
   plot_sashimi = TRUE,
-  plot_exon_usage = TRUE
+  plot_exon_usage = TRUE,
+  plot_topology = TRUE
 )
 }
 \description{

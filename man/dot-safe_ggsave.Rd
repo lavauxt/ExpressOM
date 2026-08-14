@@ -3,9 +3,9 @@
 \name{.safe_ggsave}
 \alias{.safe_ggsave}
 \title{Safely save a ggplot to file, capping runaway width/height and defaulting
-to a Cairo-backed PDF device so text renders correctly}
+to the best available PDF device so text renders correctly}
 \usage{
-.safe_ggsave(filename, plot, width, height, device = grDevices::cairo_pdf, ...)
+.safe_ggsave(filename, plot, width, height, device = .pdf_device(), ...)
 }
 \description{
 ggsave()'s default "pdf" device only *references* the base-14 PDF fonts
@@ -14,6 +14,9 @@ outside those fonts' basic set, later PDF -> PNG rasterization (e.g. for
 report embedding via convert_pdf_to_png()) fails with "No display font
 for 'Symbol'" / "'ArialUnicode'" from Poppler/Ghostscript, and the plot
 silently never appears in the report. cairo_pdf() embeds real glyphs via
-Cairo/fontconfig, which avoids that class of error entirely.
+Cairo/fontconfig, which avoids that class of error entirely -- but it
+requires Cairo support compiled into R (see .pdf_device()), so the
+default here falls back to plain pdf() rather than hard-failing when
+Cairo isn't available.
 }
 \keyword{internal}
