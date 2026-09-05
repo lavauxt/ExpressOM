@@ -25,6 +25,14 @@
 #' @param highlight_genes Optional character vector of gene names to highlight in the Volcano plot
 #' @param go_pvalue_cutoff GO ORA p-value cutoff
 #' @param go_qvalue_cutoff GO ORA q-value cutoff
+#' @param ora_padj_cutoff Adjusted p-value cutoff for the gene list fed into
+#'   ORA (GO/Reactome/DO). Kept separate from `padj_cutoff` since ORA is a
+#'   hypergeometric test that's underpowered by construction when its input
+#'   list is short. Default 0.05.
+#' @param ora_min_genes Minimum gene count at `ora_padj_cutoff` before ORA's
+#'   input list falls back to raw `pvalue < 0.05`. Default 10.
+#' @param ora_lfc_cutoff Optional `abs(log2FoldChange) >=` floor applied
+#'   uniformly to GO/Reactome/DO ORA input. `NULL` (default) applies none.
 #' @param matrix_file Path to raw counts file if count_type = 'matrix'
 #' @param custom_tx2gene Path to a custom transcript-to-gene mapping file (TSV with columns 'tx_id' and 'gene_id')
 #' @param custom_gene_map Path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')
@@ -78,6 +86,9 @@ expressom <- function(count_type        = "salmon",
                       padj_cutoff       = 0.01,
                       go_pvalue_cutoff  = 0.05,
                       go_qvalue_cutoff  = 0.2,
+                      ora_padj_cutoff   = 0.05,
+                      ora_min_genes     = 10,
+                      ora_lfc_cutoff    = NULL,
                       test              = "Wald",
                       reduced           = NULL,
                       highlight_genes   = NULL,
@@ -633,6 +644,9 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
           go_qvalue_cutoff = go_qvalue_cutoff,
           gsea_metric      = gsea_metric,
           test_type        = test,
+          ora_padj_cutoff  = ora_padj_cutoff,
+          ora_min_genes    = ora_min_genes,
+          ora_lfc_cutoff   = ora_lfc_cutoff,
           run_spia         = run_spia
         ),
         label = "Functional analysis"
@@ -647,7 +661,9 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
           edb         = edb_obj,
           out_dir     = out_dir,
           comp_name   = comp_name,
-          padj_cutoff = padj_cutoff
+          padj_cutoff = padj_cutoff,
+          gsea_metric = gsea_metric,
+          test_type   = test
         ),
         label = "FGSEA analysis"
       )

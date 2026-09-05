@@ -283,6 +283,54 @@
   if (is_mouse && candidate %in% mouse_native) candidate else input_cat
 }
 
+#' Filter a results table down to the ORA "significant gene" input list
+#'
+#' @description Used identically by GO ORA, Reactome ORA, and Disease
+#'   Ontology ORA so all three draw from the same significance definition.
+#'   Two knobs are deliberately kept separate from `padj_cutoff` (which
+#'   defines "differentially expressed" everywhere else in the pipeline --
+#'   GSEA ranking, exported results, plots): ORA is a hypergeometric test on
+#'   a fixed gene list and is underpowered by construction when that list is
+#'   short, so it benefits from its own, looser threshold.
+#'
+#' @param tbl A results table (or an Entrez-mapped subset of one) containing
+#'   `id_col`, `padj`, `pvalue`, and `log2FoldChange`.
+#' @param id_col Name of the identifier column to filter/return by ("gene"
+#'   or "entrezid").
+#' @param ora_padj_cutoff Adjusted p-value cutoff for the primary filter.
+#' @param ora_min_genes Minimum gene count required at `ora_padj_cutoff`
+#'   before falling back to a raw `pvalue < 0.05` list. (Previously this
+#'   fallback only fired when the padj-filtered list was completely empty --
+#'   `nrow(sigOE) == 0` -- so e.g. a 3- or 4-gene list, unlikely to give any
+#'   hypergeometric test real power, was never backfilled.)
+#' @param ora_lfc_cutoff Optional additional `abs(log2FoldChange) >=` floor,
+#'   applied after the p-value filter. `NULL` (default) applies none.
+#' @param label Used only in progress messages.
+#' @return The subset of `tbl` passing the filter (a data frame, not just an
+#'   ID vector, since callers also need other columns e.g. `log2FoldChange`).
+#' @keywords internal
+.filter_ora_genes <- function(tbl, id_col, ora_padj_cutoff, ora_min_genes,
+                              ora_lfc_cutoff = NULL, label = "ORA") {
+
+  ids  <- as.character(tbl[[id_col]])
+  keep <- !is.na(ids) & ids != "" & !is.na(tbl$padj) & tbl$padj < ora_padj_cutoff
+  n_padj <- sum(keep)
+
+  if (n_padj < ora_min_genes && "pvalue" %in% colnames(tbl)) {
+    message("   -> ", label, ": only ", n_padj, " gene(s) at padj < ", ora_padj_cutoff,
+            " (below ora_min_genes = ", ora_min_genes, "). Falling back to raw pvalue < 0.05.")
+    keep <- !is.na(ids) & ids != "" & !is.na(tbl$pvalue) & tbl$pvalue < 0.05
+  }
+
+  if (!is.null(ora_lfc_cutoff)) {
+    keep <- keep & !is.na(tbl$log2FoldChange) & abs(tbl$log2FoldChange) >= ora_lfc_cutoff
+  }
+
+  out <- tbl[keep, , drop = FALSE]
+  message("   -> ", label, " significant genes: ", nrow(out))
+  out
+}
+
 #' Run Functional Analysis with Directional Stat Management
 #'
 #' @export
@@ -298,6 +346,16 @@
 #' @param go_qvalue_cutoff GO ORA q-value cutoff (default 0.2)
 #' @param gsea_metric Metric to rank genes for GSEA ("stat", "signed_pval", or "log2FoldChange")
 #' @param test_type The upstream test design used: "Wald" or "LRT" (Required for correct stat ranking)
+#' @param ora_padj_cutoff Adjusted p-value cutoff for the gene list fed INTO
+#'   ORA (GO/Reactome/DO), kept separate from `padj_cutoff` -- see
+#'   `.filter_ora_genes()`. Default 0.05 (looser than `padj_cutoff`'s 0.01).
+#' @param ora_min_genes Minimum gene count at `ora_padj_cutoff` before
+#'   falling back to raw `pvalue < 0.05`; see `.filter_ora_genes()`.
+#'   Default 10.
+#' @param ora_lfc_cutoff Optional `abs(log2FoldChange) >=` floor applied
+#'   uniformly to GO/Reactome/DO ORA input. `NULL` (default) applies none.
+#'   (Previously Reactome ORA alone applied an undocumented `abs(LFC) >= 1`
+#'   floor, making it stricter than GO/DO ORA for no stated reason.)
 #' @return List with functional results
 run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
                                     level, base, top_genes, padj_cutoff = 0.01,
@@ -305,6 +363,9 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
                                     go_qvalue_cutoff = 0.2,
                                     gsea_metric = "stat",
                                     test_type = "Wald",
+                                    ora_padj_cutoff = 0.05,
+                                    ora_min_genes = 10,
+                                    ora_lfc_cutoff = NULL,
                                     run_spia = FALSE) { 
   
   comp_name <- paste0(level, "_vs_", base)
@@ -356,9 +417,8 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   dir_gsea <- safe_dir(file.path(out_dir, "GSEA"))  
 
   allOE_genes <- as.character(res_tbl$gene[!is.na(res_tbl$gene)])
-  sigOE       <- dplyr::filter(res_tbl, .data$padj < padj_cutoff)
-  if (nrow(sigOE) == 0 && "pvalue" %in% colnames(res_tbl))
-    sigOE <- dplyr::filter(res_tbl, .data$pvalue < 0.05)
+  sigOE       <- .filter_ora_genes(res_tbl, "gene", ora_padj_cutoff, ora_min_genes,
+                                   ora_lfc_cutoff, label = "GO ORA")
   sigOE_genes <- unique(as.character(sigOE$gene[!is.na(sigOE$gene) & sigOE$gene != ""]))
   if (length(sigOE_genes) == 0) {
     message("No significant genes found. Skipping functional analysis."); return(NULL)
@@ -513,21 +573,17 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   gsea_list <- sort(purrr::set_names(metric_vals, as.character(res_entrez$entrezid)), 
                     decreasing = TRUE)
 
-  sig_entrez_ids <- as.character(res_entrez$entrezid[!is.na(res_entrez$padj) & res_entrez$padj < padj_cutoff])
-  if (length(sig_entrez_ids) == 0 && "pvalue" %in% colnames(res_entrez)) {
-    sig_entrez_ids <- as.character(res_entrez$entrezid[!is.na(res_entrez$pvalue) & res_entrez$pvalue < 0.05])
-  }
-  message("   -> Significant ORA genes with Entrez IDs: ", length(sig_entrez_ids))
-
-  message(" -> Generating Curated List specifically for Reactome ORA...")
-  reac_lfc_cutoff <- 1.0 
-  
-  res_reac_curated <- res_entrez[as.character(res_entrez$entrezid) %in% sig_entrez_ids & 
-                                   abs(res_entrez$log2FoldChange) >= reac_lfc_cutoff, ]
-  message(sprintf("   -> Reactome Filter (%s): Candidate background & abs(LFC) >= %s", test_type, reac_lfc_cutoff))
-  
-  sig_entrez_reac <- as.character(res_reac_curated$entrezid)
-  message("   -> Reactome curated ORA genes available: ", length(sig_entrez_reac))
+  # GO ORA, Reactome ORA, and Disease Ontology ORA all draw from the same
+  # significant-gene definition via .filter_ora_genes(). Previously Reactome
+  # alone applied an extra, hardcoded abs(log2FC) >= 1 floor on top of the
+  # padj/pvalue filter (reac_lfc_cutoff <- 1.0), making it strictly harder to
+  # get a Reactome hit than a GO or DO hit for no stated reason. Set
+  # ora_lfc_cutoff to reintroduce an LFC floor -- uniformly, across all
+  # three -- if desired.
+  sig_entrez_df   <- .filter_ora_genes(res_entrez, "entrezid", ora_padj_cutoff, ora_min_genes,
+                                       ora_lfc_cutoff, label = "Reactome/DO ORA")
+  sig_entrez_ids  <- as.character(sig_entrez_df$entrezid)
+  sig_entrez_reac <- sig_entrez_ids
 
   message("Running Reactome ORA on curated list...")
   reac_org <- ifelse(kegg_code == "hsa", "human", "mouse")
@@ -728,6 +784,12 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 #' @param out_dir Output directory for fgsea results.
 #' @param comp_name Comparison name for file naming.
 #' @param padj_cutoff Adjusted p-value cutoff for filtering significant pathways.
+#' @param gsea_metric Metric to rank genes for GSEA ("stat", "signed_pval", or
+#'   "log2FoldChange"). Same semantics as `run_functional_analysis()`'s
+#'   `gsea_metric` -- kept as a separate argument here (rather than silently
+#'   inherited) because this function ranks by gene SYMBOL, not Entrez ID.
+#' @param test_type The upstream test design used: "Wald" or "LRT". Only
+#'   affects ranking when `gsea_metric = "stat"` (see `run_functional_analysis()`).
 #'
 #' @export
 run_fgsea_analysis <- function(res_tbl,
@@ -735,11 +797,78 @@ run_fgsea_analysis <- function(res_tbl,
                                edb,
                                out_dir,
                                comp_name,
-                               padj_cutoff = 0.01) {
+                               padj_cutoff = 0.01,
+                               gsea_metric = "stat",
+                               test_type = "Wald") {
 
   gmt_list <- if (is.null(gmt_file)) list(NULL) else as.list(gmt_file)
 
   # .safe_ggsave() is defined once, package-level, in utils_core.R.
+
+  # Built once, outside the gmt_list loop, since the ranking does not depend
+  # on which pathway collection is being tested (previously this identical
+  # computation -- including the fixed jitter seed -- was silently repeated
+  # once per collection, e.g. 10x with the default `gmt_file`).
+  message("-> Preparing ranked gene list for FGSEA (metric: ", gsea_metric, ")...")
+
+  res2 <- res_tbl |>
+    dplyr::select(gene, log2FoldChange, dplyr::any_of(c("stat", "pvalue"))) |>
+    dplyr::filter(!is.na(gene), gene != "", !is.na(log2FoldChange)) |>
+    dplyr::distinct()
+
+  if (gsea_metric == "stat") {
+    if (!"stat" %in% colnames(res2)) {
+      stop("Column 'stat' not found in results table. Verify that you injected ",
+           "res_unshrunken$stat back into your results, or call run_fgsea_analysis() ",
+           "with gsea_metric = \"log2FoldChange\" or \"signed_pval\" instead.")
+    }
+    # One row per gene symbol, keeping whichever duplicate has the most
+    # extreme |stat| (mirrors the OE_foldchanges convention used elsewhere
+    # in this file), so the log2FoldChange used for the LRT sign transform
+    # below always comes from the same row as the stat it signs.
+    res2 <- res2 |>
+      dplyr::group_by(gene) |>
+      dplyr::slice_max(abs(stat), n = 1, with_ties = FALSE) |>
+      dplyr::ungroup()
+
+    if (toupper(test_type) == "LRT") {
+      message("   -> LRT design detected. Transforming Chi-Square metrics into directional stats via sign(log2FoldChange).")
+      metric_vals <- sign(res2$log2FoldChange) * res2$stat
+    } else {
+      metric_vals <- res2$stat
+    }
+
+  } else if (gsea_metric == "signed_pval") {
+    if (!"pvalue" %in% colnames(res2)) {
+      stop("Column 'pvalue' not found in results table. Cannot use gsea_metric = \"signed_pval\".")
+    }
+    res2 <- res2 |>
+      dplyr::group_by(gene) |>
+      dplyr::slice_min(pvalue, n = 1, with_ties = FALSE) |>
+      dplyr::ungroup()
+
+    safe_pvals  <- ifelse(res2$pvalue == 0, .Machine$double.xmin, res2$pvalue)
+    metric_vals <- sign(res2$log2FoldChange) * -log10(safe_pvals)
+
+  } else {
+    # Unchanged from the original implementation: mean log2FoldChange
+    # across duplicate gene symbols.
+    res2 <- res2 |>
+      dplyr::group_by(gene) |>
+      dplyr::summarize(log2FoldChange = mean(log2FoldChange, na.rm = TRUE), .groups = "drop")
+    metric_vals <- res2$log2FoldChange
+  }
+
+  ranks <- purrr::set_names(metric_vals, as.character(res2$gene))
+
+  if (length(ranks) == 0) {
+    message("-> Skipping FGSEA: no valid ranked genes available.")
+    return(invisible(NULL))
+  }
+
+  set.seed(123456)
+  ranks <- ranks + stats::runif(length(ranks), min = -1e-6, max = 1e-6)
+  ranks <- sort(ranks, decreasing = TRUE)
 
   for (gmt_item in gmt_list) {
 
@@ -892,28 +1021,6 @@ run_fgsea_analysis <- function(res_tbl,
     }
 
 
-    message("-> Preparing ranked gene list for [", gmt_name, "]...")
-
-    res2 <- res_tbl |>
-      dplyr::select(gene, log2FoldChange) |>
-      stats::na.omit() |>
-      dplyr::distinct() |>
-      dplyr::group_by(gene) |>
-      dplyr::summarize(log2FoldChange = mean(log2FoldChange, na.rm = TRUE),
-                       .groups = "drop")
-
-    ranks <- tibble::deframe(res2)
-
-    if (length(ranks) == 0) {
-      message("-> Skipping [", gmt_name, "]: no valid ranked genes available.")
-      next
-    }
-
-    set.seed(123456)
-    ranks <- ranks + runif(length(ranks), min = -1e-6, max = 1e-6)
-    ranks <- sort(ranks, decreasing = TRUE)
-
-
     message("-> Running clusterProfiler GSEA for [", gmt_name, "]...")
 
     set.seed(123456)
@@ -944,7 +1051,15 @@ run_fgsea_analysis <- function(res_tbl,
     fgseaRes <- tryCatch(
       fgsea::fgseaMultilevel(
         pathways = pathways.fgsea,
-        stats = ranks
+        stats    = ranks,
+        # fgseaMultilevel() defaults to minSize=1/maxSize=length(stats)-1 --
+        # i.e. unbounded -- unlike every other enrichment call in this file
+        # (GO ORA/GSEA and the clusterProfiler::GSEA() call just above default
+        # to 10/500; Reactome GSEA uses 10/300). Left unbounded, fgsea tests
+        # and reports tiny/huge gene sets that ORA would never consider,
+        # which on its own inflates the apparent hit count relative to ORA.
+        minSize  = 10,
+        maxSize  = 500
       ),
       error = function(e) {
         message("   -> fgseaMultilevel failed: ", conditionMessage(e))
@@ -968,6 +1083,21 @@ run_fgsea_analysis <- function(res_tbl,
       file.path(fgsea_out, paste0("FGSEA_Results_", gmt_name, ".csv")),
       row.names = FALSE
     )
+
+    # unlike enrichGO()/enricher() (which only ever return terms that already
+    # pass pvalueCutoff/qvalueCutoff), fgseaMultilevel() has no significance
+    # filter -- the CSV above lists every pathway tested. Export a
+    # significant-only companion CSV so it's directly comparable to the ORA
+    # CSVs in ORA/GO, ORA/Reactome, etc. (row count vs row count) instead of
+    # "everything tested" vs "already-significant-only".
+    fgseaResTidy_sig <- fgseaResTidy |> dplyr::filter(padj < padj_cutoff)
+    utils::write.csv(
+      fgseaResTidy_sig |> dplyr::select(-leadingEdge),
+      file.path(fgsea_out, paste0("FGSEA_Results_", gmt_name, "_significant.csv")),
+      row.names = FALSE
+    )
+    message("   -> ", nrow(fgseaResTidy_sig), "/", nrow(fgseaResTidy),
+            " pathways significant at padj < ", padj_cutoff)
 
     if (requireNamespace("DT", quietly = TRUE) &&
         requireNamespace("htmlwidgets", quietly = TRUE)) {
@@ -1007,8 +1137,7 @@ run_fgsea_analysis <- function(res_tbl,
 
     message("-> Plotting NES barplot for [", gmt_name, "]...")
 
-    fgseaResTidy_filtered <- fgseaResTidy |>
-      dplyr::filter(padj < padj_cutoff)
+    fgseaResTidy_filtered <- fgseaResTidy_sig
 
     if (nrow(fgseaResTidy_filtered) > 0) {
 
