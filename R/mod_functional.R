@@ -356,6 +356,13 @@
 #'   uniformly to GO/Reactome/DO ORA input. `NULL` (default) applies none.
 #'   (Previously Reactome ORA alone applied an undocumented `abs(LFC) >= 1`
 #'   floor, making it stricter than GO/DO ORA for no stated reason.)
+#' @param run_gsea Logical: also run the Reactome/KEGG/GO GSEA blocks (and
+#'   SPIA, if `run_spia = TRUE`), all of which need a signed per-gene
+#'   ranking statistic. Set FALSE for result types with no such statistic
+#'   -- e.g. DTU, where DRIMSeq's feature-level output is a directionless
+#'   likelihood-ratio stat with no computed proportion-difference/
+#'   coefficient column. ORA (GO/Reactome/DO) is unaffected either way.
+#'   Default TRUE.
 #' @return List with functional results
 run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
                                     level, base, top_genes, padj_cutoff = 0.01,
@@ -366,6 +373,7 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
                                     ora_padj_cutoff = 0.05,
                                     ora_min_genes = 10,
                                     ora_lfc_cutoff = NULL,
+                                    run_gsea = TRUE,
                                     run_spia = FALSE) { 
   
   comp_name <- paste0(level, "_vs_", base)
@@ -406,7 +414,8 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     message("=== END DEBUG ===")
   }
 
-  required_pkgs <- c("ReactomePA", "DOSE", "pathview", "enrichplot", "enrichR", "clusterProfiler", "msigdbr")
+  required_pkgs <- c("ReactomePA", "DOSE", "enrichplot", "enrichR", "clusterProfiler", "msigdbr")
+  if (isTRUE(run_gsea)) required_pkgs <- c(required_pkgs, "pathview")
   for (pkg in required_pkgs) {
     if (!requireNamespace(pkg, quietly = TRUE)) {
       stop("The required package '", pkg, "' is missing. Please install it to proceed with functional analysis.")
@@ -415,6 +424,22 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
 
   dir_ora <- file.path(out_dir, "ORA")   
   dir_gsea <- safe_dir(file.path(out_dir, "GSEA"))  
+
+  # DTU has no signed effect-size column at all (DRIMSeq's feature-level
+  # output is a directionless likelihood-ratio stat, with no computed
+  # proportion-difference/coefficient column). Capture has_lfc BEFORE
+  # dummy-filling so res_entrez below (needed for ORA, always runs) doesn't
+  # get every row wrongly zeroed out by an `!is.na()` check against a
+  # column that was never really there -- and dummy-fill so every
+  # downstream `sigOE[..., c("gene","log2FoldChange")]`-style column
+  # selection doesn't hard-error with "undefined columns selected".
+  has_lfc <- "log2FoldChange" %in% colnames(res_tbl)
+  if (!has_lfc) {
+    message("   -> No 'log2FoldChange' column in res_tbl (expected for DTU). ",
+            "LFC-dependent extras (cnetplot coloring, KEGG pathview, SPIA, ",
+            "gsea_metric = \"log2FoldChange\") will be empty/skipped; ORA is unaffected.")
+    res_tbl$log2FoldChange <- NA_real_
+  }
 
   allOE_genes <- as.character(res_tbl$gene[!is.na(res_tbl$gene)])
   sigOE       <- .filter_ora_genes(res_tbl, "gene", ora_padj_cutoff, ora_min_genes,
@@ -538,7 +563,8 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     }
   }
 
-  res_entrez <- res_tbl[!is.na(res_tbl$entrezid) & res_tbl$entrezid != "" & !is.na(res_tbl$log2FoldChange), ]
+  lfc_ok <- if (has_lfc) !is.na(res_tbl$log2FoldChange) else TRUE
+  res_entrez <- res_tbl[!is.na(res_tbl$entrezid) & res_tbl$entrezid != "" & lfc_ok, ]
   res_entrez <- res_entrez[!duplicated(res_entrez$entrezid), ]
   
   total_genes  <- nrow(res_tbl)
@@ -548,30 +574,35 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     message("   -> WARNING: No Entrez IDs found. Check that org_db (", org_db, ") is installed and gene symbols match.")
   }
 
-  message("   -> Generating ranked list using metric: ", gsea_metric)
-  if (gsea_metric == "stat") {
-    if (!"stat" %in% colnames(res_entrez)) {
-      stop("Column 'stat' not found in results table. Verify that you injected res_unshrunken$stat back into your results.")
-    }
-    
-    if (toupper(test_type) == "LRT") {
-      message("   -> [MANAGEMENT] LRT design detected. Transforming Chi-Square metrics into directional stats via sign(log2FoldChange).")
-      metric_vals <- sign(res_entrez$log2FoldChange) * res_entrez$stat
+  if (isTRUE(run_gsea)) {
+    message("   -> Generating ranked list using metric: ", gsea_metric)
+    if (gsea_metric == "stat") {
+      if (!"stat" %in% colnames(res_entrez)) {
+        stop("Column 'stat' not found in results table. Verify that you injected res_unshrunken$stat back into your results.")
+      }
+      
+      if (toupper(test_type) == "LRT") {
+        message("   -> [MANAGEMENT] LRT design detected. Transforming Chi-Square metrics into directional stats via sign(log2FoldChange).")
+        metric_vals <- sign(res_entrez$log2FoldChange) * res_entrez$stat
+      } else {
+        message("   -> Wald design detected. Using native directional Wald z-scores.")
+        metric_vals <- res_entrez$stat
+      }
+      
+    } else if (gsea_metric == "signed_pval") {
+      safe_pvals  <- ifelse(res_entrez$pvalue == 0, .Machine$double.xmin, res_entrez$pvalue)
+      metric_vals <- sign(res_entrez$log2FoldChange) * -log10(safe_pvals)
     } else {
-      message("   -> Wald design detected. Using native directional Wald z-scores.")
-      metric_vals <- res_entrez$stat
+      metric_vals <- res_entrez$log2FoldChange
     }
-    
-  } else if (gsea_metric == "signed_pval") {
-    safe_pvals  <- ifelse(res_entrez$pvalue == 0, .Machine$double.xmin, res_entrez$pvalue)
-    metric_vals <- sign(res_entrez$log2FoldChange) * -log10(safe_pvals)
+    set.seed(123456)
+    metric_vals <- metric_vals + runif(nrow(res_entrez), -1e-9, 1e-9)
+    gsea_list <- sort(purrr::set_names(metric_vals, as.character(res_entrez$entrezid)), 
+                      decreasing = TRUE)
   } else {
-    metric_vals <- res_entrez$log2FoldChange
+    message("   -> Skipping GSEA-family ranking (run_gsea = FALSE): no valid signed statistic for this result type (e.g. DTU).")
+    gsea_list <- NULL
   }
-  set.seed(123456)
-  metric_vals <- metric_vals + runif(nrow(res_entrez), -1e-9, 1e-9)
-  gsea_list <- sort(purrr::set_names(metric_vals, as.character(res_entrez$entrezid)), 
-                    decreasing = TRUE)
 
   # GO ORA, Reactome ORA, and Disease Ontology ORA all draw from the same
   # significant-gene definition via .filter_ora_genes(). Previously Reactome
@@ -627,6 +658,7 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     message("      Skipping Disease Ontology ORA (not human or no sig genes)")
   }
 
+  if (isTRUE(run_gsea)) {
   message("Running Reactome GSEA on complete ranked genome background...")
   set.seed(123456)
   gseaReac <- safe_run(
@@ -723,9 +755,12 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
   for (ont in c("BP", "MF", "CC")) {
     .run_go_gsea(gsea_list, org_db, ont, padj_cutoff, out_dir, comp_name)
   }
+  } else {
+    message("Skipping Reactome/KEGG/GO GSEA (run_gsea = FALSE): no valid signed statistic for this result type (e.g. DTU).")
+  }
 
 
-  if (isTRUE(run_spia)) {
+  if (isTRUE(run_spia) && isTRUE(run_gsea)) {
     message("Running SPIA analysis...")
     if (length(sig_entrez_ids) > 0) {
       spia_de <- purrr::set_names(as.numeric(res_entrez$log2FoldChange), as.character(res_entrez$entrezid))
@@ -756,6 +791,8 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
     } else {
       message("      Skipping SPIA: no significant Entrez genes available.")
     }
+  } else if (isTRUE(run_spia)) {
+    message("Skipping SPIA: run_gsea = FALSE means no directional statistic is available for this result type (e.g. DTU).")
   } else {
     message("Skipping SPIA (run_spia = FALSE).")
   }
@@ -1397,4 +1434,149 @@ run_local_enrichment <- function(gene_list, universe, organism = "Homo sapiens",
     pvalueCutoff = pvalue_cutoff,
     qvalueCutoff = qvalue_cutoff
   )
+}
+
+#' Adapt a DTE or DTU results table to the DGE-style res_tbl shape expected
+#' by `run_functional_analysis()` / `run_fgsea_analysis()`
+#'
+#' @description Both DTE's `res_df` and DTU's `dtu_results` already carry
+#'   the columns those two functions need (`gene`, `padj`, `pvalue`,
+#'   `entrezid`, and for DTE only `log2FoldChange`/`stat`) -- multiple
+#'   transcripts per gene are already handled by the existing group-by-gene
+#'   dedup logic in both functions. Two adjustments are still needed:
+#'   \itemize{
+#'     \item Both tables' `gene` column falls back to the transcript/feature
+#'       ID via `.coalesce_gene_label()` when no symbol was resolved. Left
+#'       as-is, those rows would pad ORA's background/universe with IDs
+#'       that can never match a pathway member -- use `gene_symbol` and
+#'       drop unresolved rows instead.
+#'     \item DTU's adjusted p-value column is named `adj_pvalue`, and its
+#'       raw p-value column is whichever of `pvalue`/`p_value` DRIMSeq's
+#'       `results()` produced -- normalize both to `padj`/`pvalue`.
+#'   }
+#' @keywords internal
+.adapt_isoform_res_tbl <- function(res_tbl, analysis_type) {
+
+  res_tbl <- as.data.frame(res_tbl)
+
+  if ("gene_symbol" %in% colnames(res_tbl)) {
+    res_tbl$gene <- res_tbl$gene_symbol
+  }
+  res_tbl <- res_tbl[!is.na(res_tbl$gene) & res_tbl$gene != "", , drop = FALSE]
+
+  if (identical(analysis_type, "DTU")) {
+    if (!"padj" %in% colnames(res_tbl) && "adj_pvalue" %in% colnames(res_tbl)) {
+      res_tbl$padj <- res_tbl$adj_pvalue
+    }
+    if (!"pvalue" %in% colnames(res_tbl)) {
+      pcol <- intersect(c("pvalue", "p_value"), colnames(res_tbl))[1]
+      if (!is.na(pcol)) res_tbl$pvalue <- res_tbl[[pcol]]
+    }
+  }
+
+  res_tbl
+}
+
+#' Run functional enrichment on isoform-level (DTE/DTU) results
+#'
+#' @description Thin adapter around `run_functional_analysis()` /
+#'   `run_fgsea_analysis()` -- the exact same ORA/FGSEA engines and
+#'   GO/Reactome/DO/MSigDB databases used for the DGE-level analysis -- fed
+#'   with an isoform-level results table.
+#'
+#'   DTE (DESeq2, transcript-level) carries the same columns as a DGE-level
+#'   `res_tbl` (`log2FoldChange`, `stat`, `padj`, `pvalue`, `entrezid`) and
+#'   gets the full ORA + FGSEA treatment. `run_dte()` always runs its
+#'   DESeq2 test with `test = "Wald"` regardless of whatever test the
+#'   DGE-level pipeline used, so ranking here always uses the Wald branch.
+#'
+#'   DTU (DRIMSeq, transcript-usage) has no such statistic: DRIMSeq's
+#'   feature-level `lr` is a directionless likelihood-ratio value, and no
+#'   proportion-difference/coefficient column is computed upstream. FGSEA
+#'   is skipped entirely for DTU, and `run_functional_analysis()` is called
+#'   with `run_gsea = FALSE` so its Reactome/KEGG/GO GSEA (and SPIA) blocks
+#'   are skipped too -- only GO/Reactome/DO ORA run.
+#'
+#' @param res_tbl DTE's `res_df`, or DTU's `dtu_results` data frame (i.e.
+#'   `dtu_res$dtu_results` -- unwrap `run_dtu()`'s `list(dtu_results = ...)`
+#'   return value before calling this).
+#' @param analysis_type "DTE" or "DTU".
+#' @param gmt_file MSigDB collections for FGSEA. Pass the *same* value used
+#'   for the DGE-level `run_fgsea_analysis()` call so isoform- and gene-level
+#'   FGSEA cover identical databases. Ignored when `analysis_type = "DTU"`.
+#' @inheritParams run_functional_analysis
+#' @return List with elements `functional` (see `run_functional_analysis()`)
+#'   and `fgsea` (see `run_fgsea_analysis()`; always `NULL` for DTU).
+#' @export
+run_isoform_functional_analysis <- function(res_tbl, edb, out_dir,
+                                            analysis_type = c("DTE", "DTU"),
+                                            level, base, top_genes = 30,
+                                            padj_cutoff = 0.01,
+                                            go_pvalue_cutoff = 0.05,
+                                            go_qvalue_cutoff = 0.2,
+                                            gsea_metric = "stat",
+                                            ora_padj_cutoff = 0.05,
+                                            ora_min_genes = 10,
+                                            ora_lfc_cutoff = NULL,
+                                            gmt_file = c("C2", "C5", "C8"),
+                                            run_spia = FALSE) {
+
+  analysis_type <- match.arg(analysis_type)
+  comp_name     <- paste0(level, "_vs_", base)
+  run_gsea      <- identical(analysis_type, "DTE")
+
+  if (identical(analysis_type, "DTU") && !is.null(ora_lfc_cutoff)) {
+    message("   -> ora_lfc_cutoff ignored for DTU: DRIMSeq DTU results have no log2FoldChange column.")
+    ora_lfc_cutoff <- NULL
+  }
+
+  res_tbl <- .adapt_isoform_res_tbl(res_tbl, analysis_type)
+  out_dir_analysis <- safe_dir(file.path(out_dir, paste0(analysis_type, "_Enrichment")))
+
+  message("\n=== Functional enrichment on ", analysis_type, " results (", comp_name, ") ===")
+
+  functional_res <- safe_run(
+    run_functional_analysis(
+      res_tbl          = res_tbl,
+      sig_res          = NULL,
+      edb              = edb,
+      out_dir          = out_dir_analysis,
+      level            = level,
+      base             = base,
+      top_genes        = top_genes,
+      padj_cutoff      = padj_cutoff,
+      go_pvalue_cutoff = go_pvalue_cutoff,
+      go_qvalue_cutoff = go_qvalue_cutoff,
+      gsea_metric      = gsea_metric,
+      test_type        = "Wald",  # run_dte() always tests with test = "Wald"; irrelevant for DTU (run_gsea = FALSE)
+      ora_padj_cutoff  = ora_padj_cutoff,
+      ora_min_genes    = ora_min_genes,
+      ora_lfc_cutoff   = ora_lfc_cutoff,
+      run_gsea         = run_gsea,
+      run_spia         = run_spia
+    ),
+    label = paste0(analysis_type, " ORA", if (run_gsea) "/GSEA" else "")
+  )
+
+  fgsea_res <- NULL
+  if (run_gsea) {
+    fgsea_res <- safe_run(
+      run_fgsea_analysis(
+        res_tbl     = res_tbl,
+        gmt_file    = gmt_file,
+        edb         = edb,
+        out_dir     = out_dir_analysis,
+        comp_name   = comp_name,
+        padj_cutoff = padj_cutoff,
+        gsea_metric = gsea_metric,
+        test_type   = "Wald"
+      ),
+      label = paste0(analysis_type, " FGSEA")
+    )
+  } else {
+    message("   -> Skipping FGSEA for ", analysis_type,
+            ": no signed ranking statistic is available from DRIMSeq DTU output.")
+  }
+
+  list(functional = functional_res, fgsea = fgsea_res)
 }

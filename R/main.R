@@ -54,6 +54,11 @@
 #' @param resume_isoform_from Path to directory with saved DTE/DTU RDS files to resume isoform analysis
 #' @param isoform_report_genes Gene symbols for transcript-proportion plots and enhanced isoform visualizations
 #' @param run_dexseq Logical: also run DEXSeq-based DTU engine
+#' @param run_isoform_enrichment Logical: run functional enrichment (ORA, and
+#'   FGSEA for DTE) on DTE/DTU results, using the same GO/Reactome/DO/MSigDB
+#'   databases as the DGE-level analysis. Runs once DTE/DTU are available,
+#'   before `run_isoform_switch()`. See `run_isoform_functional_analysis()`.
+#'   Default TRUE.
 #' @param isoform_plot_top_n Number of top isoform switches to render automatically
 #' @param nBest Number of top genes to include in RegionReport
 #' @param eda_only Logical: if TRUE, run only import + EDA then stop
@@ -111,6 +116,7 @@ expressom <- function(count_type        = "salmon",
                       resume_isoform_from = NULL,
                       isoform_report_genes = NULL,
                       run_dexseq        = FALSE,
+                      run_isoform_enrichment = TRUE,
                       isoform_plot_top_n = 10,
                       eda_only          = FALSE,
                       group_col         = NULL,
@@ -845,6 +851,71 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         }
       }
 
+      # Step D: functional enrichment on DTE/DTU results, using the exact
+      # same ORA/FGSEA machinery and GO/Reactome/DO/MSigDB databases as the
+      # DGE-level analysis (run_isoform_functional_analysis() in
+      # mod_functional.R). Runs once DTE/DTU are available -- whether just
+      # computed above or loaded from a checkpoint/resume directory -- and
+      # deliberately before run_isoform_switch() below, since that's the
+      # point in the pipeline the person asked for it.
+      dte_func_res <- NULL
+      dtu_func_res <- NULL
+
+      if (isTRUE(run_isoform_enrichment)) {
+        if (.iso_ckpt_exists("dte_func_results.rds")) {
+          dte_func_res <- .iso_ckpt_load("dte_func_results.rds")
+        } else if (!is.null(dte_res)) {
+          message("Step D: Running functional enrichment on DTE results...")
+          dte_func_res <- run_isoform_functional_analysis(
+            res_tbl          = dte_res,
+            edb              = edb_obj,
+            out_dir          = iso_dir,
+            analysis_type    = "DTE",
+            level            = level,
+            base             = base,
+            top_genes        = top_genes,
+            padj_cutoff      = padj_cutoff,
+            go_pvalue_cutoff = go_pvalue_cutoff,
+            go_qvalue_cutoff = go_qvalue_cutoff,
+            gsea_metric      = gsea_metric,
+            ora_padj_cutoff  = ora_padj_cutoff,
+            ora_min_genes    = ora_min_genes,
+            ora_lfc_cutoff   = ora_lfc_cutoff,
+            gmt_file         = gmt_file,
+            run_spia         = run_spia
+          )
+          .iso_ckpt_save(dte_func_res, "dte_func_results.rds")
+        } else {
+          message("Step D: No DTE results available. Skipping DTE functional enrichment.")
+        }
+
+        if (.iso_ckpt_exists("dtu_func_results.rds")) {
+          dtu_func_res <- .iso_ckpt_load("dtu_func_results.rds")
+        } else if (!is.null(dtu_res) && !is.null(dtu_res$dtu_results)) {
+          message("Step D: Running functional enrichment on DTU results...")
+          dtu_func_res <- run_isoform_functional_analysis(
+            res_tbl          = dtu_res$dtu_results,
+            edb              = edb_obj,
+            out_dir          = iso_dir,
+            analysis_type    = "DTU",
+            level            = level,
+            base             = base,
+            top_genes        = top_genes,
+            padj_cutoff      = padj_cutoff,
+            go_pvalue_cutoff = go_pvalue_cutoff,
+            go_qvalue_cutoff = go_qvalue_cutoff,
+            ora_padj_cutoff  = ora_padj_cutoff,
+            ora_min_genes    = ora_min_genes,
+            ora_lfc_cutoff   = ora_lfc_cutoff
+          )
+          .iso_ckpt_save(dtu_func_res, "dtu_func_results.rds")
+        } else {
+          message("Step D: No DTU results available. Skipping DTU functional enrichment.")
+        }
+      } else {
+        message("Step D: Skipping DTE/DTU functional enrichment (run_isoform_enrichment = FALSE).")
+      }
+
       switch_res <- run_isoform_switch(
         dte_results    = dte_res,
         dtu_results    = dtu_res,
@@ -898,6 +969,8 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
         dte_res        = dte_res,
         dtu_res        = dtu_res,
         dexseq_res     = dexseq_res,
+        dte_func_res   = dte_func_res,
+        dtu_func_res   = dtu_func_res,
         switch_res     = switch_res
       )
     }
