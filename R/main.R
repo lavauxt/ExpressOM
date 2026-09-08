@@ -271,7 +271,7 @@ expressom <- function(count_type        = "salmon",
     tx_data,
     level = if (run_dge) level else NULL,
     base  = if (run_dge) base else NULL,
-    model = if (run_dge || (!eda_only && !is.null(model))) model else "~1",
+    model = model_eda,
     replicate_col = replicate_col
   )
 

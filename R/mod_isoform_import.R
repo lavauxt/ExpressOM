@@ -121,7 +121,16 @@ import_transcript_counts <- function(data_dir,
       count_type,
       "salmon" = "quant.sf",
       "kallisto" = "abundance.tsv",
-      "rsem" = "quant.genes.results",
+      # NOTE: this must be the *isoform*-level RSEM file, not
+      # "quant.genes.results" (the gene-level file used by import_counts()
+      # in mod_dge.R). tximport::tximport(type = "rsem") auto-detects
+      # gene-level input by checking whether the filename contains "genes"
+      # and, if so, force-switches to its gene-level reader regardless of
+      # txOut = TRUE below -- so pointing this at the genes.results file
+      # silently returns gene-level counts mislabeled as transcript-level
+      # data (no error; see the mapping check right after tximport() for
+      # the safety net this relies on if that ever regresses).
+      "rsem" = "quant.isoforms.results",
       "stringtie" = "t_data.ctab",
       stop("Unsupported count_type for tximport: ", count_type)
     )
@@ -144,6 +153,35 @@ import_transcript_counts <- function(data_dir,
     )
 
     rownames(txi$counts) <- clean_transcript_id(rownames(txi$counts))
+
+    # Sanity check: rownames(txi$counts) should be transcript IDs that
+    # overlap tx2gene$tx_id (already version-stripped above). If a
+    # count_type's quantification file turns out to actually be gene-level
+    # (as silently happens for "rsem" if a genes.results file is passed
+    # in), or count_type/data_dir otherwise point at the wrong files, the
+    # ID namespaces won't match and every downstream annotation join fails
+    # silently (DTE) or with a hard-to-read error much later in the
+    # pipeline (DTU/switch analysis). Catch it here, once, with a message
+    # that points straight at the cause.
+    n_total_tx <- length(rownames(txi$counts))
+    n_mapped_tx <- sum(rownames(txi$counts) %in% tx2gene$tx_id)
+
+    if (n_total_tx > 0 && n_mapped_tx / n_total_tx < 0.5) {
+      stop(
+        "Only ", n_mapped_tx, " / ", n_total_tx,
+        " imported feature IDs match transcript IDs in tx2gene. This usually means ",
+        "count_type = '", count_type, "' resolved to a gene-level quantification file ",
+        "instead of an isoform-level one (RSEM in particular has separate ",
+        "genes.results / isoforms.results outputs -- import_transcript_counts() needs ",
+        "the isoform-level file), or data_dir/count_type point at the wrong files.\n",
+        "Example imported feature IDs:\n  ",
+        paste(utils::head(rownames(txi$counts), 5), collapse = "\n  "),
+        "\n\nExample tx2gene tx_id values:\n  ",
+        paste(utils::head(tx2gene$tx_id, 5), collapse = "\n  "),
+        call. = FALSE
+      )
+    }
+
     meta <- sample_df[colnames(txi$counts), , drop = FALSE]
 
     return(list(
