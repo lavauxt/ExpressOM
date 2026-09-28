@@ -10,7 +10,9 @@ run_fgsea_analysis(
   edb,
   out_dir,
   comp_name,
-  padj_cutoff = 0.01
+  padj_cutoff = 0.01,
+  gsea_metric = "stat",
+  test_type = "Wald"
 )
 }
 \arguments{
@@ -33,6 +35,14 @@ species.}
 \item{comp_name}{Comparison name for file naming.}
 
 \item{padj_cutoff}{Adjusted p-value cutoff for filtering significant pathways.}
+
+\item{gsea_metric}{Metric to rank genes for GSEA ("stat", "signed_pval", or
+"log2FoldChange"). Same semantics as `run_functional_analysis()`'s
+`gsea_metric` -- kept as a separate argument here (rather than silently
+inherited) because this function ranks by gene SYMBOL, not Entrez ID.}
+
+\item{test_type}{The upstream test design used: "Wald" or "LRT". Only
+affects ranking when `gsea_metric = "stat"` (see `run_functional_analysis()`).}
 }
 \description{
 Performs Gene Set Enrichment Analysis using both `fgsea` and

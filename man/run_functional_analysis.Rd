@@ -17,6 +17,10 @@ run_functional_analysis(
   go_qvalue_cutoff = 0.2,
   gsea_metric = "stat",
   test_type = "Wald",
+  ora_padj_cutoff = 0.05,
+  ora_min_genes = 10,
+  ora_lfc_cutoff = NULL,
+  run_gsea = TRUE,
   run_spia = FALSE
 )
 }
@@ -44,6 +48,27 @@ run_functional_analysis(
 \item{gsea_metric}{Metric to rank genes for GSEA ("stat", "signed_pval", or "log2FoldChange")}
 
 \item{test_type}{The upstream test design used: "Wald" or "LRT" (Required for correct stat ranking)}
+
+\item{ora_padj_cutoff}{Adjusted p-value cutoff for the gene list fed INTO
+ORA (GO/Reactome/DO), kept separate from `padj_cutoff` -- see
+`.filter_ora_genes()`. Default 0.05 (looser than `padj_cutoff`'s 0.01).}
+
+\item{ora_min_genes}{Minimum gene count at `ora_padj_cutoff` before
+falling back to raw `pvalue < 0.05`; see `.filter_ora_genes()`.
+Default 10.}
+
+\item{ora_lfc_cutoff}{Optional `abs(log2FoldChange) >=` floor applied
+uniformly to GO/Reactome/DO ORA input. `NULL` (default) applies none.
+(Previously Reactome ORA alone applied an undocumented `abs(LFC) >= 1`
+floor, making it stricter than GO/DO ORA for no stated reason.)}
+
+\item{run_gsea}{Logical: also run the Reactome/KEGG/GO GSEA blocks (and
+SPIA, if `run_spia = TRUE`), all of which need a signed per-gene
+ranking statistic. Set FALSE for result types with no such statistic
+-- e.g. DTU, where DRIMSeq's feature-level output is a directionless
+likelihood-ratio stat with no computed proportion-difference/
+coefficient column. ORA (GO/Reactome/DO) is unaffected either way.
+Default TRUE.}
 }
 \value{
 List with functional results

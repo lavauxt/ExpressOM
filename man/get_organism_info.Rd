@@ -9,3 +9,12 @@ get_organism_info(edb)
 \description{
 Extract organism specific databases and properties
 }
+\note{
+`msig_cat`/`msig_db` below are per-organism defaults kept for
+  backward compatibility with any external caller reading them directly;
+  nothing in this package uses them anymore. The actual, per-collection
+  MSigDB resolution (human vs. mouse-native "M*" collections, subcategory
+  fallback, etc.) lives in `.resolve_msigdbr_collection()` in
+  mod_functional.R, which is the source of truth `run_fgsea_analysis()`
+  and `run_local_enrichment()` both call through.
+}

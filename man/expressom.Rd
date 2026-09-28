@@ -27,6 +27,9 @@ expressom(
   padj_cutoff = 0.01,
   go_pvalue_cutoff = 0.05,
   go_qvalue_cutoff = 0.2,
+  ora_padj_cutoff = 0.05,
+  ora_min_genes = 10,
+  ora_lfc_cutoff = NULL,
   test = "Wald",
   reduced = NULL,
   highlight_genes = NULL,
@@ -49,6 +52,7 @@ expressom(
   resume_isoform_from = NULL,
   isoform_report_genes = NULL,
   run_dexseq = FALSE,
+  run_isoform_enrichment = TRUE,
   isoform_plot_top_n = 10,
   eda_only = FALSE,
   group_col = NULL,
@@ -81,6 +85,9 @@ run_bulk_pipeline(
   padj_cutoff = 0.01,
   go_pvalue_cutoff = 0.05,
   go_qvalue_cutoff = 0.2,
+  ora_padj_cutoff = 0.05,
+  ora_min_genes = 10,
+  ora_lfc_cutoff = NULL,
   test = "Wald",
   reduced = NULL,
   highlight_genes = NULL,
@@ -103,6 +110,7 @@ run_bulk_pipeline(
   resume_isoform_from = NULL,
   isoform_report_genes = NULL,
   run_dexseq = FALSE,
+  run_isoform_enrichment = TRUE,
   isoform_plot_top_n = 10,
   eda_only = FALSE,
   group_col = NULL,
@@ -152,6 +160,17 @@ run_bulk_pipeline(
 
 \item{go_qvalue_cutoff}{GO ORA q-value cutoff}
 
+\item{ora_padj_cutoff}{Adjusted p-value cutoff for the gene list fed into
+ORA (GO/Reactome/DO). Kept separate from `padj_cutoff` since ORA is a
+hypergeometric test that's underpowered by construction when its input
+list is short. Default 0.05.}
+
+\item{ora_min_genes}{Minimum gene count at `ora_padj_cutoff` before ORA's
+input list falls back to raw `pvalue < 0.05`. Default 10.}
+
+\item{ora_lfc_cutoff}{Optional `abs(log2FoldChange) >=` floor applied
+uniformly to GO/Reactome/DO ORA input. `NULL` (default) applies none.}
+
 \item{test}{Type of statistical test ("Wald" or "LRT")}
 
 \item{reduced}{Design formula for the reduced model (used if test = "LRT")}
@@ -195,6 +214,12 @@ run_bulk_pipeline(
 \item{isoform_report_genes}{Gene symbols for transcript-proportion plots and enhanced isoform visualizations}
 
 \item{run_dexseq}{Logical: also run DEXSeq-based DTU engine}
+
+\item{run_isoform_enrichment}{Logical: run functional enrichment (ORA, and
+FGSEA for DTE) on DTE/DTU results, using the same GO/Reactome/DO/MSigDB
+databases as the DGE-level analysis. Runs once DTE/DTU are available,
+before `run_isoform_switch()`. See `run_isoform_functional_analysis()`.
+Default TRUE.}
 
 \item{isoform_plot_top_n}{Number of top isoform switches to render automatically}
 
