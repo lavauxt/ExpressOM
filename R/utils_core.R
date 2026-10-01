@@ -407,7 +407,7 @@ safe_run <- function(expr, label = "") {
 #' @export
 create_homemade_db <- function(species = "human",
                                release = "107",
-                               maintainer = "User [user@example.com](mailto:user@example.com)",
+                               maintainer = "User <user@example.com>",
                                author = "ExpressOM Builder") {
   spec_prefix <- if (tolower(species) == "human") "Hsapiens" else "Mmusculus"
   pkg_name <- paste0("EnsDb.", spec_prefix, ".v", release)

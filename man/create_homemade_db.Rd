@@ -7,7 +7,7 @@
 create_homemade_db(
   species = "human",
   release = "107",
-  maintainer = "User [user@example.com](mailto:user@example.com)",
+  maintainer = "User <user@example.com>",
   author = "ExpressOM Builder"
 )
 }
