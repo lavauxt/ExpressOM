@@ -114,6 +114,33 @@ run_bulk_pipeline(
 )
 ```
 
+## PCA, Volcano and DEG-count Options
+
+```R
+run_bulk_pipeline(
+  # ... usual arguments ...
+  sample_labels    = "./data/sample_labels.csv",           # relabel samples on every PCA (file, data.frame or named vector)
+  pca_colors       = c(level = "red2", base = "royalblue"), # defaults shown
+  volcano_colors   = c(up = "red2", down = "royalblue", ns = "grey"), # defaults shown
+  deg_lfc_cutoff   = 1,                                    # |log2FC| used by the volcano and the DEG count table
+  deg_padj_cutoffs = c(0.01, 0.05)                         # DEG counts + DEG lists saved for each adjusted p-value
+)
+```
+
+* **`sample_labels`** – changes the names printed on all PCA plots (global, batch-corrected, comparison-only and transcript-level). Pass a CSV/TSV file, a data.frame, or a named vector (`c(S1 = "Treated rep1")`). In a file, the first column holds the sample IDs exactly as in the sample table and the second the label to print; the header row is optional and `,` / `;` / tab separators are detected automatically (columns named `sample`/`sample_id` and `label`/`new_label` are recognised wherever they are):
+
+  ```csv
+  sample,label
+  S1,Treated rep1
+  S2,Treated rep2
+  S5,Control rep1
+  ```
+
+  Samples that are not listed keep their own name. The `PCA_*_sample_scores.tsv` tables keep the original ID in `sample_label` and add the printed label as `plot_label`.
+* **PCA colours** – the `level` group is drawn in red and the `base` group in blue; any other group of the colouring column gets a distinct colour (green, orange, ...).
+* **Volcano** – genes with `padj < padj_cutoff` and `log2FC > deg_lfc_cutoff` are red, those with `log2FC < -deg_lfc_cutoff` are blue, the rest grey. The caption reads `Upregulated: N | Downregulated: M` instead of the total number of genes.
+* **`deg_padj_cutoffs`** – writes `DE_raw_results/DEG_counts_<level>_vs_<base>.txt`, one row per adjusted p-value cutoff (the ones you give plus `padj_cutoff`): `n_tested` (genes with an adjusted p-value), `n_sig`, `n_up`, `n_down` (adjusted p-value only) and `n_sig_lfc`, `n_up_lfc`, `n_down_lfc` (also requiring `|log2FC| > deg_lfc_cutoff`). One DEG list per cutoff is saved next to it (`DEgenes_pval_0_01_...txt`, `DEgenes_pval_0_05_...txt`, most significant first). `deg_padj_cutoffs = NULL` keeps only the list for `padj_cutoff`.
+
 ## Multi-GMT Pathway Profiling (FGSEA)
 
 The gmt_file parameter accepts a string vector or a standard list object mapping multiple independent gene matrices simultaneously. The workflow loops through each matrix file and saves separate outputs under dedicated subfolders named after the file
@@ -147,7 +174,7 @@ results/
 
 The `run_bulk_pipeline` function generates a heavily organized output structure in your designated `out_dir`:
 
-* **`DE_raw_results/`**: TSV tables of raw/filtered differential expression results and normalized counts.
+* **`DE_raw_results/`**: TSV tables of raw/filtered differential expression results and normalized counts, one DEG list per adjusted p-value cutoff, and `DEG_counts_<comparison>.txt` (number of up/down DEGs per cutoff, see `deg_padj_cutoffs`).
 * **`Plots/`**: PCA plots, Sample Correlation Heatmaps, MA plots, Volcano plots, and top DE gene boxplots.
 * **`ORA/` & `GSEA/`**: Extensive targets and plots for GO mapping, Reactome, Disease Ontology, and KEGG generic pathways (Dotplots, Ridgeplots, Pathway Graphs).
 * **`SPIA/`**: Signaling Pathway Impact Analysis graphs and Evidence CSVs.

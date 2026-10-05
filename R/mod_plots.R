@@ -1,5 +1,256 @@
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+## ---------------------------------------------------------------------------
+## Sample relabelling + colour helpers shared by the PCA and volcano plots
+## ---------------------------------------------------------------------------
+
+#' Normalise a user-supplied sample relabelling into a named character vector
+#'
+#' Accepts any of:
+#' * `NULL` (no relabelling);
+#' * a named character vector / named list: names are the sample IDs used in
+#'   the sample table, values are the labels to print on the plot;
+#' * a data.frame with a sample-ID column and a label column;
+#' * the path to a CSV/TSV file holding such a table (delimiter auto-detected,
+#'   so Excel's `;`-separated CSV works too).
+#'
+#' For tables, the ID column is the first one named sample / sample_id / id /
+#' old / original / from ..., and the label column the first one named label /
+#' new_label / new_name / display / to ...; when no name is recognised the
+#' first two columns are used (ID, label). A header row is optional in files:
+#' a first row that does not look like a header is read as data.
+#'
+#' @param sample_labels See above.
+#' @return `NULL`, or a named character vector (names = original sample IDs).
+#' @keywords internal
+.read_sample_labels <- function(sample_labels) {
+  if (is.null(sample_labels) || length(sample_labels) == 0) return(NULL)
+
+  id_names    <- c("sample", "sample_id", "sampleid", "sample_name", "samplename",
+                   "id", "old", "old_name", "old_label", "from", "original", "current")
+  label_names <- c("label", "new_label", "newlabel", "new_name", "newname", "new",
+                   "display", "display_name", "plot_label", "to", "rename",
+                   "relabel", "alias", "name")
+  norm_nm <- function(x) gsub("^_+|_+$", "", gsub("[^a-z0-9]+", "_", tolower(trimws(x))))
+
+  ids <- labs <- NULL
+  tbl <- NULL
+  nm  <- character(0)
+
+  if (is.character(sample_labels) && length(sample_labels) == 1L &&
+      is.null(names(sample_labels))) {
+    path <- path.expand(sample_labels)
+    if (!file.exists(path)) {
+      stop("sample_labels file not found: ", sample_labels, call. = FALSE)
+    }
+
+    raw <- tryCatch(
+      data.table::fread(path, header = FALSE, colClasses = "character",
+                        data.table = FALSE, blank.lines.skip = TRUE),
+      error = function(e) {
+        stop("Could not read sample_labels file '", sample_labels, "': ",
+             conditionMessage(e), call. = FALSE)
+      }
+    )
+
+    if (ncol(raw) < 2L || nrow(raw) == 0L) {
+      stop("sample_labels file '", sample_labels, "' needs at least two columns ",
+           "(sample ID, new label) and one row.", call. = FALSE)
+    }
+
+    first      <- norm_nm(unlist(raw[1, ], use.names = FALSE))
+    has_header <- any(first %in% c(id_names, label_names))
+
+    if (has_header) {
+      tbl <- raw[-1, , drop = FALSE]
+      nm  <- first
+    } else {
+      tbl <- raw
+      nm  <- rep("", ncol(raw))
+    }
+  } else if (is.data.frame(sample_labels)) {
+    if (ncol(sample_labels) < 2L) {
+      stop("sample_labels data.frame needs at least two columns (sample ID, new label).",
+           call. = FALSE)
+    }
+    tbl <- sample_labels
+    nm  <- norm_nm(names(tbl))
+  } else {
+    v <- unlist(sample_labels, use.names = TRUE)
+    if (is.null(names(v)) || any(is.na(names(v)) | !nzchar(names(v)))) {
+      stop("`sample_labels` must be a named character vector (names = sample IDs, ",
+           "values = new labels), a data.frame, or the path to a CSV/TSV file.",
+           call. = FALSE)
+    }
+    ids  <- names(v)
+    labs <- as.character(v)
+  }
+
+  if (is.null(ids)) {
+    id_idx <- which(nm %in% id_names)[1]
+    if (is.na(id_idx)) id_idx <- 1L
+
+    lab_idx <- which(nm %in% label_names & seq_along(nm) != id_idx)[1]
+    if (is.na(lab_idx)) {
+      if (ncol(tbl) == 2L || !any(nzchar(nm))) {
+        lab_idx <- setdiff(seq_len(ncol(tbl)), id_idx)[1]
+      } else {
+        stop("sample_labels table has ", ncol(tbl), " columns and none is named ",
+             "'label' (or new_label, new_name, display, ...); please name the ",
+             "column holding the new labels 'label'.", call. = FALSE)
+      }
+    }
+
+    ids  <- as.character(tbl[[id_idx]])
+    labs <- as.character(tbl[[lab_idx]])
+  }
+
+  ids  <- trimws(ids)
+  labs <- trimws(labs)
+  keep <- !is.na(ids) & nzchar(ids)
+  ids  <- ids[keep]
+  labs <- labs[keep]
+
+  dup <- duplicated(ids)
+  if (any(dup)) {
+    warning("sample_labels: duplicated sample ID(s) ignored (first entry kept): ",
+            paste(unique(ids[dup]), collapse = ", "), call. = FALSE)
+    ids  <- ids[!dup]
+    labs <- labs[!dup]
+  }
+
+  if (length(ids) == 0L) return(NULL)
+
+  stats::setNames(labs, ids)
+}
+
+#' Display labels for a vector of sample IDs
+#'
+#' Samples without an entry (or with an empty/NA new label) keep their
+#' original ID, so a partial mapping is fine.
+#' @param sample_ids Character vector of sample IDs as found in the data
+#' @param sample_labels Anything accepted by `.read_sample_labels()`
+#' @return Character vector, same length as `sample_ids`
+#' @keywords internal
+.apply_sample_labels <- function(sample_ids, sample_labels = NULL) {
+  sample_ids <- as.character(sample_ids)
+  lab_map <- .read_sample_labels(sample_labels)
+  if (is.null(lab_map)) return(sample_ids)
+
+  out <- unname(lab_map[sample_ids])
+  bad <- is.na(out) | !nzchar(out)
+  out[bad] <- sample_ids[bad]
+  out
+}
+
+#' Tell the user which relabelling entries / samples did not line up
+#' @keywords internal
+.report_unmatched_labels <- function(sample_labels, sample_ids) {
+  lab_map <- .read_sample_labels(sample_labels)
+  if (is.null(lab_map)) return(invisible(NULL))
+
+  sample_ids <- as.character(sample_ids)
+  unknown    <- setdiff(names(lab_map), sample_ids)
+  unlabelled <- setdiff(sample_ids, names(lab_map))
+  short <- function(x) {
+    paste0(paste(utils::head(x, 8), collapse = ", "), if (length(x) > 8) ", ..." else "")
+  }
+
+  if (length(unknown) == length(lab_map)) {
+    warning("sample_labels: none of the ", length(lab_map),
+            " sample ID(s) match the samples in the data (data has e.g. ",
+            short(sample_ids), "); PCA plots keep the original sample names.",
+            call. = FALSE)
+  } else {
+    if (length(unknown) > 0) {
+      message("   -> sample_labels: ", length(unknown),
+              " ID(s) not found in the data and ignored: ", short(unknown))
+    }
+    if (length(unlabelled) > 0) {
+      message("   -> sample_labels: ", length(unlabelled),
+              " sample(s) without a new label keep their original name: ", short(unlabelled))
+    }
+  }
+
+  invisible(NULL)
+}
+
+#' Resolve the PCA colours for the contrast levels
+#'
+#' Defaults: `level` (foreground/treated group) red, `base` (reference/control
+#' group) blue. Override with `c(level = "...", base = "...")`; either name
+#' may be omitted.
+#' @keywords internal
+.pca_colors <- function(pca_colors = NULL) {
+  defaults <- c(level = "red2", base = "royalblue")
+  if (is.null(pca_colors)) return(defaults)
+
+  if (is.null(names(pca_colors)) || !all(names(pca_colors) %in% names(defaults))) {
+    stop("`pca_colors` must be a named character vector with names among: level, base.",
+         call. = FALSE)
+  }
+
+  defaults[names(pca_colors)] <- as.character(pca_colors)
+  defaults
+}
+
+# Colours for groups that are neither `level` nor `base` (kept clear of red/blue)
+.pca_extra_palette <- c("#2CA02C", "#FF7F0E", "#9467BD", "#8C564B",
+                        "#E377C2", "#7F7F7F", "#BCBD22", "#17BECF")
+
+#' Named colour vector for the groups of a PCA
+#'
+#' @param groups Factor / character vector of group memberships
+#' @param level,base Contrast levels (may be NULL or absent from `groups`)
+#' @param pca_colors See `.pca_colors()`
+#' @return Character vector of colours named by group
+#' @keywords internal
+.pca_group_colors <- function(groups, level = NULL, base = NULL, pca_colors = NULL) {
+  grp <- if (is.factor(groups)) {
+    levels(droplevels(groups))
+  } else {
+    unique(as.character(groups[!is.na(groups)]))
+  }
+
+  cols <- .pca_colors(pca_colors)
+  out  <- stats::setNames(rep(NA_character_, length(grp)), grp)
+
+  if (length(level) == 1L && !is.na(level) && level %in% grp) out[[level]] <- cols[["level"]]
+  if (length(base)  == 1L && !is.na(base)  && base  %in% grp) out[[base]]  <- cols[["base"]]
+
+  rest <- is.na(out)
+  if (any(rest)) {
+    n   <- sum(rest)
+    pal <- if (n <= length(.pca_extra_palette)) {
+      .pca_extra_palette[seq_len(n)]
+    } else {
+      grDevices::colorRampPalette(.pca_extra_palette)(n)
+    }
+    out[rest] <- pal
+  }
+
+  out
+}
+
+#' Resolve the volcano colours (up / down / not significant)
+#'
+#' Defaults: up-regulated red, down-regulated blue, rest grey. Override with a
+#' named vector such as `c(down = "darkgreen")`.
+#' @keywords internal
+.volcano_colors <- function(colors = NULL) {
+  defaults <- c(up = "red2", down = "royalblue", ns = "grey")
+  if (is.null(colors)) return(defaults)
+
+  if (is.null(names(colors)) || !all(names(colors) %in% names(defaults))) {
+    stop("`volcano_colors` must be a named character vector with names among: up, down, ns.",
+         call. = FALSE)
+  }
+
+  defaults[names(colors)] <- as.character(colors)
+  defaults
+}
+
+
 #' Write PCA output tables: per-sample scores, percent variance, and
 #' per-sample values for the genes/transcripts that went into the PCA
 #'
@@ -55,11 +306,19 @@
 #' @param group_col Optional column name to use for colouring/annotation (overrides main_condition if non-NULL)
 #' @param batch_col Optional batch column name for limma correction and before/after PCA
 #' @param pca_ntop Number of most variable genes to use for PCA (default 500; set NULL to use all)
+#' @param pca_colors Optional named vector `c(level = ..., base = ...)` overriding the PCA colours
+#'   (default: `level` red, `base` blue)
+#' @param sample_labels Optional relabelling of the samples printed on the PCA plots: a named
+#'   character vector (names = sample IDs), a data.frame, or the path to a CSV/TSV (sample ID + label)
 #' @export
 run_eda <- function(dds, edb, out_dir, level, base,
                     main_condition = NULL, group_col = NULL,
-                    batch_col = NULL, pca_ntop = 500) {
+                    batch_col = NULL, pca_ntop = 500,
+                    pca_colors = NULL, sample_labels = NULL) {
   cond_col <- group_col %||% main_condition
+
+  sample_labels <- .read_sample_labels(sample_labels)
+  .report_unmatched_labels(sample_labels, colnames(dds))
 
   rld <- DESeq2::rlog(dds, blind = TRUE)
 
@@ -91,14 +350,18 @@ run_eda <- function(dds, edb, out_dir, level, base,
     res_orig <- plot_custom_pca(rld, condition = cond_col, batch = batch_col,
                                  title = paste0("PCA (", cond_col, ")", if (!is.null(level) && !is.null(base)) paste0(" - ", level, " vs ", base) else ""),
                                  return_plot = TRUE, return_gene_list = TRUE,
-                                 ntop = pca_ntop)
+                                 ntop = pca_ntop,
+                                 level = level, base = base,
+                                 pca_colors = pca_colors, sample_labels = sample_labels)
     p_orig <- res_orig$plot
     gene_info_orig <- res_orig$gene_info
   } else {
     res_orig <- plot_custom_pca(rld, condition = NULL, batch = batch_col,
                                  title = "PCA (no condition grouping)",
                                  return_plot = TRUE, return_gene_list = TRUE,
-                                 ntop = pca_ntop)
+                                 ntop = pca_ntop,
+                                 level = level, base = base,
+                                 pca_colors = pca_colors, sample_labels = sample_labels)
     p_orig <- res_orig$plot
     gene_info_orig <- res_orig$gene_info
   }
@@ -137,7 +400,9 @@ run_eda <- function(dds, edb, out_dir, level, base,
         res_corr <- plot_custom_pca(rld_corrected, condition = cond_col, batch = batch_col,
                                      title = "PCA After Batch Correction (limma)",
                                      return_plot = TRUE, return_gene_list = TRUE,
-                                     ntop = pca_ntop)
+                                     ntop = pca_ntop,
+                                 level = level, base = base,
+                                 pca_colors = pca_colors, sample_labels = sample_labels)
         p_corr <- res_corr$plot
         gene_info_corr <- res_corr$gene_info
         .pdf_device()(file.path(plot_dir, paste0("PCA_BatchCorrected_", comp_label, ".pdf")), width = 9, height = 7)
@@ -197,8 +462,13 @@ run_eda <- function(dds, edb, out_dir, level, base,
 #' @param pca_ntop Number of most variable genes to use for the supplementary
 #'   comparison-only PCA (default 500; set NULL to use all). Matches the
 #'   `pca_ntop` used for the main EDA PCA in run_eda().
+#' @param pca_colors,sample_labels Passed to the PCA plots; see `plot_custom_pca()`
+#' @param volcano_colors Optional named vector overriding the volcano colours (names: up, down, ns)
+#' @param lfc_cutoff Absolute log2 fold-change threshold used by the volcano plot (default 1)
 #' @return NULL
-generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken, results_data, out_dir, level, base, main_condition, top_genes, padj_cutoff, highlight_genes = NULL, batch_col = NULL, pca_ntop = 500) {
+generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken, results_data, out_dir, level, base, main_condition, top_genes, padj_cutoff, highlight_genes = NULL, batch_col = NULL, pca_ntop = 500,
+                                       pca_colors = NULL, sample_labels = NULL,
+                                       volcano_colors = NULL, lfc_cutoff = 1) {
   plot_dir <- file.path(out_dir, "Plots")
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
   org_info <- get_organism_info(edb)
@@ -213,7 +483,8 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
     # Supplementary PCA restricted to just this comparison's samples (per
     # the sample table's main_condition column) -- see plot_comparison_pca().
     plot_comparison_pca(vsd, main_condition, level, base, batch = batch_col,
-                        plot_dir = plot_dir, ntop = pca_ntop)
+                        plot_dir = plot_dir, ntop = pca_ntop,
+                        pca_colors = pca_colors, sample_labels = sample_labels)
   }
 
   safe_pdf(file.path(plot_dir, paste0("MAplot_unshrunken_", level, "_vs_", base, ".pdf")), expr = {
@@ -252,7 +523,8 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
   safe_pdf(file.path(plot_dir, paste0("DE_Volcanoplot_", level, "_vs_", base, ".pdf")), expr = {
     suppressWarnings(
       print(plot_volcano(results_data$res_tbl, padj_cutoff, highlight_genes,
-                         title = paste(level, "vs", base)))
+                         title = paste(level, "vs", base),
+                         lfc_cutoff = lfc_cutoff, colors = volcano_colors))
     )
   })
 
@@ -271,20 +543,36 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
 #' @param return_plot If TRUE, returns ggplot object; otherwise prints
 #' @param ntop Number of top variable genes to use for PCA (NULL = all genes)
 #' @param return_gene_list If TRUE, return a list with plot and gene_info; otherwise only the plot
+#' @param level,base Optional contrast levels. When they are values of
+#'   `condition`, the `level` group is drawn in `pca_colors[["level"]]` (red by
+#'   default) and the `base` group in `pca_colors[["base"]]` (blue by default);
+#'   any other group gets a distinct palette colour.
+#' @param pca_colors Optional named character vector `c(level = ..., base = ...)`
+#'   overriding the default colours (`"red2"` / `"royalblue"`).
+#' @param sample_labels Optional relabelling of the sample names printed on the
+#'   plot: a named character vector (names = sample IDs, values = new labels),
+#'   a data.frame, or the path to a CSV/TSV with a sample-ID column and a label
+#'   column. Samples without an entry keep their original name. The score
+#'   tables keep the original ID in `sample_label` and add the printed label as
+#'   `plot_label`.
 #' @export
 plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse = TRUE,
-                            return_plot = TRUE, ntop = NULL, return_gene_list = FALSE) {
+                            return_plot = TRUE, ntop = NULL, return_gene_list = FALSE,
+                            level = NULL, base = NULL, pca_colors = NULL,
+                            sample_labels = NULL) {
   if (!requireNamespace("ggplot2", quietly = TRUE)) stop("ggplot2 required")
 
-  if (inherits(vsd, "SummarizedExperiment")) {
-    mat     <- SummarizedExperiment::assay(vsd)
-    coldata <- as.data.frame(SummarizedExperiment::colData(vsd))
-  } else if (is.matrix(vsd)) {
-
+  if (!inherits(vsd, "SummarizedExperiment")) {
     stop("vsd must be a SummarizedExperiment object (e.g., DESeqDataSet or DESeqTransform)")
-  } else {
-    stop("vsd must be a SummarizedExperiment object")
   }
+
+  mat <- SummarizedExperiment::assay(vsd)
+
+  # optional = TRUE keeps non-syntactic column names ("cell type", "batch-id")
+  # as they are. The default turns them into cell.type / batch.id, and the
+  # `condition %in% colnames(...)` test below then silently fell back to an
+  # ungrouped PCA for any such column.
+  coldata <- as.data.frame(SummarizedExperiment::colData(vsd), optional = TRUE)
 
   gene_info <- NULL
   if (!is.null(ntop) && is.numeric(ntop) && ntop > 0 && ntop < nrow(mat)) {
@@ -303,36 +591,80 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
     }
   }
 
+  if (ncol(mat) < 2 || nrow(mat) < 2) {
+    stop("PCA needs at least 2 samples and 2 genes/transcripts (got ",
+         ncol(mat), " samples x ", nrow(mat), " features).")
+  }
+
   pca        <- prcomp(t(mat), center = TRUE, scale. = FALSE)
   percentVar <- round(100 * pca$sdev^2 / sum(pca$sdev^2), 1)
-  pca_df     <- data.frame(PC1 = pca$x[, 1], PC2 = pca$x[, 2], coldata)
-  pca_df$sample_label <- rownames(pca_df)
+  sample_ids <- rownames(pca$x)
 
-  pca_scores <- data.frame(sample_label = rownames(pca$x), coldata,
-                           pca$x, row.names = NULL, check.names = FALSE)
+  pca_df <- coldata
+  rownames(pca_df) <- sample_ids
+  pca_df$PC1 <- pca$x[, 1]
+  pca_df$PC2 <- pca$x[, 2]
+  pca_df$sample_label <- .apply_sample_labels(sample_ids, sample_labels)
+
+  score_front <- data.frame(sample_label = sample_ids, stringsAsFactors = FALSE)
+  if (!is.null(sample_labels)) score_front$plot_label <- pca_df$sample_label
+  pca_scores <- data.frame(score_front, coldata, pca$x, row.names = NULL, check.names = FALSE)
   attr(pca_scores, "percentVar") <- stats::setNames(percentVar, colnames(pca$x))
 
   gene_values <- data.frame(gene = rownames(mat), as.data.frame(mat, check.names = FALSE),
                             row.names = NULL, check.names = FALSE)
 
+  group_cols <- NULL
   if (is.null(condition) || !(condition %in% colnames(pca_df))) {
+    if (!is.null(condition)) {
+      message("   -> PCA: column '", condition, "' not found in colData; plotting without grouping.")
+    }
     pca_df$Group <- "All Samples"
     condition    <- "Group"
     ellipse      <- FALSE
+    group_cols   <- c("All Samples" = "grey30")
   }
+
+  discrete <- !is.numeric(pca_df[[condition]])
+  if (discrete) {
+    pca_df[[condition]] <- if (is.factor(pca_df[[condition]])) {
+      droplevels(pca_df[[condition]])
+    } else {
+      factor(pca_df[[condition]])
+    }
+    if (is.null(group_cols)) {
+      group_cols <- .pca_group_colors(pca_df[[condition]], level, base, pca_colors)
+    }
+  }
+
+  # A numeric batch column cannot be mapped to shape, and ggplot silently
+  # drops every point beyond the 6th level of a discrete shape scale.
+  use_batch <- !is.null(batch) && batch %in% colnames(pca_df)
+  if (use_batch) pca_df[[batch]] <- droplevels(as.factor(pca_df[[batch]]))
 
   p <- ggplot2::ggplot(pca_df, ggplot2::aes(x = .data[["PC1"]], y = .data[["PC2"]],
                                              color = .data[[condition]]))
 
-  if (ellipse && length(unique(pca_df[[condition]])) > 1 &&
-      min(table(pca_df[[condition]])) >= 3) {
+  # stat_ellipse() needs at least 4 points per group (it computes a robust
+  # covariance on n - 1 >= 3 degrees of freedom). With the usual n = 3 per
+  # group the old `>= 3` guard still added the layer, which only produced
+  # "Too few points to calculate an ellipse" messages and geom_path warnings.
+  if (ellipse && discrete && nlevels(pca_df[[condition]]) > 1 &&
+      min(table(pca_df[[condition]])) >= 4) {
     p <- p + ggplot2::stat_ellipse(level = 0.95, linetype = 2)
   }
 
   p <- p + ggplot2::geom_point(size = 3.5, alpha = 0.8)
 
-  if (!is.null(batch) && batch %in% colnames(pca_df)) {
-    p <- p + ggplot2::aes(shape = .data[[batch]])
+  if (use_batch) {
+    shapes <- c(16, 17, 15, 18, 8, 3, 4, 7, 9, 10, 11, 12, 13, 14)
+    p <- p +
+      ggplot2::aes(shape = .data[[batch]]) +
+      ggplot2::scale_shape_manual(values = rep_len(shapes, nlevels(pca_df[[batch]])))
+  }
+
+  if (discrete) {
+    p <- p + ggplot2::scale_color_manual(values = group_cols, na.value = "grey60")
   }
 
   p <- p +
@@ -378,10 +710,12 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
 #' @param batch Optional batch column for shape grouping
 #' @param plot_dir Output directory for the PDF/TSVs
 #' @param ntop Number of most variable genes to use for PCA (NULL = all genes)
+#' @param pca_colors,sample_labels See `plot_custom_pca()`
 #' @return The ggplot object, invisibly (NULL if skipped)
 #' @export
 plot_comparison_pca <- function(vsd, condition_col, level, base, batch = NULL,
-                                plot_dir, ntop = 500) {
+                                plot_dir, ntop = 500,
+                                pca_colors = NULL, sample_labels = NULL) {
   coldata <- as.data.frame(SummarizedExperiment::colData(vsd))
 
   if (is.null(condition_col) || !condition_col %in% colnames(coldata)) {
@@ -418,7 +752,8 @@ plot_comparison_pca <- function(vsd, condition_col, level, base, batch = NULL,
   res <- plot_custom_pca(vsd_sub, condition = condition_col, batch = batch,
                          title = paste0("PCA (Comparison Samples Only) - ", level, " vs ", base),
                          return_plot = TRUE, return_gene_list = TRUE,
-                         ntop = ntop)
+                         ntop = ntop, level = level, base = base,
+                         pca_colors = pca_colors, sample_labels = sample_labels)
 
   file_stub <- paste0("PCA_ComparisonOnly_", level, "_vs_", base)
 
@@ -572,16 +907,52 @@ plot_top_genes_heatmap <- function(dds, results_data, condition_col, level, base
 }
 
 #' Plot Volcano
+#'
+#' Points are coloured by direction: up-regulated (padj < `padj_cutoff` and
+#' log2FC > `lfc_cutoff`) in `colors[["up"]]` (red by default), down-regulated
+#' (log2FC < -`lfc_cutoff`) in `colors[["down"]]` (blue by default), everything
+#' else grey. The caption reports the number of up- and down-regulated genes
+#' instead of EnhancedVolcano's default "total = N variables".
+#'
+#' @param res_tbl Results table with `gene`, `log2FoldChange` and `padj` columns
+#' @param padj_cutoff Adjusted p-value threshold
+#' @param highlight_genes Optional character vector of genes to label
+#' @param title Plot title
+#' @param lfc_cutoff Absolute log2 fold-change threshold (vertical lines,
+#'   colouring and the counts in the caption)
+#' @param colors Optional named character vector overriding the default colours;
+#'   names among `up`, `down`, `ns`
 #' @keywords internal
-plot_volcano <- function(res_tbl, padj_cutoff, highlight_genes = NULL, title = "") {
+plot_volcano <- function(res_tbl, padj_cutoff, highlight_genes = NULL, title = "",
+                         lfc_cutoff = 1, colors = NULL) {
+  cols    <- .volcano_colors(colors)
+  res_tbl <- as.data.frame(res_tbl)
+
+  sig <- !is.na(res_tbl$padj) & !is.na(res_tbl$log2FoldChange) &
+    res_tbl$padj < padj_cutoff & abs(res_tbl$log2FoldChange) > lfc_cutoff
+  is_up   <- sig & res_tbl$log2FoldChange > 0
+  is_down <- sig & res_tbl$log2FoldChange < 0
+  n_up    <- sum(is_up)
+  n_down  <- sum(is_down)
+
+  # EnhancedVolcano colours each point by the per-row value of `colCustom` and
+  # builds the legend from its names.
+  key_col <- ifelse(is_up, cols[["up"]], ifelse(is_down, cols[["down"]], cols[["ns"]]))
+  names(key_col) <- ifelse(is_up, "Upregulated",
+                           ifelse(is_down, "Downregulated", "Not significant"))
+
+  caption <- paste0("Upregulated: ", n_up, "  |  Downregulated: ", n_down,
+                    "   (padj < ", format(padj_cutoff), ", |log2FC| > ", format(lfc_cutoff), ")")
+
   EnhancedVolcano::EnhancedVolcano(
     res_tbl, lab = res_tbl$gene,
     selectLab      = highlight_genes,
     drawConnectors = !is.null(highlight_genes),
     x = "log2FoldChange", y = "padj",
     title     = title,
-    pCutoff   = padj_cutoff, FCcutoff = 1.0, pointSize = 2.0, labSize = 4.0,
-    col = c("grey", "grey", "grey", "red2")
+    caption   = caption,
+    pCutoff   = padj_cutoff, FCcutoff = lfc_cutoff, pointSize = 2.0, labSize = 4.0,
+    colCustom = key_col
   )
 }
 

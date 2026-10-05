@@ -66,6 +66,7 @@ run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05, bpp
 }
 
 #' Transcript-level PCA
+#' @param pca_colors,sample_labels See `plot_custom_pca()`
 #' @export
 run_isoform_pca <- function(isoform_obj,
                             condition,
@@ -74,7 +75,9 @@ run_isoform_pca <- function(isoform_obj,
                             out_dir,
                             batch_col = NULL,
                             pca_ntop = 500,
-                            save_dir = NULL) {
+                            save_dir = NULL,
+                            pca_colors = NULL,
+                            sample_labels = NULL) {
 
   if (!requireNamespace("DESeq2", quietly = TRUE)) {
     stop("DESeq2 is required for transcript-level PCA. Please install it.")
@@ -102,7 +105,11 @@ run_isoform_pca <- function(isoform_obj,
     return(invisible(NULL))
   }
 
-  vsd <- DESeq2::vst(dds, blind = TRUE)
+  # vst() needs >= 1000 features; fall back like the gene-level PCA does
+  vsd <- tryCatch(
+    DESeq2::vst(dds, blind = TRUE),
+    error = function(e) DESeq2::varianceStabilizingTransformation(dds, blind = TRUE)
+  )
 
   plot_dir <- file.path(out_dir, "Plots")
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
@@ -127,7 +134,11 @@ run_isoform_pca <- function(isoform_obj,
     ),
     return_plot = TRUE,
     return_gene_list = TRUE,
-    ntop = pca_ntop
+    ntop = pca_ntop,
+    level = level,
+    base = base,
+    pca_colors = pca_colors,
+    sample_labels = sample_labels
   )
 
   .pdf_device()(file.path(plot_dir, paste0("PCA_transcripts_", comp_label, ".pdf")), width = 9, height = 7)

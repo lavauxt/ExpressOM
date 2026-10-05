@@ -70,6 +70,23 @@
 #'   Set FALSE to silence "Omitting topology visualization..." when DeepTMHMM hasn't been run.
 #' @param run_spia Logical: also run SPIA (pathway impact analysis). Off by default --
 #'   its bootstrap permutation testing is slow and less commonly needed than GSEA/ORA.
+#' @param pca_ntop Number of most variable genes used for the PCA plots (default 500; NULL uses all)
+#' @param sample_labels Optional relabelling of the samples printed on the PCA plots: a named
+#'   character vector (names = sample IDs as in the sample table, values = new labels), a
+#'   data.frame, or the path to a CSV/TSV file with a sample-ID column and a label column
+#'   (headers such as `sample`/`sample_id` and `label`/`new_label` are recognised, otherwise the
+#'   first two columns are used). Samples without an entry keep their name. Default NULL.
+#' @param pca_colors Named vector `c(level = ..., base = ...)` with the PCA colours of the `level`
+#'   and `base` groups. Default `c(level = "red2", base = "royalblue")`; either name may be omitted.
+#' @param volcano_colors Named vector with the volcano colours of `up`, `down` and `ns` (not
+#'   significant) genes. Default `c(up = "red2", down = "royalblue", ns = "grey")`.
+#' @param deg_padj_cutoffs Numeric vector of adjusted p-value cutoffs for which the number of DEGs
+#'   (total / up / down, with and without the log2FC filter) is saved to
+#'   `DE_raw_results/DEG_counts_<level>_vs_<base>.txt`, together with one DEG list per cutoff
+#'   (`DEgenes_pval_<cutoff>_<level>_vs_<base>.txt`). `padj_cutoff` is always included.
+#'   Default `c(0.01, 0.05)`; `NULL` writes only the list for `padj_cutoff`.
+#' @param deg_lfc_cutoff Absolute log2 fold-change threshold used by the volcano plot (lines,
+#'   colouring and the up/down counts in its caption) and by the DEG count table. Default 1.
 #' @return NULL invisibly
 expressom <- function(count_type        = "salmon",
                       data_dir          = "./data",
@@ -124,10 +141,26 @@ expressom <- function(count_type        = "salmon",
                       skip_fasta_filter = FALSE,
                       isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
                       plot_topology     = TRUE,
-                      run_spia          = FALSE) {
+                      run_spia          = FALSE,
+                      sample_labels     = NULL,
+                      pca_colors        = c(level = "red2", base = "royalblue"),
+                      volcano_colors    = c(up = "red2", down = "royalblue", ns = "grey"),
+                      deg_padj_cutoffs  = c(0.01, 0.05),
+                      deg_lfc_cutoff    = 1) {
 
   execution_order <- match.arg(execution_order)
   isoform_test_engine <- match.arg(isoform_test_engine)
+
+  # Validate the plot / summary options up front, before any heavy computation
+  sample_labels    <- .read_sample_labels(sample_labels)
+  deg_padj_cutoffs <- .validate_deg_cutoffs(deg_padj_cutoffs)
+  invisible(.pca_colors(pca_colors))
+  invisible(.volcano_colors(volcano_colors))
+
+  if (!is.numeric(deg_lfc_cutoff) || length(deg_lfc_cutoff) != 1 ||
+      is.na(deg_lfc_cutoff) || deg_lfc_cutoff < 0) {
+    stop("`deg_lfc_cutoff` must be a single non-negative number (e.g. 1).")
+  }
 
   validate_environment(
     run_isoform = run_isoform,
@@ -284,7 +317,9 @@ expressom <- function(count_type        = "salmon",
     main_condition = main_condition,
     group_col      = group_col,
     batch_col      = batch_col,
-    pca_ntop       = pca_ntop
+    pca_ntop       = pca_ntop,
+    pca_colors     = pca_colors,
+    sample_labels  = sample_labels
   )
 
   if (!run_dge && !run_isoform) {
@@ -323,8 +358,13 @@ expressom <- function(count_type        = "salmon",
         out_dir,
         padj_cutoff,
         test,
-        reduced
+        reduced,
+        lfc_cutoff = deg_lfc_cutoff
       )
+
+      # keep the fitted object (the one created above has no size factors /
+      # dispersions / results), so it is what ends up in dge_results and the .RData
+      dds <- res_list$dds
 
       results_data <- export_significant_results(
         res_shrunken   = res_list$res_shrunken,
@@ -334,7 +374,9 @@ expressom <- function(count_type        = "salmon",
         level          = level,
         base           = base,
         gene_map       = tx_data$gene_map,
-        padj_cutoff    = padj_cutoff
+        padj_cutoff    = padj_cutoff,
+        padj_cutoffs   = deg_padj_cutoffs,
+        lfc_cutoff     = deg_lfc_cutoff
       )
 
       message("Converting identifiers for RegionReport...")
@@ -371,7 +413,11 @@ expressom <- function(count_type        = "salmon",
         padj_cutoff    = padj_cutoff,
         highlight_genes = highlight_genes,
         batch_col      = batch_col,
-        pca_ntop       = pca_ntop
+        pca_ntop       = pca_ntop,
+        pca_colors     = pca_colors,
+        sample_labels  = sample_labels,
+        volcano_colors = volcano_colors,
+        lfc_cutoff     = deg_lfc_cutoff
       )
 
       while (grDevices::dev.cur() > 1) grDevices::dev.off()
@@ -790,7 +836,10 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
           base,
           out_dir = iso_dir,
           batch_col = batch_col,
-          save_dir = iso_save_dir
+          pca_ntop = pca_ntop,
+          save_dir = iso_save_dir,
+          pca_colors = pca_colors,
+          sample_labels = sample_labels
         ),
         label = "Transcript-level PCA"
       )

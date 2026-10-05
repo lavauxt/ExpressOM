@@ -1,10 +1,65 @@
+#' Validate the adjusted p-value cutoffs used for the DEG count summary
+#' @param cutoffs NULL or numbers in (0, 1]
+#' @return NULL, or a sorted vector of unique cutoffs
+#' @keywords internal
+.validate_deg_cutoffs <- function(cutoffs) {
+  if (is.null(cutoffs) || length(cutoffs) == 0) return(NULL)
+
+  vals <- suppressWarnings(as.numeric(cutoffs))
+
+  if (anyNA(vals) || any(vals <= 0 | vals > 1)) {
+    stop("`deg_padj_cutoffs` must be NULL or numbers in (0, 1], e.g. c(0.01, 0.05); got: ",
+         paste(cutoffs, collapse = ", "), call. = FALSE)
+  }
+
+  sort(unique(vals))
+}
+
+#' Count differentially expressed genes at several adjusted p-value cutoffs
+#'
+#' One row per cutoff. `n_tested` is the number of genes with a non-NA
+#' adjusted p-value; `n_sig`/`n_up`/`n_down` use the adjusted p-value alone
+#' (direction from the sign of log2FoldChange), the `*_lfc` columns also
+#' require `abs(log2FoldChange) > lfc_cutoff`.
+#' @param res_tbl Results table with `padj` and `log2FoldChange` columns
+#' @param padj_cutoffs Numeric vector of adjusted p-value cutoffs
+#' @param lfc_cutoff Absolute log2 fold-change threshold for the `*_lfc` columns
+#' @return data.frame
+#' @keywords internal
+.deg_count_table <- function(res_tbl, padj_cutoffs, lfc_cutoff = 1) {
+  padj <- res_tbl$padj
+  lfc  <- res_tbl$log2FoldChange
+
+  rows <- lapply(sort(unique(padj_cutoffs)), function(p) {
+    sig     <- !is.na(padj) & padj < p
+    sig_dir <- sig & !is.na(lfc)
+    sig_lfc <- sig_dir & abs(lfc) > lfc_cutoff
+
+    data.frame(
+      padj_cutoff   = p,
+      n_tested      = sum(!is.na(padj)),
+      n_sig         = sum(sig),
+      n_up          = sum(sig_dir & lfc > 0),
+      n_down        = sum(sig_dir & lfc < 0),
+      log2FC_cutoff = lfc_cutoff,
+      n_sig_lfc     = sum(sig_lfc),
+      n_up_lfc      = sum(sig_lfc & lfc > 0),
+      n_down_lfc    = sum(sig_lfc & lfc < 0),
+      stringsAsFactors = FALSE
+    )
+  })
+
+  do.call(rbind, rows)
+}
+
 #' Write structured DGE parameters log
 #' @keywords internal
 .write_dge_log <- function(out_dir, comp_name, model, test, reduced,
                            level, base, shrink_method, padj_cutoff,
                            n_genes_input, n_genes_after_filter,
                            n_de_genes_up, n_de_genes_down,
-                           filter_criterion = "rowSums(counts) >= 1") {
+                           filter_criterion = "rowSums(counts) >= 1",
+                           lfc_cutoff = 1) {
   if (!requireNamespace("jsonlite", quietly = TRUE)) {
     warning("jsonlite not installed; writing log as text file.")
     log_dir <- file.path(out_dir, "Log", "DGE")
@@ -23,8 +78,8 @@
     cat(paste("Filter criterion:", filter_criterion, "\n"), file = con)
     cat(paste("Genes before filter:", n_genes_input, "\n"), file = con)
     cat(paste("Genes after filter:", n_genes_after_filter, "\n"), file = con)
-    cat(paste("DE genes up (log2FC>1):", n_de_genes_up, "\n"), file = con)
-    cat(paste("DE genes down (log2FC<-1):", n_de_genes_down, "\n"), file = con)
+    cat(paste0("DE genes up (log2FC>", lfc_cutoff, "): ", n_de_genes_up, "\n"), file = con)
+    cat(paste0("DE genes down (log2FC<-", lfc_cutoff, "): ", n_de_genes_down, "\n"), file = con)
     return()
   }
 
@@ -38,6 +93,7 @@
     contrast           = list(factor = main_condition, level = level, base = base),
     shrinkage_method   = shrink_method,
     padj_cutoff        = padj_cutoff,
+    lfc_cutoff         = lfc_cutoff,
     filter_criterion   = filter_criterion,
     genes_before_filter = n_genes_input,
     genes_after_filter  = n_genes_after_filter,
@@ -270,10 +326,11 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
 #' @param padj_cutoff Adjusted p-value cutoff
 #' @param test Type of statistical test ("Wald" or "LRT")
 #' @param reduced Reduced formula for LRT test
+#' @param lfc_cutoff Absolute log2 fold-change threshold used to count up/down genes in the DGE log (default 1)
 #' @return List containing res_unshrunken, res_shrunken, and the computed dds
 #' @export
 run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
-                                padj_cutoff, test = "Wald", reduced = NULL) {
+                                padj_cutoff, test = "Wald", reduced = NULL, lfc_cutoff = 1) {
 
   n_genes_input <- nrow(dds)
 
@@ -302,8 +359,8 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
   }
 
   res_df      <- as.data.frame(res_shrunken)
-  sig_up      <- sum(res_df$padj < padj_cutoff & res_df$log2FoldChange > 1,  na.rm = TRUE)
-  sig_down    <- sum(res_df$padj < padj_cutoff & res_df$log2FoldChange < -1, na.rm = TRUE)
+  sig_up      <- sum(res_df$padj < padj_cutoff & res_df$log2FoldChange > lfc_cutoff,  na.rm = TRUE)
+  sig_down    <- sum(res_df$padj < padj_cutoff & res_df$log2FoldChange < -lfc_cutoff, na.rm = TRUE)
   n_genes_after_filter <- nrow(dds)
 
   comp_name <- paste0(level, "_vs_", base)
@@ -313,7 +370,7 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
 
   .write_dge_log(out_dir, comp_name, model, test, reduced, level, base,
                  shrink_method, padj_cutoff, n_genes_input, n_genes_after_filter,
-                 sig_up, sig_down)
+                 sig_up, sig_down, lfc_cutoff = lfc_cutoff)
 
   return(list(dds = dds, res_unshrunken = res_unshrunken, res_shrunken = res_shrunken))
 }
@@ -327,10 +384,17 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
 #' @param base Base level
 #' @param gene_map Gene symbol mapping dataframe
 #' @param padj_cutoff Adjusted p-value cutoff
-#' @return List of processed dataframes
+#' @param padj_cutoffs Optional numeric vector of extra adjusted p-value cutoffs (the app default is
+#'   `c(0.01, 0.05)`). For each of them, and for `padj_cutoff`, a DEG list
+#'   `DEgenes_pval_<cutoff>_<level>_vs_<base>.txt` is written, and the number of DEGs (total / up / down,
+#'   with and without the log2FC filter) is summarised in `DEG_counts_<level>_vs_<base>.txt`.
+#'   `NULL` (default here) writes only the list for `padj_cutoff`.
+#' @param lfc_cutoff Absolute log2 fold-change threshold for the `*_lfc` columns of the count table (default 1)
+#' @return List of processed dataframes (including `deg_counts`, NULL unless `padj_cutoffs` is given)
 #' @export
 export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_dir,
-                                       level, base, gene_map, padj_cutoff) {
+                                       level, base, gene_map, padj_cutoff,
+                                       padj_cutoffs = NULL, lfc_cutoff = 1) {
   fc_dir <- file.path(out_dir, "DE_raw_results")
   if (!dir.exists(fc_dir)) dir.create(fc_dir, recursive = TRUE)
 
@@ -451,8 +515,30 @@ res_tbl <- merge(
     utils::write.table(df,                                   paste0(prefix, ".txt"),      sep = "\t", quote = FALSE, row.names = FALSE)
   }
 
-  padj_tag <- paste0("pval_", gsub("\\.", "_", as.character(padj_cutoff)))
-  write_filtered(sig_res, padj_tag)
+  tag_for <- function(p) paste0("pval_", gsub("\\.", "_", as.character(p)))
 
-  return(list(res_tbl = res_tbl, sig_res = sig_res, normalized_counts = counts_df, raw_counts = raw_counts))
+  # One DEG list per adjusted p-value cutoff -- the pipeline's own cutoff plus
+  # any extra `padj_cutoffs` -- most significant genes first.
+  all_cutoffs <- sort(unique(c(padj_cutoff, .validate_deg_cutoffs(padj_cutoffs))))
+
+  for (p in all_cutoffs) {
+    sig_p <- res_tbl[!is.na(res_tbl$padj) & res_tbl$padj < p, , drop = FALSE]
+    write_filtered(sig_p[order(sig_p$padj), , drop = FALSE], tag_for(p))
+  }
+
+  deg_counts <- NULL
+
+  if (length(padj_cutoffs) > 0) {
+    deg_counts  <- .deg_count_table(res_tbl, all_cutoffs, lfc_cutoff)
+    counts_file <- file.path(fc_dir, paste0("DEG_counts_", level, "_vs_", base, ".txt"))
+
+    utils::write.table(deg_counts, counts_file, sep = "\t", quote = FALSE, row.names = FALSE)
+
+    message("   -> DEG counts at padj < ", paste(all_cutoffs, collapse = ", "),
+            " saved to: ", counts_file)
+    message(paste(utils::capture.output(print(deg_counts, row.names = FALSE)), collapse = "\n"))
+  }
+
+  return(list(res_tbl = res_tbl, sig_res = sig_res, normalized_counts = counts_df,
+              raw_counts = raw_counts, deg_counts = deg_counts))
 }
