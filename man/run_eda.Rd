@@ -13,7 +13,9 @@ run_eda(
   main_condition = NULL,
   group_col = NULL,
   batch_col = NULL,
-  pca_ntop = 500
+  pca_ntop = 500,
+  pca_colors = NULL,
+  sample_labels = NULL
 )
 }
 \arguments{
@@ -34,6 +36,12 @@ run_eda(
 \item{batch_col}{Optional batch column name for limma correction and before/after PCA}
 
 \item{pca_ntop}{Number of most variable genes to use for PCA (default 500; set NULL to use all)}
+
+\item{pca_colors}{Optional named vector `c(level = ..., base = ...)` overriding the PCA colours
+(default: `level` red, `base` blue)}
+
+\item{sample_labels}{Optional relabelling of the samples printed on the PCA plots: a named
+character vector (names = sample IDs), a data.frame, or the path to a CSV/TSV (sample ID + label)}
 }
 \description{
 Exploratory Data Analysis for DESeq2

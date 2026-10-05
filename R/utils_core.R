@@ -240,6 +240,42 @@ clean_transcript_id <- function(x) {
   relevel(x, ref = as.character(base))
 }
 
+#' Identify which term of a design formula carries the level/base contrast
+#'
+#' Returns the design variable whose column in `meta` contains BOTH `level`
+#' and `base` as observed values. This replaces the previous
+#' `tail(all.vars(as.formula(model)), 1)` idiom, which silently picks the
+#' LAST term in the formula -- fine for `~ condition`, wrong for any model
+#' that puts a covariate after the contrasted factor (e.g.
+#' `~ condition + donor`, which would try to relevel `donor` to `base` and
+#' build a DESeq2 contrast on the wrong factor). Falls back to the last
+#' term when nothing matches (e.g. EDA-only calls where level/base are
+#' NULL, or when `meta` isn't available at call time).
+#'
+#' @param design_formula Formula object (not a string)
+#' @param meta data.frame / DataFrame of sample metadata (may be NULL)
+#' @param level Foreground level of the contrast (may be NULL)
+#' @param base Reference level of the contrast (may be NULL)
+#' @return Character scalar naming the design variable to relevel/contrast on,
+#'   or NULL if the formula has no terms at all.
+#' @keywords internal
+.resolve_main_condition <- function(design_formula, meta = NULL,
+                                    level = NULL, base = NULL) {
+  design_vars <- all.vars(design_formula)
+  if (length(design_vars) == 0) return(NULL)
+
+  if (!is.null(meta) && !is.null(level) && !is.null(base)) {
+    for (var in rev(design_vars)) {
+      if (var %in% colnames(meta)) {
+        vals <- as.character(meta[[var]])
+        if (all(c(level, base) %in% vals)) return(var)
+      }
+    }
+  }
+
+  tail(design_vars, 1)
+}
+
 #' Safely create a directory
 #' @keywords internal
 safe_dir <- function(path) {

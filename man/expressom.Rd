@@ -60,7 +60,12 @@ expressom(
   skip_fasta_filter = FALSE,
   isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
   plot_topology = TRUE,
-  run_spia = FALSE
+  run_spia = FALSE,
+  sample_labels = NULL,
+  pca_colors = c(level = "red2", base = "royalblue"),
+  volcano_colors = c(up = "red2", down = "royalblue", ns = "grey"),
+  deg_padj_cutoffs = c(0.01, 0.05),
+  deg_lfc_cutoff = 1
 )
 
 run_bulk_pipeline(
@@ -118,7 +123,12 @@ run_bulk_pipeline(
   skip_fasta_filter = FALSE,
   isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
   plot_topology = TRUE,
-  run_spia = FALSE
+  run_spia = FALSE,
+  sample_labels = NULL,
+  pca_colors = c(level = "red2", base = "royalblue"),
+  volcano_colors = c(up = "red2", down = "royalblue", ns = "grey"),
+  deg_padj_cutoffs = c(0.01, 0.05),
+  deg_lfc_cutoff = 1
 )
 }
 \arguments{
@@ -147,6 +157,8 @@ run_bulk_pipeline(
 \item{replicate_col}{Optional column specifying replicates}
 
 \item{shrink_method}{Type of shrinkage (e.g., "ashr")}
+
+\item{pca_ntop}{Number of most variable genes used for the PCA plots (default 500; NULL uses all)}
 
 \item{ensembl_package_name}{The Ensembl DB package. If not installed, will be built and installed automatically.}
 
@@ -238,6 +250,27 @@ Set FALSE to silence "Omitting topology visualization..." when DeepTMHMM hasn't 
 
 \item{run_spia}{Logical: also run SPIA (pathway impact analysis). Off by default --
 its bootstrap permutation testing is slow and less commonly needed than GSEA/ORA.}
+
+\item{sample_labels}{Optional relabelling of the samples printed on the PCA plots: a named
+character vector (names = sample IDs as in the sample table, values = new labels), a
+data.frame, or the path to a CSV/TSV file with a sample-ID column and a label column
+(headers such as `sample`/`sample_id` and `label`/`new_label` are recognised, otherwise the
+first two columns are used). Samples without an entry keep their name. Default NULL.}
+
+\item{pca_colors}{Named vector `c(level = ..., base = ...)` with the PCA colours of the `level`
+and `base` groups. Default `c(level = "red2", base = "royalblue")`; either name may be omitted.}
+
+\item{volcano_colors}{Named vector with the volcano colours of `up`, `down` and `ns` (not
+significant) genes. Default `c(up = "red2", down = "royalblue", ns = "grey")`.}
+
+\item{deg_padj_cutoffs}{Numeric vector of adjusted p-value cutoffs for which the number of DEGs
+(total / up / down, with and without the log2FC filter) is saved to
+`DE_raw_results/DEG_counts_<level>_vs_<base>.txt`, together with one DEG list per cutoff
+(`DEgenes_pval_<cutoff>_<level>_vs_<base>.txt`). `padj_cutoff` is always included.
+Default `c(0.01, 0.05)`; `NULL` writes only the list for `padj_cutoff`.}
+
+\item{deg_lfc_cutoff}{Absolute log2 fold-change threshold used by the volcano plot (lines,
+colouring and the up/down counts in its caption) and by the DEG count table. Default 1.}
 }
 \value{
 NULL invisibly

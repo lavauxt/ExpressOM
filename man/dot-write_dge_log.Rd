@@ -18,8 +18,16 @@
   n_genes_after_filter,
   n_de_genes_up,
   n_de_genes_down,
-  filter_criterion = "rowSums(counts) >= 1"
+  filter_criterion = "rowSums(counts) >= 1",
+  lfc_cutoff = 1,
+  main_condition = NULL
 )
+}
+\arguments{
+\item{main_condition}{Name of the design-formula term that carries the
+level/base contrast (i.e. what `.resolve_main_condition()` returns). If
+NULL, falls back to the last term in the formula, which matches the old
+behaviour for models where the contrasted factor is written last.}
 }
 \description{
 Write structured DGE parameters log

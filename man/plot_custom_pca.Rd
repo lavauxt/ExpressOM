@@ -12,7 +12,11 @@ plot_custom_pca(
   ellipse = TRUE,
   return_plot = TRUE,
   ntop = NULL,
-  return_gene_list = FALSE
+  return_gene_list = FALSE,
+  level = NULL,
+  base = NULL,
+  pca_colors = NULL,
+  sample_labels = NULL
 )
 }
 \arguments{
@@ -31,6 +35,21 @@ plot_custom_pca(
 \item{ntop}{Number of top variable genes to use for PCA (NULL = all genes)}
 
 \item{return_gene_list}{If TRUE, return a list with plot and gene_info; otherwise only the plot}
+
+\item{level, base}{Optional contrast levels. When they are values of
+`condition`, the `level` group is drawn in `pca_colors[["level"]]` (red by
+default) and the `base` group in `pca_colors[["base"]]` (blue by default);
+any other group gets a distinct palette colour.}
+
+\item{pca_colors}{Optional named character vector `c(level = ..., base = ...)`
+overriding the default colours (`"red2"` / `"royalblue"`).}
+
+\item{sample_labels}{Optional relabelling of the sample names printed on the
+plot: a named character vector (names = sample IDs, values = new labels),
+a data.frame, or the path to a CSV/TSV with a sample-ID column and a label
+column. Samples without an entry keep their original name. The score
+tables keep the original ID in `sample_label` and add the printed label as
+`plot_label`.}
 }
 \description{
 Custom PCA Plot (ggplot2, fully customisable)

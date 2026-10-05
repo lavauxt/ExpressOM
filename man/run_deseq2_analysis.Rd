@@ -13,7 +13,8 @@ run_deseq2_analysis(
   out_dir,
   padj_cutoff,
   test = "Wald",
-  reduced = NULL
+  reduced = NULL,
+  lfc_cutoff = 1
 )
 }
 \arguments{
@@ -34,6 +35,8 @@ run_deseq2_analysis(
 \item{test}{Type of statistical test ("Wald" or "LRT")}
 
 \item{reduced}{Reduced formula for LRT test}
+
+\item{lfc_cutoff}{Absolute log2 fold-change threshold used to count up/down genes in the DGE log (default 1)}
 }
 \value{
 List containing res_unshrunken, res_shrunken, and the computed dds

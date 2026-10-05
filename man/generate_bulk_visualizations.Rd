@@ -18,7 +18,11 @@ generate_bulk_visualizations(
   padj_cutoff,
   highlight_genes = NULL,
   batch_col = NULL,
-  pca_ntop = 500
+  pca_ntop = 500,
+  pca_colors = NULL,
+  sample_labels = NULL,
+  volcano_colors = NULL,
+  lfc_cutoff = 1
 )
 }
 \arguments{
@@ -49,6 +53,12 @@ generate_bulk_visualizations(
 \item{pca_ntop}{Number of most variable genes to use for the supplementary
 comparison-only PCA (default 500; set NULL to use all). Matches the
 `pca_ntop` used for the main EDA PCA in run_eda().}
+
+\item{pca_colors, sample_labels}{Passed to the PCA plots; see `plot_custom_pca()`}
+
+\item{volcano_colors}{Optional named vector overriding the volcano colours (names: up, down, ns)}
+
+\item{lfc_cutoff}{Absolute log2 fold-change threshold used by the volcano plot (default 1)}
 }
 \description{
 This function generates a series of visualizations to summarize the differential expression results.

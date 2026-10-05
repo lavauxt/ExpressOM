@@ -12,8 +12,13 @@ run_isoform_pca(
   out_dir,
   batch_col = NULL,
   pca_ntop = 500,
-  save_dir = NULL
+  save_dir = NULL,
+  pca_colors = NULL,
+  sample_labels = NULL
 )
+}
+\arguments{
+\item{pca_colors, sample_labels}{See `plot_custom_pca()`}
 }
 \description{
 Transcript-level PCA

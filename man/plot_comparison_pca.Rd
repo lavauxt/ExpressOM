@@ -11,7 +11,9 @@ plot_comparison_pca(
   base,
   batch = NULL,
   plot_dir,
-  ntop = 500
+  ntop = 500,
+  pca_colors = NULL,
+  sample_labels = NULL
 )
 }
 \arguments{
@@ -30,6 +32,8 @@ factor -- i.e. main_condition, the column `level`/`base` are values of}
 \item{plot_dir}{Output directory for the PDF/TSVs}
 
 \item{ntop}{Number of most variable genes to use for PCA (NULL = all genes)}
+
+\item{pca_colors, sample_labels}{See `plot_custom_pca()`}
 }
 \value{
 The ggplot object, invisibly (NULL if skipped)

@@ -4,9 +4,35 @@
 \alias{plot_volcano}
 \title{Plot Volcano}
 \usage{
-plot_volcano(res_tbl, padj_cutoff, highlight_genes = NULL, title = "")
+plot_volcano(
+  res_tbl,
+  padj_cutoff,
+  highlight_genes = NULL,
+  title = "",
+  lfc_cutoff = 1,
+  colors = NULL
+)
+}
+\arguments{
+\item{res_tbl}{Results table with `gene`, `log2FoldChange` and `padj` columns}
+
+\item{padj_cutoff}{Adjusted p-value threshold}
+
+\item{highlight_genes}{Optional character vector of genes to label}
+
+\item{title}{Plot title}
+
+\item{lfc_cutoff}{Absolute log2 fold-change threshold (vertical lines,
+colouring and the counts in the caption)}
+
+\item{colors}{Optional named character vector overriding the default colours;
+names among `up`, `down`, `ns`}
 }
 \description{
-Plot Volcano
+Points are coloured by direction: up-regulated (padj < `padj_cutoff` and
+log2FC > `lfc_cutoff`) in `colors[["up"]]` (red by default), down-regulated
+(log2FC < -`lfc_cutoff`) in `colors[["down"]]` (blue by default), everything
+else grey. The caption reports the number of up- and down-regulated genes
+instead of EnhancedVolcano's default "total = N variables".
 }
 \keyword{internal}

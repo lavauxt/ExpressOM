@@ -53,13 +53,23 @@
 }
 
 #' Write structured DGE parameters log
+#'
+#' @param main_condition Name of the design-formula term that carries the
+#'   level/base contrast (i.e. what `.resolve_main_condition()` returns). If
+#'   NULL, falls back to the last term in the formula, which matches the old
+#'   behaviour for models where the contrasted factor is written last.
 #' @keywords internal
 .write_dge_log <- function(out_dir, comp_name, model, test, reduced,
                            level, base, shrink_method, padj_cutoff,
                            n_genes_input, n_genes_after_filter,
                            n_de_genes_up, n_de_genes_down,
                            filter_criterion = "rowSums(counts) >= 1",
-                           lfc_cutoff = 1) {
+                           lfc_cutoff = 1,
+                           main_condition = NULL) {
+  if (is.null(main_condition)) {
+    main_condition <- tail(all.vars(as.formula(model)), 1)
+  }
+
   if (!requireNamespace("jsonlite", quietly = TRUE)) {
     warning("jsonlite not installed; writing log as text file.")
     log_dir <- file.path(out_dir, "Log", "DGE")
@@ -72,6 +82,7 @@
     cat(paste("Design formula:", model, "\n"), file = con)
     cat(paste("Test type:", test, "\n"), file = con)
     if (test == "LRT") cat(paste("Reduced formula:", reduced, "\n"), file = con)
+    cat(paste("Contrast factor:", main_condition, "\n"), file = con)
     cat(paste("Contrast:", level, "vs", base, "\n"), file = con)
     cat(paste("Shrinkage method:", shrink_method, "\n"), file = con)
     cat(paste("padj cutoff:", padj_cutoff, "\n"), file = con)
@@ -83,7 +94,6 @@
     return()
   }
 
-  main_condition <- tail(all.vars(as.formula(model)), 1)
   params <- list(
     timestamp          = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
     comparison         = comp_name,
@@ -294,7 +304,11 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
       meta[[var]] <- as.factor(meta[[var]])
     }
   }
-  main_condition <- tail(design_vars, 1)
+
+  # Pick the design term that actually carries the level/base contrast
+  # (e.g. "condition" for "~ condition + donor"), not just whichever
+  # variable happens to appear last in the formula.
+  main_condition <- .resolve_main_condition(design_formula, meta, level, base)
   meta[[main_condition]] <- as.factor(meta[[main_condition]])
 
   dds <- if (tx_data$type == "tximport") {
@@ -334,6 +348,12 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
 
   n_genes_input <- nrow(dds)
 
+  # Resolve the contrasted factor BEFORE running DESeq so we can also log it
+  # correctly. Uses colData(dds) so the factor levels are already set up the
+  # same way the model will see them.
+  meta_for_cond <- as.data.frame(SummarizedExperiment::colData(dds))
+  main_condition <- .resolve_main_condition(as.formula(model), meta_for_cond, level, base)
+
   if (test == "LRT") {
     if (is.null(reduced)) stop("You must provide a reduced model for LRT.")
     if (shrink_method != "ashr") {
@@ -344,8 +364,6 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
   } else {
     dds <- DESeq2::DESeq(dds)
   }
-
-  main_condition <- tail(all.vars(as.formula(model)), 1)
 
   if (test == "LRT") {
     res_unshrunken <- DESeq2::results(dds, alpha = padj_cutoff)
@@ -370,7 +388,8 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
 
   .write_dge_log(out_dir, comp_name, model, test, reduced, level, base,
                  shrink_method, padj_cutoff, n_genes_input, n_genes_after_filter,
-                 sig_up, sig_down, lfc_cutoff = lfc_cutoff)
+                 sig_up, sig_down, lfc_cutoff = lfc_cutoff,
+                 main_condition = main_condition)
 
   return(list(dds = dds, res_unshrunken = res_unshrunken, res_shrunken = res_shrunken))
 }

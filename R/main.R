@@ -224,6 +224,15 @@ expressom <- function(count_type        = "salmon",
     }
   }
 
+  # Read the sample table once so .resolve_main_condition() can look at which
+  # column actually contains level/base. Wrapped in tryCatch so a missing or
+  # malformed file still surfaces later with a normal, clearer error from
+  # import_counts() rather than here.
+  sample_meta_for_cond <- tryCatch(
+    data.table::fread(sample_table, header = TRUE, data.table = FALSE),
+    error = function(e) NULL
+  )
+
   if (isTRUE(eda_only) || is.null(model) || is.null(level) || is.null(base)) {
     message(
       "DESeq2 model not fully specified or eda_only = TRUE. ",
@@ -234,21 +243,29 @@ expressom <- function(count_type        = "salmon",
     run_isoform <- FALSE
     model_eda <- "~1"
 
-    sample_cols <- tryCatch(
-      colnames(utils::read.csv(sample_table, nrows = 1, check.names = FALSE)),
-      error = function(e) character(0)
-    )
+    sample_cols <- if (!is.null(sample_meta_for_cond)) {
+      colnames(sample_meta_for_cond)
+    } else {
+      tryCatch(
+        colnames(utils::read.csv(sample_table, nrows = 1, check.names = FALSE)),
+        error = function(e) character(0)
+      )
+    }
 
     if (!is.null(group_col) && group_col %in% sample_cols) {
       main_condition <- group_col
     } else if (!is.null(model) && model != "~1") {
-      main_condition <- tail(all.vars(stats::as.formula(model)), 1)
+      main_condition <- .resolve_main_condition(
+        stats::as.formula(model), sample_meta_for_cond, level, base
+      )
     } else {
       main_condition <- NULL
     }
   } else {
     model_eda <- model
-    main_condition <- tail(all.vars(stats::as.formula(model)), 1)
+    main_condition <- .resolve_main_condition(
+      stats::as.formula(model), sample_meta_for_cond, level, base
+    )
   }
 
   # NOTE: the environment check itself (debug_wsl()) now lives solely in
