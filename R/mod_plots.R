@@ -513,13 +513,27 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
   meta_df$sample <- rownames(meta_df)
   topx_final <- dplyr::inner_join(meta_df, gathered_top, by = "sample")
 
+  # Top-N DE gene boxplot. Colours follow the same convention as every other
+  # plot in the pipeline (level = red, base = blue) via .pca_group_colors(),
+  # which also handles the case where dds carries a third condition level
+  # beyond level/base (those get a distinct palette colour instead of the
+  # default ggplot hue). Previously this plot had no scale_fill_manual at
+  # all, so it silently used ggplot's default palette.
   safe_pdf(file.path(plot_dir, paste0("Top", top_genes, "_DE_Genes_", level, "_vs_", base, ".pdf")), expr = {
+    group_cols <- .pca_group_colors(
+      factor(topx_final[[main_condition]]),
+      level = level,
+      base  = base
+    )
+
     p_top <- ggplot2::ggplot(topx_final, ggplot2::aes(x = gene, y = normalized_counts, fill = .data[[main_condition]])) +
       ggplot2::geom_boxplot() +
+      ggplot2::scale_fill_manual(values = group_cols, name = main_condition) +
       ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1), plot.title = ggplot2::element_text(hjust = 0.5)) +
       ggplot2::ggtitle(paste("Top", top_genes, "Significant DE Genes"))
     print(p_top)
   })
+
   safe_pdf(file.path(plot_dir, paste0("DE_Volcanoplot_", level, "_vs_", base, ".pdf")), expr = {
     suppressWarnings(
       print(plot_volcano(results_data$res_tbl, padj_cutoff, highlight_genes,
