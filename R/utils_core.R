@@ -19,15 +19,18 @@
 
 .resolve_ensembl_metadata <- function(species, release) {
   species <- tolower(as.character(species))
-  release_num <- suppressWarnings(as.numeric(as.character(release)))
+  release_text <- as.character(release)
+  release_num <- suppressWarnings(as.numeric(release_text))
   if (length(species) != 1L || is.na(species) ||
       !species %in% c("human", "mouse")) {
     stop("`species` must be either 'human' or 'mouse'.", call. = FALSE)
   }
-  if (length(release_num) != 1L || !is.finite(release_num) ||
+  if (length(release_text) != 1L || !grepl("^[0-9]+$", release_text) ||
+      !is.finite(release_num) ||
       release_num < 1 || release_num != floor(release_num)) {
     stop("`release` must be a positive integer Ensembl release.", call. = FALSE)
   }
+  release <- sprintf("%.0f", release_num)
   if (species == "human") {
     list(
       species = species, release = as.character(release),
@@ -641,6 +644,19 @@ install_internal_db <- function(pkg_name = NULL, archive_path = NULL) {
     ext_path <- system.file("extdata", package = "ExpressOM")
     if (ext_path == "") ext_path <- "inst/extdata"
     tar_files <- list.files(ext_path, pattern = "\\.tar\\.gz$", full.names = TRUE)
+
+    local_path <- "inst/extdata"
+    local_files <- if (dir.exists(local_path)) {
+      list.files(local_path, pattern = "\\.tar\\.gz$", full.names = TRUE)
+    } else {
+      character()
+    }
+    installed_match <- !is.null(pkg_name) && any(
+      tolower(basename(tar_files)) == tolower(paste0(pkg_name, ".tar.gz"))
+    )
+    if (!installed_match && (length(tar_files) == 0L || !is.null(pkg_name))) {
+      tar_files <- local_files
+    }
   }
   db_path <- .select_internal_db_archive(tar_files, pkg_name)
   if (is.null(pkg_name) && is.null(archive_path) && length(tar_files) > 1L) {

@@ -204,9 +204,15 @@ expressom <- function(count_type        = "salmon",
     )
 
     parsed_ensembl <- .parse_ensembl_package_name(ensembl_package_name)
+    archive_dir <- tempfile("expressom_ensdb_")
+    if (!dir.create(archive_dir)) {
+      stop("Could not create temporary Ensembl archive directory.", call. = FALSE)
+    }
+    on.exit(unlink(archive_dir, recursive = TRUE), add = TRUE)
     archive_path <- create_homemade_db(
       species = parsed_ensembl$species,
-      release = parsed_ensembl$release
+      release = parsed_ensembl$release,
+      output_dir = archive_dir
     )
     install_internal_db(pkg_name = ensembl_package_name, archive_path = archive_path)
   }

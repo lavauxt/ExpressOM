@@ -53,9 +53,7 @@ generate_dte_dtu_report <- function(dte_results,
 
   dte$direction_label <- .de_direction_label(
     dte$log2FoldChange,
-    dte$signif & !is.na(dte$padj) & dte$padj < 0.05 &
-      is.finite(dte$log2FoldChange) &
-      abs(dte$log2FoldChange) > 1
+    dte$signif & is.finite(dte$log2FoldChange)
   )
 
   dtu <- dtu_results$dtu_results

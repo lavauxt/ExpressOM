@@ -29,6 +29,7 @@ test_that("Ensembl package names and metadata resolve consistently", {
   expect_error(.resolve_ensembl_metadata("rat", 107), "human.*mouse")
   expect_error(.resolve_ensembl_metadata("human", 0), "positive integer")
   expect_error(.resolve_ensembl_metadata("human", "v107"), "positive integer")
+  expect_error(.resolve_ensembl_metadata("human", "107.5"), "positive integer")
 })
 
 test_that("database archive selection requires exact package names", {
@@ -56,6 +57,21 @@ test_that("internal database installation can target an explicit archive", {
     install_internal_db("EnsDb.Hsapiens.v107", archive_path = archive),
     "does not match package"
   )
+})
+
+test_that("database timeout is restored after download errors", {
+  old_timeout <- getOption("timeout")
+  options(timeout = 37L)
+  on.exit(options(timeout = old_timeout), add = TRUE)
+  local_mocked_bindings(
+    download.file = function(...) stop("synthetic download failure"),
+    .package = "utils"
+  )
+  expect_error(
+    create_homemade_db(output_dir = withr::local_tempdir()),
+    "synthetic download failure"
+  )
+  expect_identical(getOption("timeout"), 37L)
 })
 
 test_that("database maintainer default remains template-safe", {
