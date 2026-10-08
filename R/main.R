@@ -203,25 +203,12 @@ expressom <- function(count_type        = "salmon",
       "' not found. Attempting automatic build and installation..."
     )
 
-    matches <- regexec(
-      "^EnsDb\\.(Hsapiens|Mmusculus)\\.v([0-9]+)$",
-      ensembl_package_name
+    parsed_ensembl <- .parse_ensembl_package_name(ensembl_package_name)
+    archive_path <- create_homemade_db(
+      species = parsed_ensembl$species,
+      release = parsed_ensembl$release
     )
-
-    match_parts <- regmatches(ensembl_package_name, matches)[[1]]
-
-    if (length(match_parts) == 3) {
-      species <- if (match_parts[2] == "Hsapiens") "human" else "mouse"
-      release <- match_parts[3]
-
-      create_homemade_db(species = species, release = release)
-      install_internal_db(pkg_name = ensembl_package_name)
-    } else {
-      stop(
-        "Could not parse ensembl_package_name '", ensembl_package_name,
-        "' to build database automatically. Expected format like 'EnsDb.Hsapiens.v107'."
-      )
-    }
+    install_internal_db(pkg_name = ensembl_package_name, archive_path = archive_path)
   }
 
   # Read the sample table once so .resolve_main_condition() can look at which

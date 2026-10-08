@@ -51,20 +51,22 @@ test_that(".wsl_tool_exists correctly detects present and absent tools", {
   expect_false(.wsl_tool_exists("definitely_not_a_real_tool_xyz123", use_wsl = FALSE))
 })
 
-test_that(".find_pfam_db and .find_cpat_logit_model accept the positional call ",
-          "signature used by the predictor pipeline (regression test)", {
-  skip_on_os("windows")
+test_that(
+  ".find_pfam_db and .find_cpat_logit_model accept the positional call signature used by the predictor pipeline (regression test)",
+  {
+    skip_on_os("windows")
 
-  # These mirror the exact positional calls made inside
-  # .run_external_predictors() / mod_isoform.R -- a mismatch in argument
-  # order here previously caused wsl_distro / use_wsl / conda_sh to be
-  # silently swapped.
-  pfam_result <- .find_pfam_db("Ubuntu", FALSE, NULL, "isoform_tools")
-  expect_true(is.null(pfam_result) || is.character(pfam_result))
+    # These mirror the exact positional calls made inside
+    # .run_external_predictors() / mod_isoform.R -- a mismatch in argument
+    # order here previously caused wsl_distro / use_wsl / conda_sh to be
+    # silently swapped.
+    pfam_result <- .find_pfam_db("Ubuntu", FALSE, NULL, "isoform_tools")
+    expect_true(is.null(pfam_result) || is.character(pfam_result))
 
-  cpat_result <- .find_cpat_logit_model("Human", "Ubuntu", FALSE, NULL, "isoform_tools")
-  expect_true(is.null(cpat_result) || is.character(cpat_result))
-})
+    cpat_result <- .find_cpat_logit_model("Human", "Ubuntu", FALSE, NULL, "isoform_tools")
+    expect_true(is.null(cpat_result) || is.character(cpat_result))
+  }
+)
 
 test_that("debug_wsl() runs natively (no WSL) without error and reports tool status", {
   skip_on_os("windows")

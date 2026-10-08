@@ -51,7 +51,12 @@ generate_dte_dtu_report <- function(dte_results,
     dte$transcript_id
   )
 
-  dte$signif_label <- ifelse(dte$signif, "Significant", "Not significant")
+  dte$direction_label <- .de_direction_label(
+    dte$log2FoldChange,
+    dte$signif & !is.na(dte$padj) & dte$padj < 0.05 &
+      is.finite(dte$log2FoldChange) &
+      abs(dte$log2FoldChange) > 1
+  )
 
   dtu <- dtu_results$dtu_results
 
@@ -100,10 +105,10 @@ generate_dte_dtu_report <- function(dte_results,
 
   p_volcano <- ggplot2::ggplot(
     dte_sig,
-    ggplot2::aes(x = log2FoldChange, y = -log10(padj), color = signif_label)
+    ggplot2::aes(x = log2FoldChange, y = -log10(padj), color = direction_label)
   ) +
     ggplot2::geom_point(alpha = 0.6, size = 1.5) +
-    ggplot2::scale_color_manual(values = c("Not significant" = "grey70", "Significant" = "red")) +
+    ggplot2::scale_color_manual(values = .de_direction_scale(), drop = FALSE) +
     ggplot2::geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
     ggplot2::geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
     ggplot2::labs(
@@ -142,11 +147,11 @@ generate_dte_dtu_report <- function(dte_results,
 
   p_ma <- ggplot2::ggplot(
     dte_ma,
-    ggplot2::aes(x = baseMean, y = log2FoldChange, color = signif_label)
+    ggplot2::aes(x = baseMean, y = log2FoldChange, color = direction_label)
   ) +
     ggplot2::geom_point(alpha = 0.6, size = 1.5) +
     ggplot2::scale_x_log10() +
-    ggplot2::scale_color_manual(values = c("Not significant" = "grey70", "Significant" = "red")) +
+    ggplot2::scale_color_manual(values = .de_direction_scale(), drop = FALSE) +
     ggplot2::geom_hline(yintercept = c(-1, 1), linetype = "dashed") +
     ggplot2::labs(
       title = "DTE MA plot",
@@ -171,9 +176,11 @@ generate_dte_dtu_report <- function(dte_results,
 
     p_bar <- ggplot2::ggplot(
       top_dte,
-      ggplot2::aes(x = reorder(gene_label, abs(log2FoldChange)), y = log2FoldChange)
+      ggplot2::aes(x = reorder(gene_label, abs(log2FoldChange)),
+                   y = log2FoldChange, fill = direction_label)
     ) +
-      ggplot2::geom_col(fill = "steelblue") +
+      ggplot2::geom_col() +
+      ggplot2::scale_fill_manual(values = .de_direction_scale(), drop = FALSE) +
       ggplot2::coord_flip() +
       ggplot2::labs(
         title = paste("Top", top_n, "significant DE transcripts"),

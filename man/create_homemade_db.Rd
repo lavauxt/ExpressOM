@@ -8,8 +8,23 @@ create_homemade_db(
   species = "human",
   release = "107",
   maintainer = "User <user@example.com>",
-  author = "ExpressOM Builder"
+  author = "ExpressOM Builder",
+  output_dir = "inst/extdata"
 )
+}
+\arguments{
+\item{species}{Either "human" or "mouse".}
+
+\item{release}{Positive integer Ensembl release.}
+
+\item{maintainer}{Package maintainer string.}
+
+\item{author}{Package author string.}
+
+\item{output_dir}{Directory receiving the generated source archive.}
+}
+\value{
+The normalized path to the generated source archive.
 }
 \description{
 Create and Bundle Homemade Ensembl Database

@@ -238,7 +238,7 @@
 #' named vector such as `c(down = "darkgreen")`.
 #' @keywords internal
 .volcano_colors <- function(colors = NULL) {
-  defaults <- c(up = "red2", down = "royalblue", ns = "grey")
+  defaults <- .de_direction_colors()
   if (is.null(colors)) return(defaults)
 
   if (is.null(names(colors)) || !all(names(colors) %in% names(defaults))) {
@@ -248,6 +248,32 @@
 
   defaults[names(colors)] <- as.character(colors)
   defaults
+}
+
+.plot_directional_ma <- function(res, title, padj_cutoff, lfc_cutoff) {
+  plot_df <- as.data.frame(res)
+  plot_df <- plot_df[
+    !is.na(plot_df$baseMean) & plot_df$baseMean > 0 &
+      is.finite(plot_df$log2FoldChange),
+  ]
+  plot_df$direction <- .de_direction_label(
+    plot_df$log2FoldChange,
+    !is.na(plot_df$padj) & plot_df$padj < padj_cutoff &
+      abs(plot_df$log2FoldChange) > lfc_cutoff
+  )
+  ggplot2::ggplot(
+    plot_df,
+    ggplot2::aes(x = baseMean, y = log2FoldChange, color = direction)
+  ) +
+    ggplot2::geom_point(alpha = 0.6, size = 1) +
+    ggplot2::scale_x_log10() +
+    ggplot2::scale_color_manual(values = .de_direction_scale(), drop = FALSE) +
+    ggplot2::geom_hline(yintercept = c(-lfc_cutoff, lfc_cutoff),
+                        color = "grey40", linetype = "dashed") +
+    ggplot2::coord_cartesian(ylim = c(-2, 2)) +
+    ggplot2::labs(title = title, x = "Mean of normalized counts",
+                  y = "log2 Fold Change", color = NULL) +
+    ggplot2::theme_minimal()
 }
 
 
@@ -488,13 +514,13 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
   }
 
   safe_pdf(file.path(plot_dir, paste0("MAplot_unshrunken_", level, "_vs_", base, ".pdf")), expr = {
-    DESeq2::plotMA(res_unshrunken, ylim = c(-2, 2))
-    graphics::abline(h = c(-1, 1), col = "dodgerblue", lwd = 2)
+    print(.plot_directional_ma(res_unshrunken, "MA plot (unshrunken)",
+                              padj_cutoff, lfc_cutoff))
   })
 
   safe_pdf(file.path(plot_dir, paste0("MAplot_shrunken_", level, "_vs_", base, ".pdf")), expr = {
-    DESeq2::plotMA(res_shrunken, ylim = c(-2, 2))
-    graphics::abline(h = c(-1, 1), col = "dodgerblue", lwd = 2)
+    print(.plot_directional_ma(res_shrunken, "MA plot (shrunken)",
+                              padj_cutoff, lfc_cutoff))
   })
 
   topx_sigOE_genes <- head(results_data$sig_res[order(results_data$sig_res$padj), "gene"], top_genes)
@@ -1041,7 +1067,10 @@ plot_l2fc_heatmap <- function(dds, selected_genes, condition_col, level, base, p
   p <- ggplot2::ggplot(plot_df, ggplot2::aes(x = Comparison, y = gene, fill = L2FC)) +
     ggplot2::geom_tile(color = "white", linewidth = 0.5) +
     ggplot2::scale_fill_gradient2(
-      low = "dodgerblue4", mid = "white", high = "red3", midpoint = 0,
+      low = .de_direction_colors()[["down"]],
+      mid = "white",
+      high = .de_direction_colors()[["up"]],
+      midpoint = 0,
       name = "Log2 FC",
       guide = ggplot2::guide_colorbar(title.position = "top", title.hjust = 0.5)
     ) +

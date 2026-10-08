@@ -45,7 +45,13 @@
 
     safe_pdf(file.path(dir_go, paste0("GO_", ont, "_Cnetplot_", comp_name, ".pdf")),
              width = 14, height = 14,
-             expr  = print(enrichplot::cnetplot(ego_wrapped, showCategory = top_genes, foldChange = OE_foldchanges)))
+             expr  = print(enrichplot::cnetplot(
+               ego_wrapped, showCategory = top_genes, foldChange = OE_foldchanges
+             ) + ggplot2::scale_color_gradient2(
+               low = .de_direction_colors()[["down"]], mid = "white",
+               high = .de_direction_colors()[["up"]], midpoint = 0,
+               name = "log2 fold change"
+             )))
   }
   ego_wrapped
 }
@@ -175,6 +181,9 @@
           species     = kegg_code,
           gene.idtype = "entrez",
           limit       = list(gene = 2, cpd = 1),
+          low         = list(gene = .de_direction_colors()[["down"]], cpd = "blue"),
+          mid         = list(gene = "white", cpd = "gray"),
+          high        = list(gene = .de_direction_colors()[["up"]], cpd = "yellow"),
           kegg.dir    = "."
         )
 
@@ -1259,8 +1268,8 @@ run_fgsea_analysis <- function(res_tbl,
         ) +
         ggplot2::scale_fill_manual(
           values = c(
-            "Up" = "#1E90FF",
-            "Down" = "#FF6347"
+            "Up" = .de_direction_colors()[["up"]],
+            "Down" = .de_direction_colors()[["down"]]
           ),
           drop = FALSE
         ) +

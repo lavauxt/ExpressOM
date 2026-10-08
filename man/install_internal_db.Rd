@@ -4,7 +4,13 @@
 \alias{install_internal_db}
 \title{Install Bundled Ensembl Database}
 \usage{
-install_internal_db(pkg_name = NULL)
+install_internal_db(pkg_name = NULL, archive_path = NULL)
+}
+\arguments{
+\item{pkg_name}{Optional exact EnsDb package name to install.}
+
+\item{archive_path}{Optional source archive path returned by
+`create_homemade_db()`.}
 }
 \description{
 Install Bundled Ensembl Database

@@ -1,5 +1,81 @@
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+.parse_ensembl_package_name <- function(ensembl_package_name) {
+  if (length(ensembl_package_name) != 1L || is.na(ensembl_package_name)) {
+    stop("`ensembl_package_name` must be one package name.", call. = FALSE)
+  }
+  matches <- regexec(
+    "^EnsDb\\.(Hsapiens|Mmusculus)\\.v([0-9]+)$",
+    ensembl_package_name
+  )
+  parts <- regmatches(ensembl_package_name, matches)[[1]]
+  if (length(parts) != 3L) {
+    stop("Could not parse ensembl_package_name '", ensembl_package_name,
+         "'. Expected format like 'EnsDb.Hsapiens.v107'.", call. = FALSE)
+  }
+  list(species = if (parts[[2]] == "Hsapiens") "human" else "mouse",
+       release = parts[[3]])
+}
+
+.resolve_ensembl_metadata <- function(species, release) {
+  species <- tolower(as.character(species))
+  release_num <- suppressWarnings(as.numeric(as.character(release)))
+  if (length(species) != 1L || is.na(species) ||
+      !species %in% c("human", "mouse")) {
+    stop("`species` must be either 'human' or 'mouse'.", call. = FALSE)
+  }
+  if (length(release_num) != 1L || !is.finite(release_num) ||
+      release_num < 1 || release_num != floor(release_num)) {
+    stop("`release` must be a positive integer Ensembl release.", call. = FALSE)
+  }
+  if (species == "human") {
+    list(
+      species = species, release = as.character(release),
+      package_prefix = "Hsapiens", org_folder = "homo_sapiens",
+      org_scientific = "Homo_sapiens",
+      genome_version = if (release_num <= 75) "GRCh37" else "GRCh38"
+    )
+  } else {
+    list(
+      species = species, release = as.character(release),
+      package_prefix = "Mmusculus", org_folder = "mus_musculus",
+      org_scientific = "Mus_musculus",
+      genome_version = if (release_num <= 102) "GRCm38" else "GRCm39"
+    )
+  }
+}
+
+.de_direction_colors <- function() c(up = "red2", down = "royalblue", ns = "grey70")
+
+.de_direction_label <- function(log2_fold_change, significant) {
+  significant <- !is.na(significant) & significant
+  direction <- rep("Not significant", length(log2_fold_change))
+  direction[significant & !is.na(log2_fold_change) & log2_fold_change > 0] <- "Upregulated"
+  direction[significant & !is.na(log2_fold_change) & log2_fold_change < 0] <- "Downregulated"
+  factor(direction, levels = c("Not significant", "Downregulated", "Upregulated"))
+}
+
+.de_direction_scale <- function() {
+  cols <- .de_direction_colors()
+  stats::setNames(cols[c("ns", "down", "up")],
+                  c("Not significant", "Downregulated", "Upregulated"))
+}
+
+.select_internal_db_archive <- function(tar_files, pkg_name = NULL) {
+  if (length(tar_files) == 0L) {
+    stop("No .tar.gz database found in inst/extdata. Run create_homemade_db() first.",
+         call. = FALSE)
+  }
+  if (is.null(pkg_name)) return(tar_files[[1]])
+  expected <- paste0(pkg_name, ".tar.gz")
+  matches <- tar_files[tolower(basename(tar_files)) == tolower(expected)]
+  if (length(matches) != 1L) {
+    stop("No unique exact database archive matching '", pkg_name, "' found. Available databases:\n",
+         paste(basename(tar_files), collapse = "\n"), call. = FALSE)
+  }
+  matches[[1]]
+}
+
 #' Safely strip Ensembl-style version suffixes from an identifier vector
 #' @keywords internal
 #' @export
@@ -440,33 +516,33 @@ safe_run <- function(expr, label = "") {
 }
 
 #' Create and Bundle Homemade Ensembl Database
+#' @param species Either "human" or "mouse".
+#' @param release Positive integer Ensembl release.
+#' @param maintainer Package maintainer string.
+#' @param author Package author string.
+#' @param output_dir Directory receiving the generated source archive.
+#' @return The normalized path to the generated source archive.
 #' @export
 create_homemade_db <- function(species = "human",
                                release = "107",
                                maintainer = "User <user@example.com>",
-                               author = "ExpressOM Builder") {
-  spec_prefix <- if (tolower(species) == "human") "Hsapiens" else "Mmusculus"
-  pkg_name <- paste0("EnsDb.", spec_prefix, ".v", release)
+                               author = "ExpressOM Builder",
+                               output_dir = "inst/extdata") {
+  metadata <- .resolve_ensembl_metadata(species, release)
+  release <- metadata$release
+  pkg_name <- paste0("EnsDb.", metadata$package_prefix, ".v", release)
   tar_name <- paste0(pkg_name, ".tar.gz")
 
-  tmp_dir <- file.path(tempdir(), paste0("build_", pkg_name))
-  if (dir.exists(tmp_dir)) unlink(tmp_dir, recursive = TRUE)
-  dir.create(tmp_dir, recursive = TRUE)
-  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
-
-  if (tolower(species) == "human") {
-    org_folder <- "homo_sapiens"
-    org_scientific <- "Homo_sapiens"
-    genome_ver <- if (as.numeric(release) <= 75) "GRCh37" else "GRCh38"
-  } else {
-    org_folder <- "mus_musculus"
-    org_scientific <- "Mus_musculus"
-    genome_ver <- if (as.numeric(release) <= 102) "GRCm38" else "GRCm39"
+  tmp_dir <- tempfile(pattern = paste0("build_", pkg_name, "_"), tmpdir = tempdir())
+  if (!dir.create(tmp_dir, recursive = TRUE)) {
+    stop("Could not create temporary build directory: ", tmp_dir, call. = FALSE)
   }
+  on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
 
   url <- sprintf(
     "https://ftp.ensembl.org/pub/release-%s/gtf/%s/%s.%s.%s.gtf.gz",
-    release, org_folder, org_scientific, genome_ver, release
+    release, metadata$org_folder, metadata$org_scientific,
+    metadata$genome_version, release
   )
 
   gtf_path <- file.path(tmp_dir, basename(url))
@@ -474,15 +550,17 @@ create_homemade_db <- function(species = "human",
   message("--- Step 1: Downloading GTF ---")
   message("Downloading from: ", url)
 
-  options(timeout = 900)
+  old_timeout <- getOption("timeout")
+  options(timeout = max(900L, old_timeout %||% 60L))
+  on.exit(options(timeout = old_timeout), add = TRUE)
   download.file(url, destfile = gtf_path, mode = "wb")
 
   message("--- Step 2: Generating SQLite Database ---")
 
   db_file <- ensembldb::ensDbFromGtf(
     gtf = gtf_path,
-    organism = org_scientific,
-    genomeVersion = genome_ver,
+    organism = metadata$org_scientific,
+    genomeVersion = metadata$genome_version,
     version = release,
     path = tmp_dir
   )
@@ -507,51 +585,69 @@ create_homemade_db <- function(species = "human",
   withr::with_dir(tmp_dir, {
     utils::tar(tar_name, files = pkg_name, compression = "gzip")
   })
+  tar_path <- file.path(tmp_dir, tar_name)
+  if (!file.exists(tar_path) || file.info(tar_path)$size <= 0) {
+    stop("Failed to create database archive: ", tar_path, call. = FALSE)
+  }
+  archive_members <- utils::untar(tar_path, list = TRUE)
+  if (!any(archive_members == paste0(pkg_name, "/DESCRIPTION"))) {
+    stop("Database archive is missing the package DESCRIPTION: ", tar_path,
+         call. = FALSE)
+  }
 
-  target_dir <- "inst/extdata"
-  if (!dir.exists(target_dir)) dir.create(target_dir, recursive = TRUE)
+  if (!dir.exists(output_dir) && !dir.create(output_dir, recursive = TRUE)) {
+    stop("Could not create archive output directory: ", output_dir, call. = FALSE)
+  }
+  archive_path <- file.path(output_dir, tar_name)
 
-  file.copy(
-    file.path(tmp_dir, tar_name),
-    file.path(target_dir, tar_name),
+  copied <- file.copy(
+    tar_path,
+    archive_path,
     overwrite = TRUE
   )
+  if (!isTRUE(copied) || !file.exists(archive_path)) {
+    stop("Failed to write Ensembl database archive to: ", archive_path, call. = FALSE)
+  }
 
-  message("SUCCESS: Database bundled at ", file.path(target_dir, tar_name))
+  message("SUCCESS: Database bundled at ", archive_path)
+  normalizePath(archive_path, winslash = "/", mustWork = TRUE)
 }
 
 #' Install Bundled Ensembl Database
+#' @param pkg_name Optional exact EnsDb package name to install.
+#' @param archive_path Optional source archive path returned by
+#'   `create_homemade_db()`.
 #' @export
-install_internal_db <- function(pkg_name = NULL) {
-  ext_path <- system.file("extdata", package = "ExpressOM")
-  if (ext_path == "") ext_path <- "inst/extdata"
-
-  tar_files <- list.files(ext_path, pattern = "\\.tar\\.gz$", full.names = TRUE)
-
-  if (length(tar_files) == 0) {
-    stop("No .tar.gz database found in inst/extdata. Run create_homemade_db() first.")
-  }
-
-  if (!is.null(pkg_name)) {
-    matched_files <- tar_files[grepl(pkg_name, basename(tar_files), ignore.case = TRUE)]
-
-    if (length(matched_files) == 0) {
-      stop(
-        "No database matching '", pkg_name, "' found. Available databases:\n",
-        paste(basename(tar_files), collapse = "\n")
-      )
+install_internal_db <- function(pkg_name = NULL, archive_path = NULL) {
+  if (!is.null(archive_path)) {
+    if (length(archive_path) != 1L || !file.exists(archive_path)) {
+      stop("`archive_path` must name an existing database archive.", call. = FALSE)
     }
-
-    db_path <- matched_files[1]
+    tar_files <- normalizePath(archive_path, winslash = "/", mustWork = TRUE)
+    if (!grepl("\\.tar\\.gz$", tar_files, ignore.case = TRUE)) {
+      stop("`archive_path` must point to a .tar.gz source archive.", call. = FALSE)
+    }
+    if (!is.null(pkg_name) &&
+        tolower(basename(tar_files)) != tolower(paste0(pkg_name, ".tar.gz"))) {
+      stop("Archive '", basename(tar_files), "' does not match package '", pkg_name, "'.",
+           call. = FALSE)
+    }
+    members <- tryCatch(utils::untar(tar_files, list = TRUE), error = function(e) character())
+    if (!any(grepl("/DESCRIPTION$", members))) {
+      stop("Archive does not contain an R package DESCRIPTION file: ", tar_files,
+           call. = FALSE)
+    }
   } else {
-    db_path <- tar_files[1]
-
-    if (length(tar_files) > 1) {
-      warning(
-        "Multiple databases found. Defaulting to the first one: ", basename(db_path),
-        "\nUse install_internal_db(pkg_name = '...') to specify."
-      )
-    }
+    ext_path <- system.file("extdata", package = "ExpressOM")
+    if (ext_path == "") ext_path <- "inst/extdata"
+    tar_files <- list.files(ext_path, pattern = "\\.tar\\.gz$", full.names = TRUE)
+  }
+  db_path <- .select_internal_db_archive(tar_files, pkg_name)
+  if (is.null(pkg_name) && is.null(archive_path) && length(tar_files) > 1L) {
+    warning(
+      "Multiple databases found. Defaulting to the first one: ", basename(db_path),
+      "\nUse install_internal_db(pkg_name = '...') to specify."
+    )
   }
 
   message("Installing bundled database: ", basename(db_path))
@@ -644,49 +740,36 @@ get_organism_info <- function(edb) {
 download_ensembl_refs <- function(ensembl_package_name, out_dir = "./reference") {
   if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
 
-  matches <- regexec("^EnsDb\\.(Hsapiens|Mmusculus)\\.v([0-9]+)$", ensembl_package_name)
-  match_parts <- regmatches(ensembl_package_name, matches)[[1]]
-
-  if (length(match_parts) != 3) {
-    stop("Could not parse ensembl_package_name. Expected format like 'EnsDb.Hsapiens.v107'")
-  }
-
-  species <- if (match_parts[2] == "Hsapiens") "human" else "mouse"
-  release <- match_parts[3]
-
-  if (species == "human") {
-    org_folder <- "homo_sapiens"
-    org_scientific <- "Homo_sapiens"
-    genome_ver <- if (as.numeric(release) <= 75) "GRCh37" else "GRCh38"
-  } else {
-    org_folder <- "mus_musculus"
-    org_scientific <- "Mus_musculus"
-    genome_ver <- if (as.numeric(release) <= 102) "GRCm38" else "GRCm39"
-  }
+  parsed <- .parse_ensembl_package_name(ensembl_package_name)
+  metadata <- .resolve_ensembl_metadata(parsed$species, parsed$release)
+  release <- metadata$release
 
   base_url <- "https://ftp.ensembl.org/pub/release-%s"
 
   gtf_url <- sprintf(
     paste0(base_url, "/gtf/%s/%s.%s.%s.gtf.gz"),
-    release, org_folder, org_scientific, genome_ver, release
+    release, metadata$org_folder, metadata$org_scientific,
+    metadata$genome_version, release
   )
 
   cdna_url <- sprintf(
     paste0(base_url, "/fasta/%s/cdna/%s.%s.cdna.all.fa.gz"),
-    release, org_folder, org_scientific, genome_ver
+    release, metadata$org_folder, metadata$org_scientific,
+    metadata$genome_version
   )
 
   ncrna_url <- sprintf(
     paste0(base_url, "/fasta/%s/ncrna/%s.%s.ncrna.fa.gz"),
-    release, org_folder, org_scientific, genome_ver
+    release, metadata$org_folder, metadata$org_scientific,
+    metadata$genome_version
   )
 
   gtf_dest <- file.path(out_dir, basename(gtf_url))
   cdna_dest <- file.path(out_dir, basename(cdna_url))
   ncrna_dest <- file.path(out_dir, basename(ncrna_url))
 
-  old_timeout <- getOption("timeout", 60L)
-  options(timeout = max(1800L, old_timeout))
+  old_timeout <- getOption("timeout")
+  options(timeout = max(1800L, old_timeout %||% 60L))
   on.exit(options(timeout = old_timeout), add = TRUE)
 
   if (!file.exists(gtf_dest)) {
