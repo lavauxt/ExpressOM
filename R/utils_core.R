@@ -48,6 +48,46 @@
   }
 }
 
+.sample_id_column <- function(sample_df) {
+  columns <- colnames(sample_df)
+  if ("Sample" %in% columns) return("Sample")
+  if ("sample_id" %in% columns) return("sample_id")
+  stop("Sample table must contain a 'Sample' or 'sample_id' column.",
+       call. = FALSE)
+}
+
+.resolve_quantification_files <- function(data_dir, sample_ids, count_type,
+                                          count_file_name) {
+  files <- vapply(sample_ids, function(sid) {
+    nested <- file.path(
+      data_dir, sid, paste0(sid, ".", count_type, ".quant"), count_file_name
+    )
+    direct <- file.path(data_dir, sid, count_file_name)
+    if (file.exists(nested)) nested else direct
+  }, character(1), USE.NAMES = FALSE)
+  names(files) <- sample_ids
+
+  missing <- files[!file.exists(files)]
+  if (length(missing) > 0L) {
+    stop(
+      "Missing quantification files for samples: ",
+      paste(names(missing), collapse = ", "),
+      "\nExpected file like: ", count_file_name,
+      call. = FALSE
+    )
+  }
+  files
+}
+
+.match_matrix_samples <- function(matrix_samples, metadata_samples) {
+  matched <- intersect(matrix_samples, metadata_samples)
+  if (length(matched) == 0L) {
+    stop("No matching sample names between matrix and sample table.",
+         call. = FALSE)
+  }
+  matched
+}
+
 .de_direction_colors <- function() c(up = "red2", down = "royalblue", ns = "grey70")
 
 .de_direction_label <- function(log2_fold_change, significant) {

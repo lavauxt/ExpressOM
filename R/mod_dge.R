@@ -142,7 +142,7 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
 
   if (!file.exists(sample_table)) stop("Sample table not found: ", sample_table)
   sample_df  <- data.table::fread(sample_table, header = TRUE, data.table = FALSE)
-  sample_col <- if ("Sample" %in% colnames(sample_df)) "Sample" else "sample_id"
+  sample_col <- .sample_id_column(sample_df)
 
   sample_df <- .apply_sample_filters(sample_df, sample_col, remove_sample, subset_sample)
 
@@ -222,21 +222,11 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
       stop("Unsupported count_type for tximport: ", count_type)
     )
 
-    tximport_file_list <- sapply(sample_df[[sample_col]], function(sid) {
-      p_nested <- file.path(data_dir, sid, paste0(sid, ".", count_type, ".quant"), count_file_name)
-      p_direct <- file.path(data_dir, sid, count_file_name)
-      if (file.exists(p_nested)) return(p_nested)
-      return(p_direct)
-    })
-    names(tximport_file_list) <- sample_df[[sample_col]]
-
     if (count_type == "rsem")
       message("NOTE: rsem mode imports gene-level counts (quant.genes.results). For isoform analysis use isoforms.results.")
-    missing_files <- tximport_file_list[!file.exists(tximport_file_list)]
-    if (length(missing_files) > 0) {
-      stop("Missing quantification files for samples: ", paste(names(missing_files), collapse = ", "),
-           "\nExpected file like: ", count_file_name)
-    }
+    tximport_file_list <- .resolve_quantification_files(
+      data_dir, sample_df[[sample_col]], count_type, count_file_name
+    )
 
     message("Importing ", count_type, " files via tximport...")
     txi <- tximport::tximport(
@@ -258,8 +248,9 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     rownames(counts_df) <- counts_df[, 1]
     counts_df <- counts_df[, -1, drop = FALSE]
 
-    valid_samples <- intersect(colnames(counts_df), rownames(sample_df))
-    if (length(valid_samples) == 0) stop("No matching sample names between matrix and sample table.")
+    valid_samples <- .match_matrix_samples(
+      colnames(counts_df), rownames(sample_df)
+    )
 
     count_mat <- as.matrix(counts_df[, valid_samples, drop = FALSE])
     mode(count_mat) <- "numeric"

@@ -16,7 +16,7 @@ import_transcript_counts <- function(data_dir,
   if (!file.exists(sample_table)) stop("Sample table not found: ", sample_table)
 
   sample_df <- data.table::fread(sample_table, header = TRUE, data.table = FALSE)
-  sample_col <- if ("Sample" %in% colnames(sample_df)) "Sample" else "sample_id"
+  sample_col <- .sample_id_column(sample_df)
 
   sample_df <- .apply_sample_filters(sample_df, sample_col, remove_sample, subset_sample)
   rownames(sample_df) <- sample_df[[sample_col]]
@@ -135,15 +135,9 @@ import_transcript_counts <- function(data_dir,
       stop("Unsupported count_type for tximport: ", count_type)
     )
 
-    file_list <- sapply(sample_df[[sample_col]], function(sid) {
-      p_nested <- file.path(data_dir, sid, paste0(sid, ".", count_type, ".quant"), count_file_name)
-      p_direct <- file.path(data_dir, sid, count_file_name)
-
-      if (file.exists(p_nested)) return(p_nested)
-      return(p_direct)
-    })
-
-    names(file_list) <- sample_df[[sample_col]]
+    file_list <- .resolve_quantification_files(
+      data_dir, sample_df[[sample_col]], count_type, count_file_name
+    )
 
     txi <- tximport::tximport(
       file_list,
@@ -198,7 +192,9 @@ import_transcript_counts <- function(data_dir,
     rownames(counts_df) <- counts_df[, 1]
     counts_df <- counts_df[, -1, drop = FALSE]
 
-    valid_samples <- intersect(colnames(counts_df), rownames(sample_df))
+    valid_samples <- .match_matrix_samples(
+      colnames(counts_df), rownames(sample_df)
+    )
     count_mat <- as.matrix(counts_df[, valid_samples, drop = FALSE])
     mode(count_mat) <- "numeric"
     count_mat[is.na(count_mat)] <- 0
