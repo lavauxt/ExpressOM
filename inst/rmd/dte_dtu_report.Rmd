@@ -35,6 +35,10 @@ knitr::opts_chunk$set(
   message = FALSE
 )
 
+# rmarkdown injects `params` during rendering; this fallback makes the binding
+# explicit to static analyzers when the template is opened outside a render.
+if (!exists("params", inherits = TRUE)) params <- list()
+
 suppressPackageStartupMessages({
   library(DT)
 })
