@@ -563,13 +563,13 @@ run_deseq2_analysis <- function(
 
   if (test == "LRT") {
     res_unshrunken <- DESeq2::results(dds, alpha = padj_cutoff)
-    res_contrast <- DESeq2::results(
-      dds,
-      contrast = comparison,
-      alpha = padj_cutoff
-    )
+    # The LRT result is omnibus and cannot provide directional contrast
+    # statistics. Refit the coefficient Wald tests using the fitted dispersions.
+    wald_results <- .lrt_wald_contrast_results(dds, comparison, padj_cutoff)
+    dds_wald <- wald_results$dds
+    res_contrast <- wald_results$results
     res_shrunken <- suppressMessages(
-      DESeq2::lfcShrink(dds, contrast = comparison, type = "ashr")
+      DESeq2::lfcShrink(dds_wald, contrast = comparison, type = "ashr")
     )
     res_shrunken$contrast_pvalue <- res_contrast$pvalue
     res_shrunken$contrast_padj <- res_contrast$padj
@@ -644,6 +644,14 @@ run_deseq2_analysis <- function(
     res_unshrunken = res_unshrunken,
     res_shrunken = res_shrunken
   ))
+}
+
+.lrt_wald_contrast_results <- function(dds, comparison, alpha) {
+  dds_wald <- DESeq2::nbinomWaldTest(dds)
+  list(
+    dds = dds_wald,
+    results = DESeq2::results(dds_wald, contrast = comparison, alpha = alpha)
+  )
 }
 
 #' Export Significant Results

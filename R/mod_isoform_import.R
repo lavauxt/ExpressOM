@@ -3,22 +3,34 @@
 
 #' Import transcript-level counts for isoform analysis
 #' @export
-import_transcript_counts <- function(data_dir,
-                                     sample_table,
-                                     ensembl_package_name,
-                                     count_type = "salmon",
-                                     matrix_file = NULL,
-                                     subset_sample = NULL,
-                                     remove_sample = NULL,
-                                     custom_tx2gene = NULL,
-                                     custom_gene_map = NULL) {
+import_transcript_counts <- function(
+  data_dir,
+  sample_table,
+  ensembl_package_name,
+  count_type = "salmon",
+  matrix_file = NULL,
+  subset_sample = NULL,
+  remove_sample = NULL,
+  custom_tx2gene = NULL,
+  custom_gene_map = NULL
+) {
+  if (!file.exists(sample_table)) {
+    stop("Sample table not found: ", sample_table)
+  }
 
-  if (!file.exists(sample_table)) stop("Sample table not found: ", sample_table)
-
-  sample_df <- data.table::fread(sample_table, header = TRUE, data.table = FALSE)
+  sample_df <- data.table::fread(
+    sample_table,
+    header = TRUE,
+    data.table = FALSE
+  )
   sample_col <- .sample_id_column(sample_df)
 
-  sample_df <- .apply_sample_filters(sample_df, sample_col, remove_sample, subset_sample)
+  sample_df <- .apply_sample_filters(
+    sample_df,
+    sample_col,
+    remove_sample,
+    subset_sample
+  )
   rownames(sample_df) <- sample_df[[sample_col]]
 
   edb <- getExportedValue(ensembl_package_name, ensembl_package_name)
@@ -26,7 +38,11 @@ import_transcript_counts <- function(data_dir,
   if (!is.null(custom_tx2gene) && file.exists(custom_tx2gene)) {
     message("Using custom tx2gene file: ", custom_tx2gene)
 
-    tx2gene <- data.table::fread(custom_tx2gene, header = TRUE, data.table = FALSE)
+    tx2gene <- data.table::fread(
+      custom_tx2gene,
+      header = TRUE,
+      data.table = FALSE
+    )
 
     if (!all(c("tx_id", "gene_id") %in% colnames(tx2gene))) {
       stop("Custom tx2gene must contain columns 'tx_id' and 'gene_id'")
@@ -47,21 +63,35 @@ import_transcript_counts <- function(data_dir,
     tx2gene$gene_id <- strip_ensembl_version(tx2gene$gene_id)
   }
 
+  tx2gene <- .validate_tx2gene(tx2gene)
+
   org_info <- get_organism_info(edb)
   org_db <- org_info$org_db
-  org_obj <- if (requireNamespace(org_db, quietly = TRUE)) .load_org_db(org_db) else NULL
+  org_obj <- if (requireNamespace(org_db, quietly = TRUE)) {
+    .load_org_db(org_db)
+  } else {
+    NULL
+  }
 
   if (!is.null(custom_gene_map) && file.exists(custom_gene_map)) {
     message("Using custom gene annotation file: ", custom_gene_map)
 
-    gene_map <- data.table::fread(custom_gene_map, header = TRUE, data.table = FALSE)
+    gene_map <- data.table::fread(
+      custom_gene_map,
+      header = TRUE,
+      data.table = FALSE
+    )
 
-    if (!("gene_id" %in% colnames(gene_map)) && "ensembl" %in% colnames(gene_map)) {
+    if (
+      !("gene_id" %in% colnames(gene_map)) && "ensembl" %in% colnames(gene_map)
+    ) {
       colnames(gene_map)[colnames(gene_map) == "ensembl"] <- "gene_id"
     }
 
     if (!all(c("gene_id", "symbol") %in% colnames(gene_map))) {
-      stop("Custom gene map must contain columns 'gene_id' (or 'ensembl') and 'symbol'")
+      stop(
+        "Custom gene map must contain columns 'gene_id' (or 'ensembl') and 'symbol'"
+      )
     }
 
     gene_map$gene_id <- strip_ensembl_version(gene_map$gene_id)
@@ -87,7 +117,13 @@ import_transcript_counts <- function(data_dir,
     }
 
     entrez_present <- sum(!is.na(gene_map$entrezid) & gene_map$entrezid != "")
-    message("  Gene map loaded: ", nrow(gene_map), " genes, ", entrez_present, " with Entrez IDs")
+    message(
+      "  Gene map loaded: ",
+      nrow(gene_map),
+      " genes, ",
+      entrez_present,
+      " with Entrez IDs"
+    )
   } else {
     gene_map <- ensembldb::genes(
       edb,
@@ -136,7 +172,10 @@ import_transcript_counts <- function(data_dir,
     )
 
     file_list <- .resolve_quantification_files(
-      data_dir, sample_df[[sample_col]], count_type, count_file_name
+      data_dir,
+      sample_df[[sample_col]],
+      count_type,
+      count_file_name
     )
 
     txi <- tximport::tximport(
@@ -162,9 +201,14 @@ import_transcript_counts <- function(data_dir,
 
     if (n_total_tx > 0 && n_mapped_tx / n_total_tx < 0.5) {
       stop(
-        "Only ", n_mapped_tx, " / ", n_total_tx,
+        "Only ",
+        n_mapped_tx,
+        " / ",
+        n_total_tx,
         " imported feature IDs match transcript IDs in tx2gene. This usually means ",
-        "count_type = '", count_type, "' resolved to a gene-level quantification file ",
+        "count_type = '",
+        count_type,
+        "' resolved to a gene-level quantification file ",
         "instead of an isoform-level one (RSEM in particular has separate ",
         "genes.results / isoforms.results outputs -- import_transcript_counts() needs ",
         "the isoform-level file), or data_dir/count_type point at the wrong files.\n",
@@ -186,14 +230,17 @@ import_transcript_counts <- function(data_dir,
       type = "tximport"
     ))
   } else {
-    if (is.null(matrix_file)) stop("matrix_file required for count_type='matrix'")
+    if (is.null(matrix_file)) {
+      stop("matrix_file required for count_type='matrix'")
+    }
 
     counts_df <- data.table::fread(matrix_file, data.table = FALSE)
     rownames(counts_df) <- counts_df[, 1]
     counts_df <- counts_df[, -1, drop = FALSE]
 
     valid_samples <- .match_matrix_samples(
-      colnames(counts_df), rownames(sample_df)
+      colnames(counts_df),
+      rownames(sample_df)
     )
     count_mat <- as.matrix(counts_df[, valid_samples, drop = FALSE])
     suppressWarnings(mode(count_mat) <- "numeric")
@@ -211,4 +258,3 @@ import_transcript_counts <- function(data_dir,
     ))
   }
 }
-

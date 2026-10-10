@@ -540,6 +540,16 @@
   out
 }
 
+.reactome_organism <- function(kegg_code) {
+  switch(
+    kegg_code,
+    hsa = "human",
+    mmu = "mouse",
+    rno = "rat",
+    stop("Unsupported Reactome organism code: ", kegg_code, call. = FALSE)
+  )
+}
+
 #' Run Functional Analysis with Directional Stat Management
 #'
 #' @export
@@ -1038,11 +1048,12 @@ run_functional_analysis <- function(
   sig_entrez_reac <- sig_entrez_ids
 
   message("Running Reactome ORA on curated list...")
-  reac_org <- ifelse(kegg_code == "hsa", "human", "mouse")
+  reac_org <- .reactome_organism(kegg_code)
   if (length(sig_entrez_reac) > 0) {
     x <- safe_run(
       suppressMessages(ReactomePA::enrichPathway(
         gene = sig_entrez_reac,
+        universe = as.character(res_entrez$entrezid),
         organism = reac_org,
         pvalueCutoff = go_pvalue_cutoff,
         qvalueCutoff = go_qvalue_cutoff,

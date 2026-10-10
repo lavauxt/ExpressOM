@@ -10,38 +10,53 @@
   )
   parts <- regmatches(ensembl_package_name, matches)[[1]]
   if (length(parts) != 3L) {
-    stop("Could not parse ensembl_package_name '", ensembl_package_name,
-         "'. Expected format like 'EnsDb.Hsapiens.v107'.", call. = FALSE)
+    stop(
+      "Could not parse ensembl_package_name '",
+      ensembl_package_name,
+      "'. Expected format like 'EnsDb.Hsapiens.v107'.",
+      call. = FALSE
+    )
   }
-  list(species = if (parts[[2]] == "Hsapiens") "human" else "mouse",
-       release = parts[[3]])
+  list(
+    species = if (parts[[2]] == "Hsapiens") "human" else "mouse",
+    release = parts[[3]]
+  )
 }
 
 .resolve_ensembl_metadata <- function(species, release) {
   species <- tolower(as.character(species))
   release_text <- as.character(release)
   release_num <- suppressWarnings(as.numeric(release_text))
-  if (length(species) != 1L || is.na(species) ||
-      !species %in% c("human", "mouse")) {
+  if (
+    length(species) != 1L || is.na(species) || !species %in% c("human", "mouse")
+  ) {
     stop("`species` must be either 'human' or 'mouse'.", call. = FALSE)
   }
-  if (length(release_text) != 1L || !grepl("^[0-9]+$", release_text) ||
+  if (
+    length(release_text) != 1L ||
+      !grepl("^[0-9]+$", release_text) ||
       !is.finite(release_num) ||
-      release_num < 1 || release_num != floor(release_num)) {
+      release_num < 1 ||
+      release_num != floor(release_num)
+  ) {
     stop("`release` must be a positive integer Ensembl release.", call. = FALSE)
   }
   release <- sprintf("%.0f", release_num)
   if (species == "human") {
     list(
-      species = species, release = as.character(release),
-      package_prefix = "Hsapiens", org_folder = "homo_sapiens",
+      species = species,
+      release = as.character(release),
+      package_prefix = "Hsapiens",
+      org_folder = "homo_sapiens",
       org_scientific = "Homo_sapiens",
       genome_version = if (release_num <= 75) "GRCh37" else "GRCh38"
     )
   } else {
     list(
-      species = species, release = as.character(release),
-      package_prefix = "Mmusculus", org_folder = "mus_musculus",
+      species = species,
+      release = as.character(release),
+      package_prefix = "Mmusculus",
+      org_folder = "mus_musculus",
       org_scientific = "Mus_musculus",
       genome_version = if (release_num <= 102) "GRCm38" else "GRCm39"
     )
@@ -50,21 +65,39 @@
 
 .sample_id_column <- function(sample_df) {
   columns <- colnames(sample_df)
-  if ("Sample" %in% columns) return("Sample")
-  if ("sample_id" %in% columns) return("sample_id")
-  stop("Sample table must contain a 'Sample' or 'sample_id' column.",
-       call. = FALSE)
+  if ("Sample" %in% columns) {
+    return("Sample")
+  }
+  if ("sample_id" %in% columns) {
+    return("sample_id")
+  }
+  stop(
+    "Sample table must contain a 'Sample' or 'sample_id' column.",
+    call. = FALSE
+  )
 }
 
-.resolve_quantification_files <- function(data_dir, sample_ids, count_type,
-                                          count_file_name) {
-  files <- vapply(sample_ids, function(sid) {
-    nested <- file.path(
-      data_dir, sid, paste0(sid, ".", count_type, ".quant"), count_file_name
-    )
-    direct <- file.path(data_dir, sid, count_file_name)
-    if (file.exists(nested)) nested else direct
-  }, character(1), USE.NAMES = FALSE)
+.resolve_quantification_files <- function(
+  data_dir,
+  sample_ids,
+  count_type,
+  count_file_name
+) {
+  files <- vapply(
+    sample_ids,
+    function(sid) {
+      nested <- file.path(
+        data_dir,
+        sid,
+        paste0(sid, ".", count_type, ".quant"),
+        count_file_name
+      )
+      direct <- file.path(data_dir, sid, count_file_name)
+      if (file.exists(nested)) nested else direct
+    },
+    character(1),
+    USE.NAMES = FALSE
+  )
   names(files) <- sample_ids
 
   missing <- files[!file.exists(files)]
@@ -72,7 +105,8 @@
     stop(
       "Missing quantification files for samples: ",
       paste(names(missing), collapse = ", "),
-      "\nExpected file like: ", count_file_name,
+      "\nExpected file like: ",
+      count_file_name,
       call. = FALSE
     )
   }
@@ -82,15 +116,23 @@
 .match_matrix_samples <- function(matrix_samples, metadata_samples) {
   matched <- intersect(matrix_samples, metadata_samples)
   if (length(matched) == 0L) {
-    stop("No matching sample names between matrix and sample table.",
-         call. = FALSE)
+    stop(
+      "No matching sample names between matrix and sample table.",
+      call. = FALSE
+    )
   }
   matched
 }
 
 .validate_nbest <- function(nbest, cap = 1000L) {
-  if (!is.numeric(nbest) || length(nbest) != 1L || is.na(nbest) ||
-      !is.finite(nbest) || nbest < 1 || nbest != floor(nbest)) {
+  if (
+    !is.numeric(nbest) ||
+      length(nbest) != 1L ||
+      is.na(nbest) ||
+      !is.finite(nbest) ||
+      nbest < 1 ||
+      nbest != floor(nbest)
+  ) {
     stop("`nBest` must be a single positive integer.", call. = FALSE)
   }
   min(nbest, cap)
@@ -108,28 +150,45 @@
 }
 
 .validate_isoform_design <- function(design, condition, metadata) {
-  design <- if (inherits(design, "formula")) design else stats::as.formula(design)
+  design <- if (inherits(design, "formula")) {
+    design
+  } else {
+    stats::as.formula(design)
+  }
   if (length(design) != 2L) {
-    stop("Isoform design must be a one-sided additive formula, e.g. ~ batch + condition.",
-         call. = FALSE)
+    stop(
+      "Isoform design must be a one-sided additive formula, e.g. ~ batch + condition.",
+      call. = FALSE
+    )
   }
   labels <- attr(stats::terms(design), "term.labels")
   if (any(grepl(":|\\*|\\^|/", labels))) {
-    stop("Isoform design currently supports additive main effects only; interactions are not supported.",
-         call. = FALSE)
+    stop(
+      "Isoform design currently supports additive main effects only; interactions are not supported.",
+      call. = FALSE
+    )
   }
   variables <- all.vars(design)
   missing <- setdiff(variables, colnames(metadata))
   if (length(missing)) {
-    stop("Isoform design variable(s) missing from sample metadata: ",
-         paste(missing, collapse = ", "), call. = FALSE)
+    stop(
+      "Isoform design variable(s) missing from sample metadata: ",
+      paste(missing, collapse = ", "),
+      call. = FALSE
+    )
   }
   if (!condition %in% variables) {
-    stop("Isoform design must include the comparison condition column '",
-         condition, "'.", call. = FALSE)
+    stop(
+      "Isoform design must include the comparison condition column '",
+      condition,
+      "'.",
+      call. = FALSE
+    )
   }
   for (variable in variables) {
-    if (is.character(metadata[[variable]])) metadata[[variable]] <- factor(metadata[[variable]])
+    if (is.character(metadata[[variable]])) {
+      metadata[[variable]] <- factor(metadata[[variable]])
+    }
   }
   list(formula = design, metadata = metadata, variables = variables)
 }
@@ -137,27 +196,40 @@
 .set_contrast_reference <- function(metadata, condition, base, level) {
   values <- as.character(metadata[[condition]])
   if (!all(c(base, level) %in% values)) {
-    stop("Both `base` and `level` must be observed in metadata column '",
-         condition, "'.", call. = FALSE)
+    stop(
+      "Both `base` and `level` must be observed in metadata column '",
+      condition,
+      "'.",
+      call. = FALSE
+    )
   }
   observed <- unique(values)
-  metadata[[condition]] <- factor(values, levels = c(base, setdiff(observed, base)))
+  metadata[[condition]] <- factor(
+    values,
+    levels = c(base, setdiff(observed, base))
+  )
   metadata
 }
 
 .design_contrast_coef <- function(design, metadata, condition, level, base) {
   terms <- stats::terms(design)
   if (any(grepl(":|\\*|\\^|/", attr(terms, "term.labels")))) {
-    stop("DRIMSeq covariate designs currently require additive main effects.",
-         call. = FALSE)
+    stop(
+      "DRIMSeq covariate designs currently require additive main effects.",
+      call. = FALSE
+    )
   }
   metadata <- .set_contrast_reference(metadata, condition, base, level)
   mm <- stats::model.matrix(design, data = metadata)
   expected <- paste0(condition, level)
   if (!expected %in% colnames(mm)) {
-    stop("Could not resolve contrast coefficient '", expected,
-         "' from design matrix columns: ", paste(colnames(mm), collapse = ", "),
-         call. = FALSE)
+    stop(
+      "Could not resolve contrast coefficient '",
+      expected,
+      "' from design matrix columns: ",
+      paste(colnames(mm), collapse = ", "),
+      call. = FALSE
+    )
   }
   expected
 }
@@ -172,41 +244,76 @@
     character(0)
   }
   list(
-    full = stats::as.formula(paste("~ sample + exon +", paste(feature_terms, collapse = " + "))),
-    reduced = stats::as.formula(paste("~ sample + exon", if (length(reduced_terms)) paste("+", paste(reduced_terms, collapse = " + ")) else ""))
+    full = stats::as.formula(paste(
+      "~ sample + exon +",
+      paste(feature_terms, collapse = " + ")
+    )),
+    reduced = stats::as.formula(paste(
+      "~ sample + exon",
+      if (length(reduced_terms)) {
+        paste("+", paste(reduced_terms, collapse = " + "))
+      } else {
+        ""
+      }
+    ))
   )
 }
 
-.de_direction_colors <- function() c(up = "red2", down = "royalblue", ns = "grey70")
+.de_direction_colors <- function() {
+  c(up = "red2", down = "royalblue", ns = "grey70")
+}
 
-.de_direction_label <- function(log2_fold_change, significant,
-                               test_type = "Wald") {
-  if (length(test_type) == 1L) test_type <- rep(test_type, length(log2_fold_change))
+.de_direction_label <- function(
+  log2_fold_change,
+  significant,
+  test_type = "Wald"
+) {
+  if (length(test_type) == 1L) {
+    test_type <- rep(test_type, length(log2_fold_change))
+  }
   significant[!is.na(test_type) & test_type == "LRT"] <- FALSE
   significant <- !is.na(significant) & significant
   direction <- rep("Not significant", length(log2_fold_change))
-  direction[significant & !is.na(log2_fold_change) & log2_fold_change > 0] <- "Upregulated"
-  direction[significant & !is.na(log2_fold_change) & log2_fold_change < 0] <- "Downregulated"
-  factor(direction, levels = c("Not significant", "Downregulated", "Upregulated"))
+  direction[
+    significant & !is.na(log2_fold_change) & log2_fold_change > 0
+  ] <- "Upregulated"
+  direction[
+    significant & !is.na(log2_fold_change) & log2_fold_change < 0
+  ] <- "Downregulated"
+  factor(
+    direction,
+    levels = c("Not significant", "Downregulated", "Upregulated")
+  )
 }
 
 .de_direction_scale <- function() {
   cols <- .de_direction_colors()
-  stats::setNames(cols[c("ns", "down", "up")],
-                  c("Not significant", "Downregulated", "Upregulated"))
+  stats::setNames(
+    cols[c("ns", "down", "up")],
+    c("Not significant", "Downregulated", "Upregulated")
+  )
 }
 
 .select_internal_db_archive <- function(tar_files, pkg_name = NULL) {
   if (length(tar_files) == 0L) {
-    stop("No .tar.gz database found in inst/extdata. Run create_homemade_db() first.",
-         call. = FALSE)
+    stop(
+      "No .tar.gz database found in inst/extdata. Run create_homemade_db() first.",
+      call. = FALSE
+    )
   }
-  if (is.null(pkg_name)) return(tar_files[[1]])
+  if (is.null(pkg_name)) {
+    return(tar_files[[1]])
+  }
   expected <- paste0(pkg_name, ".tar.gz")
   matches <- tar_files[tolower(basename(tar_files)) == tolower(expected)]
   if (length(matches) != 1L) {
-    stop("No unique exact database archive matching '", pkg_name, "' found. Available databases:\n",
-         paste(basename(tar_files), collapse = "\n"), call. = FALSE)
+    stop(
+      "No unique exact database archive matching '",
+      pkg_name,
+      "' found. Available databases:\n",
+      paste(basename(tar_files), collapse = "\n"),
+      call. = FALSE
+    )
   }
   matches[[1]]
 }
@@ -279,18 +386,31 @@ clean_transcript_id <- function(x) {
 
 #' Fill missing Entrez IDs in a gene_map using clusterProfiler::bitr
 #' @keywords internal
-.fill_entrez_with_bitr <- function(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol") {
-  if (is.null(org_obj)) return(gene_map)
+.fill_entrez_with_bitr <- function(
+  gene_map,
+  org_obj,
+  id_col = "ensembl",
+  symbol_col = "symbol"
+) {
+  if (is.null(org_obj)) {
+    return(gene_map)
+  }
 
   if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
-    message("  clusterProfiler not installed; skipping advanced Entrez mapping.")
+    message(
+      "  clusterProfiler not installed; skipping advanced Entrez mapping."
+    )
     return(gene_map)
   }
 
   idx_na <- is.na(gene_map$entrezid) | gene_map$entrezid == ""
-  if (!any(idx_na)) return(gene_map)
+  if (!any(idx_na)) {
+    return(gene_map)
+  }
 
-  message("  Attempting to fill missing Entrez IDs using clusterProfiler::bitr...")
+  message(
+    "  Attempting to fill missing Entrez IDs using clusterProfiler::bitr..."
+  )
 
   ens_ids <- gene_map[[id_col]][idx_na]
   ens_like <- grepl("^ENS", ens_ids)
@@ -313,7 +433,9 @@ clean_transcript_id <- function(x) {
     if (!is.null(map_df) && nrow(map_df) > 0) {
       for (i in which(idx_na)) {
         if (gene_map[[id_col]][i] %in% map_df$ENSEMBL) {
-          gene_map$entrezid[i] <- map_df$ENTREZID[map_df$ENSEMBL == gene_map[[id_col]][i]][1]
+          gene_map$entrezid[i] <- map_df$ENTREZID[
+            map_df$ENSEMBL == gene_map[[id_col]][i]
+          ][1]
         }
       }
       message("    Mapped ", nrow(map_df), " Ensembl IDs to Entrez.")
@@ -324,7 +446,9 @@ clean_transcript_id <- function(x) {
 
   if (any(idx_na2)) {
     syms <- gene_map[[symbol_col]][idx_na2]
-    syms <- syms[!is.na(syms) & syms != "" & syms != gene_map[[id_col]][idx_na2]]
+    syms <- syms[
+      !is.na(syms) & syms != "" & syms != gene_map[[id_col]][idx_na2]
+    ]
     syms <- unique(syms)
 
     if (length(syms) > 0) {
@@ -357,30 +481,59 @@ clean_transcript_id <- function(x) {
 
 #' Apply remove_sample / subset_sample filters to an imported sample table
 #' @keywords internal
-.apply_sample_filters <- function(sample_df, sample_col, remove_sample = NULL, subset_sample = NULL) {
+.apply_sample_filters <- function(
+  sample_df,
+  sample_col,
+  remove_sample = NULL,
+  subset_sample = NULL
+) {
   if (!is.null(remove_sample)) {
-    message("   -> Excluding requested samples: ", paste(remove_sample, collapse = ", "))
+    message(
+      "   -> Excluding requested samples: ",
+      paste(remove_sample, collapse = ", ")
+    )
     keep_indices <- !(sample_df[[sample_col]] %in% remove_sample)
     sample_df <- sample_df[keep_indices, , drop = FALSE]
 
     if (nrow(sample_df) == 0) {
-      stop("The remove_sample constraint removed all available samples from your metadata!")
+      stop(
+        "The remove_sample constraint removed all available samples from your metadata!"
+      )
     }
   }
 
   if (!is.null(subset_sample)) {
     message("   -> Applying subset condition: ", subset_sample)
 
-    sample_df <- tryCatch(
-      {
-        filter_expr <- rlang::parse_expr(subset_sample)
-        subset_indices <- eval(filter_expr, envir = sample_df)
-        sample_df[subset_indices, , drop = FALSE]
-      },
+    filter_expr <- tryCatch(
+      rlang::parse_expr(subset_sample),
+      error = function(e) stop("Invalid subset_sample expression: ", e$message)
+    )
+    if (!.is_safe_subset_expr(filter_expr, names(sample_df))) {
+      stop(
+        "subset_sample supports only column names, literal values, c(), ",
+        "comparisons, %in%, and logical operators (&, |, !).",
+        call. = FALSE
+      )
+    }
+    eval_env <- list2env(as.list(sample_df), parent = baseenv())
+    subset_indices <- tryCatch(
+      eval(filter_expr, envir = eval_env),
       error = function(e) {
         stop("Failed to evaluate subset_sample condition. Error: ", e$message)
       }
     )
+    if (
+      !is.logical(subset_indices) ||
+        length(subset_indices) != nrow(sample_df) ||
+        anyNA(subset_indices)
+    ) {
+      stop(
+        "subset_sample must evaluate to a non-missing logical vector matching the sample table.",
+        call. = FALSE
+      )
+    }
+    sample_df <- sample_df[subset_indices, , drop = FALSE]
 
     if (nrow(sample_df) == 0) {
       stop("The subset_sample condition matched zero samples.")
@@ -388,6 +541,118 @@ clean_transcript_id <- function(x) {
   }
 
   sample_df
+}
+
+.is_safe_subset_expr <- function(expr, columns) {
+  if (is.symbol(expr)) {
+    return(as.character(expr) %in% c(columns, "TRUE", "FALSE", "NA"))
+  }
+  if (!is.call(expr)) {
+    return(is.atomic(expr) && length(expr) > 0L)
+  }
+
+  op <- as.character(expr[[1L]])
+  args <- as.list(expr)[-1L]
+  allowed <- c("==", "!=", ">", ">=", "<", "<=", "%in%", "&", "|", "!")
+  if (identical(op, "c")) {
+    return(all(vapply(
+      args,
+      function(arg) is.atomic(arg) && length(arg) > 0L,
+      logical(1)
+    )))
+  }
+  op %in%
+    allowed &&
+    length(args) >= 1L &&
+    all(vapply(args, .is_safe_subset_expr, logical(1), columns = columns))
+}
+
+.validate_tx2gene <- function(tx2gene) {
+  required <- c("tx_id", "gene_id")
+  if (!all(required %in% names(tx2gene))) {
+    stop("tx2gene must contain tx_id and gene_id columns.", call. = FALSE)
+  }
+  tx2gene <- tx2gene[, required, drop = FALSE]
+  tx2gene$tx_id <- as.character(tx2gene$tx_id)
+  tx2gene$gene_id <- as.character(tx2gene$gene_id)
+  if (
+    anyNA(tx2gene$tx_id) ||
+      anyNA(tx2gene$gene_id) ||
+      any(!nzchar(tx2gene$tx_id)) ||
+      any(!nzchar(tx2gene$gene_id))
+  ) {
+    stop(
+      "tx2gene contains missing or empty transcript/gene IDs.",
+      call. = FALSE
+    )
+  }
+  tx2gene <- unique(tx2gene)
+  duplicate_tx <- unique(tx2gene$tx_id[duplicated(tx2gene$tx_id)])
+  if (length(duplicate_tx)) {
+    stop(
+      "Transcript IDs in tx2gene map to multiple genes after ID normalization; e.g. ",
+      paste(utils::head(duplicate_tx, 5L), collapse = ", "),
+      call. = FALSE
+    )
+  }
+  tx2gene
+}
+
+.object_md5 <- function(object) {
+  path <- tempfile("expressom_signature_")
+  on.exit(unlink(path), add = TRUE)
+  saveRDS(object, path, version = 2)
+  unname(tools::md5sum(path))
+}
+
+.file_fingerprint <- function(paths) {
+  paths <- unique(as.character(paths[!is.na(paths) & nzchar(paths)]))
+  paths <- paths[file.exists(paths) & !dir.exists(paths)]
+  if (!length(paths)) {
+    return(character())
+  }
+  normalized <- normalizePath(paths, winslash = "/", mustWork = TRUE)
+  stats <- file.info(paths)
+  data.frame(
+    path = normalized,
+    size = stats$size,
+    mtime = as.numeric(stats$mtime),
+    md5 = unname(tools::md5sum(paths)),
+    stringsAsFactors = FALSE
+  )
+}
+
+.checkpoint_save <- function(object, path, signature) {
+  saveRDS(list(signature = signature, object = object), path)
+  invisible(object)
+}
+
+.checkpoint_load <- function(path, signature) {
+  checkpoint <- tryCatch(readRDS(path), error = function(e) NULL)
+  if (
+    is.null(checkpoint) ||
+      !is.list(checkpoint) ||
+      !identical(checkpoint$signature, signature) ||
+      !"object" %in% names(checkpoint)
+  ) {
+    message("Ignoring incompatible or legacy checkpoint: ", basename(path))
+    return(NULL)
+  }
+  checkpoint$object
+}
+
+.warn_isoform_switch_covariates <- function(model, main_condition) {
+  covariates <- setdiff(all.vars(stats::as.formula(model)), main_condition)
+  if (length(covariates)) {
+    warning(
+      "IsoformSwitchAnalyzeR switch tests use condition-only models; ",
+      "the supplied design covariates (",
+      paste(covariates, collapse = ", "),
+      ") are not adjusted for in switch analysis.",
+      call. = FALSE
+    )
+  }
+  invisible(covariates)
 }
 
 #' Per-row z-score matrix, guarding against division by zero
@@ -429,21 +694,30 @@ clean_transcript_id <- function(x) {
 #' @return the releveled factor, or `x` unchanged (as a factor) if releveling was skipped
 #' @keywords internal
 .safe_relevel_condition <- function(x, base, label = "condition") {
-  if (!is.factor(x)) x <- as.factor(x)
+  if (!is.factor(x)) {
+    x <- as.factor(x)
+  }
 
   if (is.null(base) || length(base) == 0 || !nzchar(as.character(base))) {
     message(
-      "Note: no base level supplied for '", label,
+      "Note: no base level supplied for '",
+      label,
       "'; skipping releveling (using existing factor level order: ",
-      paste(levels(x), collapse = ", "), ")."
+      paste(levels(x), collapse = ", "),
+      ")."
     )
     return(x)
   }
 
   if (!(as.character(base) %in% levels(x))) {
     message(
-      "Note: base level '", base, "' not found among the levels of '", label,
-      "' (found: ", paste(levels(x), collapse = ", "), "); skipping releveling."
+      "Note: base level '",
+      base,
+      "' not found among the levels of '",
+      label,
+      "' (found: ",
+      paste(levels(x), collapse = ", "),
+      "); skipping releveling."
     )
     return(x)
   }
@@ -470,10 +744,16 @@ clean_transcript_id <- function(x) {
 #' @return Character scalar naming the design variable to relevel/contrast on,
 #'   or NULL if the formula has no terms at all.
 #' @keywords internal
-.resolve_main_condition <- function(design_formula, meta = NULL,
-                                    level = NULL, base = NULL) {
+.resolve_main_condition <- function(
+  design_formula,
+  meta = NULL,
+  level = NULL,
+  base = NULL
+) {
   design_vars <- all.vars(design_formula)
-  if (length(design_vars) == 0) return(NULL)
+  if (length(design_vars) == 0) {
+    return(NULL)
+  }
 
   if (!is.null(meta) && !is.null(level) && !is.null(base)) {
     for (var in rev(design_vars)) {
@@ -490,7 +770,9 @@ clean_transcript_id <- function(x) {
 #' Safely create a directory
 #' @keywords internal
 safe_dir <- function(path) {
-  if (!dir.exists(path)) dir.create(path, recursive = TRUE)
+  if (!dir.exists(path)) {
+    dir.create(path, recursive = TRUE)
+  }
   invisible(path)
 }
 
@@ -508,7 +790,9 @@ safe_dir <- function(path) {
 .cairo_pdf_available <- local({
   cached <- NULL
   function() {
-    if (is.null(cached)) cached <<- isTRUE(capabilities("cairo"))
+    if (is.null(cached)) {
+      cached <<- isTRUE(capabilities("cairo"))
+    }
     cached
   }
 })
@@ -539,8 +823,15 @@ safe_pdf <- function(path, expr, width = 10, height = 8) {
       dev.off()
     },
     error = function(e) {
-      if (dev.cur() > 1) dev.off()
-      message("Warning: Failed to generate plot at: ", path, "\n  Error: ", e$message)
+      if (dev.cur() > 1) {
+        dev.off()
+      }
+      message(
+        "Warning: Failed to generate plot at: ",
+        path,
+        "\n  Error: ",
+        e$message
+      )
     }
   )
 }
@@ -592,16 +883,22 @@ safe_run <- function(expr, label = "") {
 
   for (i in 0:6) {
     p1 <- file.path(dir, "inst", "rmd", filename)
-    if (file.exists(p1)) return(normalizePath(p1, winslash = "/"))
+    if (file.exists(p1)) {
+      return(normalizePath(p1, winslash = "/"))
+    }
 
     p2 <- file.path(dir, "rmd", filename)
-    if (file.exists(p2)) return(normalizePath(p2, winslash = "/"))
+    if (file.exists(p2)) {
+      return(normalizePath(p2, winslash = "/"))
+    }
 
     dir <- dirname(dir)
   }
 
   stop(
-    "Could not locate bundled template '", filename, "'.\n",
+    "Could not locate bundled template '",
+    filename,
+    "'.\n",
     "Run from the package root, reinstall the package, or set:\n",
     "  Sys.setenv(EXPRESSOM_RMD_DIR = '/path/to/inst/rmd')"
   )
@@ -609,7 +906,11 @@ safe_run <- function(expr, label = "") {
 
 #' Render a {{PLACEHOLDER}}-style template to a temp file with values substituted
 #' @keywords internal
-.render_placeholder_template <- function(template_file, values, fileext = ".Rmd") {
+.render_placeholder_template <- function(
+  template_file,
+  values,
+  fileext = ".Rmd"
+) {
   template_path <- tryCatch(
     .expressom_rmd_path(template_file),
     error = function(e) NULL
@@ -617,7 +918,9 @@ safe_run <- function(expr, label = "") {
 
   if (is.null(template_path)) {
     warning(
-      "Could not locate template '", template_file, "'. ",
+      "Could not locate template '",
+      template_file,
+      "'. ",
       "Skipping custom template step.",
       call. = FALSE
     )
@@ -658,17 +961,22 @@ safe_run <- function(expr, label = "") {
 #' @param output_dir Directory receiving the generated source archive.
 #' @return The normalized path to the generated source archive.
 #' @export
-create_homemade_db <- function(species = "human",
-                               release = "107",
-                               maintainer = "User <user@example.com>",
-                               author = "ExpressOM Builder",
-                               output_dir = "inst/extdata") {
+create_homemade_db <- function(
+  species = "human",
+  release = "107",
+  maintainer = "User <user@example.com>",
+  author = "ExpressOM Builder",
+  output_dir = "inst/extdata"
+) {
   metadata <- .resolve_ensembl_metadata(species, release)
   release <- metadata$release
   pkg_name <- paste0("EnsDb.", metadata$package_prefix, ".v", release)
   tar_name <- paste0(pkg_name, ".tar.gz")
 
-  tmp_dir <- tempfile(pattern = paste0("build_", pkg_name, "_"), tmpdir = tempdir())
+  tmp_dir <- tempfile(
+    pattern = paste0("build_", pkg_name, "_"),
+    tmpdir = tempdir()
+  )
   if (!dir.create(tmp_dir, recursive = TRUE)) {
     stop("Could not create temporary build directory: ", tmp_dir, call. = FALSE)
   }
@@ -676,8 +984,11 @@ create_homemade_db <- function(species = "human",
 
   url <- sprintf(
     "https://ftp.ensembl.org/pub/release-%s/gtf/%s/%s.%s.%s.gtf.gz",
-    release, metadata$org_folder, metadata$org_scientific,
-    metadata$genome_version, release
+    release,
+    metadata$org_folder,
+    metadata$org_scientific,
+    metadata$genome_version,
+    release
   )
 
   gtf_path <- file.path(tmp_dir, basename(url))
@@ -714,7 +1025,11 @@ create_homemade_db <- function(species = "human",
   message("--- Step 4: Compressing ---")
 
   if (!dir.exists(file.path(tmp_dir, pkg_name))) {
-    stop("Expected package folder '", pkg_name, "' not found in temp directory.")
+    stop(
+      "Expected package folder '",
+      pkg_name,
+      "' not found in temp directory."
+    )
   }
 
   withr::with_dir(tmp_dir, {
@@ -726,12 +1041,19 @@ create_homemade_db <- function(species = "human",
   }
   archive_members <- utils::untar(tar_path, list = TRUE)
   if (!any(archive_members == paste0(pkg_name, "/DESCRIPTION"))) {
-    stop("Database archive is missing the package DESCRIPTION: ", tar_path,
-         call. = FALSE)
+    stop(
+      "Database archive is missing the package DESCRIPTION: ",
+      tar_path,
+      call. = FALSE
+    )
   }
 
   if (!dir.exists(output_dir) && !dir.create(output_dir, recursive = TRUE)) {
-    stop("Could not create archive output directory: ", output_dir, call. = FALSE)
+    stop(
+      "Could not create archive output directory: ",
+      output_dir,
+      call. = FALSE
+    )
   }
   archive_path <- file.path(output_dir, tar_name)
 
@@ -741,7 +1063,11 @@ create_homemade_db <- function(species = "human",
     overwrite = TRUE
   )
   if (!isTRUE(copied) || !file.exists(archive_path)) {
-    stop("Failed to write Ensembl database archive to: ", archive_path, call. = FALSE)
+    stop(
+      "Failed to write Ensembl database archive to: ",
+      archive_path,
+      call. = FALSE
+    )
   }
 
   message("SUCCESS: Database bundled at ", archive_path)
@@ -756,26 +1082,52 @@ create_homemade_db <- function(species = "human",
 install_internal_db <- function(pkg_name = NULL, archive_path = NULL) {
   if (!is.null(archive_path)) {
     if (length(archive_path) != 1L || !file.exists(archive_path)) {
-      stop("`archive_path` must name an existing database archive.", call. = FALSE)
+      stop(
+        "`archive_path` must name an existing database archive.",
+        call. = FALSE
+      )
     }
     tar_files <- normalizePath(archive_path, winslash = "/", mustWork = TRUE)
     if (!grepl("\\.tar\\.gz$", tar_files, ignore.case = TRUE)) {
-      stop("`archive_path` must point to a .tar.gz source archive.", call. = FALSE)
+      stop(
+        "`archive_path` must point to a .tar.gz source archive.",
+        call. = FALSE
+      )
     }
-    if (!is.null(pkg_name) &&
-        tolower(basename(tar_files)) != tolower(paste0(pkg_name, ".tar.gz"))) {
-      stop("Archive '", basename(tar_files), "' does not match package '", pkg_name, "'.",
-           call. = FALSE)
+    if (
+      !is.null(pkg_name) &&
+        tolower(basename(tar_files)) != tolower(paste0(pkg_name, ".tar.gz"))
+    ) {
+      stop(
+        "Archive '",
+        basename(tar_files),
+        "' does not match package '",
+        pkg_name,
+        "'.",
+        call. = FALSE
+      )
     }
-    members <- tryCatch(utils::untar(tar_files, list = TRUE), error = function(e) character())
+    members <- tryCatch(
+      utils::untar(tar_files, list = TRUE),
+      error = function(e) character()
+    )
     if (!any(grepl("/DESCRIPTION$", members))) {
-      stop("Archive does not contain an R package DESCRIPTION file: ", tar_files,
-           call. = FALSE)
+      stop(
+        "Archive does not contain an R package DESCRIPTION file: ",
+        tar_files,
+        call. = FALSE
+      )
     }
   } else {
     ext_path <- system.file("extdata", package = "ExpressOM")
-    if (ext_path == "") ext_path <- "inst/extdata"
-    tar_files <- list.files(ext_path, pattern = "\\.tar\\.gz$", full.names = TRUE)
+    if (ext_path == "") {
+      ext_path <- "inst/extdata"
+    }
+    tar_files <- list.files(
+      ext_path,
+      pattern = "\\.tar\\.gz$",
+      full.names = TRUE
+    )
 
     local_path <- "inst/extdata"
     local_files <- if (dir.exists(local_path)) {
@@ -783,9 +1135,10 @@ install_internal_db <- function(pkg_name = NULL, archive_path = NULL) {
     } else {
       character()
     }
-    installed_match <- !is.null(pkg_name) && any(
-      tolower(basename(tar_files)) == tolower(paste0(pkg_name, ".tar.gz"))
-    )
+    installed_match <- !is.null(pkg_name) &&
+      any(
+        tolower(basename(tar_files)) == tolower(paste0(pkg_name, ".tar.gz"))
+      )
     if (!installed_match && (length(tar_files) == 0L || !is.null(pkg_name))) {
       tar_files <- local_files
     }
@@ -793,7 +1146,8 @@ install_internal_db <- function(pkg_name = NULL, archive_path = NULL) {
   db_path <- .select_internal_db_archive(tar_files, pkg_name)
   if (is.null(pkg_name) && is.null(archive_path) && length(tar_files) > 1L) {
     warning(
-      "Multiple databases found. Defaulting to the first one: ", basename(db_path),
+      "Multiple databases found. Defaulting to the first one: ",
+      basename(db_path),
       "\nUse install_internal_db(pkg_name = '...') to specify."
     )
   }
@@ -885,8 +1239,13 @@ get_organism_info <- function(edb) {
 
 #' Download Ensembl Reference FASTA and GTF
 #' @export
-download_ensembl_refs <- function(ensembl_package_name, out_dir = "./reference") {
-  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
+download_ensembl_refs <- function(
+  ensembl_package_name,
+  out_dir = "./reference"
+) {
+  if (!dir.exists(out_dir)) {
+    dir.create(out_dir, recursive = TRUE)
+  }
 
   parsed <- .parse_ensembl_package_name(ensembl_package_name)
   metadata <- .resolve_ensembl_metadata(parsed$species, parsed$release)
@@ -896,19 +1255,26 @@ download_ensembl_refs <- function(ensembl_package_name, out_dir = "./reference")
 
   gtf_url <- sprintf(
     paste0(base_url, "/gtf/%s/%s.%s.%s.gtf.gz"),
-    release, metadata$org_folder, metadata$org_scientific,
-    metadata$genome_version, release
+    release,
+    metadata$org_folder,
+    metadata$org_scientific,
+    metadata$genome_version,
+    release
   )
 
   cdna_url <- sprintf(
     paste0(base_url, "/fasta/%s/cdna/%s.%s.cdna.all.fa.gz"),
-    release, metadata$org_folder, metadata$org_scientific,
+    release,
+    metadata$org_folder,
+    metadata$org_scientific,
     metadata$genome_version
   )
 
   ncrna_url <- sprintf(
     paste0(base_url, "/fasta/%s/ncrna/%s.%s.ncrna.fa.gz"),
-    release, metadata$org_folder, metadata$org_scientific,
+    release,
+    metadata$org_folder,
+    metadata$org_scientific,
     metadata$genome_version
   )
 
@@ -956,7 +1322,9 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
   message("Checking ExpressOM environment readiness...")
 
   core_pkgs <- c("DESeq2", "tximport", "dplyr", "ggplot2", "pheatmap")
-  missing_core <- core_pkgs[!sapply(core_pkgs, requireNamespace, quietly = TRUE)]
+  missing_core <- core_pkgs[
+    !sapply(core_pkgs, requireNamespace, quietly = TRUE)
+  ]
 
   if (length(missing_core) > 0) {
     stop(paste(
@@ -967,7 +1335,9 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
 
   if (run_functional) {
     func_pkgs <- c("clusterProfiler", "SPIA", "fgsea", "ReactomePA", "DOSE")
-    missing_func <- func_pkgs[!sapply(func_pkgs, requireNamespace, quietly = TRUE)]
+    missing_func <- func_pkgs[
+      !sapply(func_pkgs, requireNamespace, quietly = TRUE)
+    ]
 
     if (length(missing_func) > 0) {
       warning(paste(
@@ -1015,8 +1385,12 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
   width <- as.numeric(width)
   height <- as.numeric(height)
 
-  if (length(width) == 0 || is.na(width)) width <- 8
-  if (length(height) == 0 || is.na(height)) height <- 6
+  if (length(width) == 0 || is.na(width)) {
+    width <- 8
+  }
+  if (length(height) == 0 || is.na(height)) {
+    height <- 6
+  }
 
   width <- max(min_dim, min(width, max_dim))
   height <- max(min_dim, min(height, max_dim))
@@ -1038,15 +1412,19 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
 #' default here falls back to plain pdf() rather than hard-failing when
 #' Cairo isn't available.
 #' @keywords internal
-.safe_ggsave <- function(filename,
-                         plot,
-                         width,
-                         height,
-                         device = .pdf_device(),
-                         ...) {
-
+.safe_ggsave <- function(
+  filename,
+  plot,
+  width,
+  height,
+  device = .pdf_device(),
+  ...
+) {
   if (is.null(plot)) {
-    message("   -> Skipping plot save, plot object is NULL: ", basename(filename))
+    message(
+      "   -> Skipping plot save, plot object is NULL: ",
+      basename(filename)
+    )
     return(invisible(FALSE))
   }
 
@@ -1067,8 +1445,10 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
     },
     error = function(e) {
       message(
-        "   -> Failed to save plot: ", basename(filename),
-        "\n      Error: ", conditionMessage(e)
+        "   -> Failed to save plot: ",
+        basename(filename),
+        "\n      Error: ",
+        conditionMessage(e)
       )
       invisible(FALSE)
     }
@@ -1128,7 +1508,10 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
   extra_ensembl_cols <- grep("^ensembl\\.", names(gene_map), value = TRUE)
 
   if (length(extra_ensembl_cols) > 0) {
-    gene_map <- gene_map[, setdiff(names(gene_map), extra_ensembl_cols), drop = FALSE]
+    gene_map <- gene_map[,
+      setdiff(names(gene_map), extra_ensembl_cols),
+      drop = FALSE
+    ]
   }
 
   gene_map$ensembl <- strip_ensembl_version(as.character(gene_map$ensembl))
@@ -1178,7 +1561,11 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
 
   gene_map$entrezid <- as.character(gene_map$entrezid)
 
-  gene_map <- gene_map[!is.na(gene_map$ensembl) & gene_map$ensembl != "", , drop = FALSE]
+  gene_map <- gene_map[
+    !is.na(gene_map$ensembl) & gene_map$ensembl != "",
+    ,
+    drop = FALSE
+  ]
   gene_map <- gene_map[!duplicated(gene_map$ensembl), , drop = FALSE]
 
   gene_map

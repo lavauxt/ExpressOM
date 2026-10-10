@@ -3,44 +3,83 @@
 
 #' Run IsoformSwitchAnalyzeR analysis
 #' @export
-run_isoform_switch <- function(dte_results = NULL,
-                               dtu_results = NULL,
-                               isoform_obj,
-                               condition,
-                               level,
-                               base,
-                               fasta_file,
-                               gff_file,
-                               out_dir,
-                               run_predictors = FALSE,
-                               use_wsl = (.Platform$OS.type == "windows"),
-                               wsl_distro = "Ubuntu-22.04",
-                               save_dir = NULL,
-                               resume_from = NULL,
-                               bsgenome_name = NULL,
-                               predictor_cpu = NULL,
-                               log_dir = NULL,
-                               custom_transcript_id_map = NULL,
-                               skip_fasta_filter = FALSE,
-                               test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
-                               organism = NULL,
-                               plot_topology = TRUE) {
-
+run_isoform_switch <- function(
+  dte_results = NULL,
+  dtu_results = NULL,
+  isoform_obj,
+  condition,
+  level,
+  base,
+  fasta_file,
+  gff_file,
+  out_dir,
+  run_predictors = FALSE,
+  use_wsl = (.Platform$OS.type == "windows"),
+  wsl_distro = "Ubuntu-22.04",
+  save_dir = NULL,
+  resume_from = NULL,
+  bsgenome_name = NULL,
+  predictor_cpu = NULL,
+  log_dir = NULL,
+  custom_transcript_id_map = NULL,
+  skip_fasta_filter = FALSE,
+  test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
+  organism = NULL,
+  plot_topology = TRUE
+) {
   test_engine <- match.arg(test_engine)
 
   if (!requireNamespace("IsoformSwitchAnalyzeR", quietly = TRUE)) {
-    stop("Please install IsoformSwitchAnalyzeR: BiocManager::install('IsoformSwitchAnalyzeR')")
+    stop(
+      "Please install IsoformSwitchAnalyzeR: BiocManager::install('IsoformSwitchAnalyzeR')"
+    )
   }
 
   if (!requireNamespace("Biostrings", quietly = TRUE)) {
     stop("Please install Biostrings: BiocManager::install('Biostrings')")
   }
 
-  if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE)
-  if (!is.null(save_dir) && !dir.exists(save_dir)) dir.create(save_dir, recursive = TRUE)
+  if (!dir.exists(out_dir)) {
+    dir.create(out_dir, recursive = TRUE)
+  }
+  if (!is.null(save_dir) && !dir.exists(save_dir)) {
+    dir.create(save_dir, recursive = TRUE)
+  }
 
-  if (is.null(log_dir)) log_dir <- file.path(out_dir, "Log")
-  if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+  switch_checkpoint_signature <- .object_md5(list(
+    counts = if (identical(isoform_obj$type, "tximport")) {
+      isoform_obj$txi$counts
+    } else {
+      isoform_obj$counts
+    },
+    metadata = isoform_obj$meta,
+    tx2gene = isoform_obj$tx2gene,
+    condition = condition,
+    level = level,
+    base = base,
+    fasta = .file_fingerprint(fasta_file),
+    gff = .file_fingerprint(gff_file),
+    custom_transcript_id_map = if (is.data.frame(custom_transcript_id_map)) {
+      custom_transcript_id_map
+    } else {
+      .file_fingerprint(custom_transcript_id_map)
+    },
+    test_engine = test_engine,
+    skip_fasta_filter = skip_fasta_filter,
+    plot_topology = plot_topology,
+    run_predictors = run_predictors,
+    predictor_cpu = predictor_cpu,
+    use_wsl = use_wsl,
+    wsl_distro = wsl_distro,
+    organism = organism
+  ))
+
+  if (is.null(log_dir)) {
+    log_dir <- file.path(out_dir, "Log")
+  }
+  if (!dir.exists(log_dir)) {
+    dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+  }
 
   if (isTRUE(run_predictors)) {
     message("Checking external predictor tool availability...")
@@ -76,7 +115,9 @@ run_isoform_switch <- function(dte_results = NULL,
       )
     }
 
-    if (isTRUE(debug_info$pfam_db_found) && !isTRUE(debug_info$pfam_db_indexed)) {
+    if (
+      isTRUE(debug_info$pfam_db_found) && !isTRUE(debug_info$pfam_db_indexed)
+    ) {
       warning(
         "Pfam-A.hmm was found but is not hmmpress-indexed -- hmmscan will fail against it. ",
         "Run install_isoform_databases() again or `hmmpress` it manually."
@@ -98,7 +139,9 @@ run_isoform_switch <- function(dte_results = NULL,
     )
   }
 
-  .ckpt_path <- function(nm) if (!is.null(save_dir)) file.path(save_dir, nm) else ""
+  .ckpt_path <- function(nm) {
+    if (!is.null(save_dir)) file.path(save_dir, nm) else ""
+  }
   .ckpt_exists <- function(nm) {
     p <- .ckpt_path(nm)
     nzchar(p) && file.exists(p)
@@ -107,7 +150,7 @@ run_isoform_switch <- function(dte_results = NULL,
   .ckpt_save <- function(obj, nm) {
     p <- .ckpt_path(nm)
     if (nzchar(p)) {
-      saveRDS(obj, p)
+      .checkpoint_save(obj, p, switch_checkpoint_signature)
       message("Checkpoint saved -> ", nm)
     }
     invisible(obj)
@@ -116,26 +159,46 @@ run_isoform_switch <- function(dte_results = NULL,
   .ckpt_load <- function(nm) {
     p <- .ckpt_path(nm)
     message("Resuming from checkpoint: ", nm)
-    readRDS(p)
+    .checkpoint_load(p, switch_checkpoint_signature)
   }
 
   switch_list <- NULL
   already_analyzed <- FALSE
 
-  if (!is.null(resume_from) && file.exists(file.path(resume_from, "switch_list.rds"))) {
-    message("Resuming from saved SwitchList: ", resume_from)
-    switch_list <- readRDS(file.path(resume_from, "switch_list.rds"))
-
-    if (!is.null(switch_list$isoformSwitchAnalysis)) {
-      message("Full analysis already present - skipping combined analysis.")
-      already_analyzed <- TRUE
+  if (
+    !is.null(resume_from) &&
+      file.exists(file.path(resume_from, "switch_list.rds"))
+  ) {
+    signature_path <- file.path(resume_from, "switch_list.signature.rds")
+    if (
+      file.exists(signature_path) &&
+        identical(readRDS(signature_path), switch_checkpoint_signature)
+    ) {
+      message("Resuming from compatible saved SwitchList: ", resume_from)
+      switch_list <- readRDS(file.path(resume_from, "switch_list.rds"))
+      if (!is.null(switch_list$isoformSwitchAnalysis)) {
+        message("Full analysis already present - skipping combined analysis.")
+        already_analyzed <- TRUE
+      }
+    } else {
+      message(
+        "Ignoring incompatible or legacy saved SwitchList in: ",
+        resume_from
+      )
     }
-  } else if (.ckpt_exists("step2_analyzed.rds")) {
-    switch_list <- .ckpt_load("step2_analyzed.rds")
-    already_analyzed <- TRUE
-  } else if (.ckpt_exists("step1_imported.rds")) {
-    switch_list <- .ckpt_load("step1_imported.rds")
-  } else {
+  }
+
+  if (is.null(switch_list)) {
+    if (.ckpt_exists("step2_analyzed.rds")) {
+      switch_list <- .ckpt_load("step2_analyzed.rds")
+      already_analyzed <- !is.null(switch_list)
+    }
+    if (is.null(switch_list) && .ckpt_exists("step1_imported.rds")) {
+      switch_list <- .ckpt_load("step1_imported.rds")
+    }
+  }
+
+  if (is.null(switch_list)) {
     message("Building SwitchList from raw data...")
 
     if (isoform_obj$type == "tximport") {
@@ -144,9 +207,17 @@ run_isoform_switch <- function(dte_results = NULL,
       count_matrix <- isoform_obj$counts
     }
 
-    sample_col <- if ("Sample" %in% colnames(isoform_obj$meta)) "Sample" else "sample_id"
+    sample_col <- if ("Sample" %in% colnames(isoform_obj$meta)) {
+      "Sample"
+    } else {
+      "sample_id"
+    }
 
-    meta_sub <- isoform_obj$meta[isoform_obj$meta[[condition]] %in% c(base, level), , drop = FALSE]
+    meta_sub <- isoform_obj$meta[
+      isoform_obj$meta[[condition]] %in% c(base, level),
+      ,
+      drop = FALSE
+    ]
 
     if (nrow(meta_sub) == 0) {
       stop("No samples found for the comparison groups: ", base, " and ", level)
@@ -155,7 +226,9 @@ run_isoform_switch <- function(dte_results = NULL,
     keep_samples <- intersect(rownames(meta_sub), colnames(count_matrix))
 
     if (length(keep_samples) == 0) {
-      stop("No matching sample IDs between metadata and count matrix after filtering.")
+      stop(
+        "No matching sample IDs between metadata and count matrix after filtering."
+      )
     }
 
     meta_sub <- meta_sub[keep_samples, , drop = FALSE]
@@ -167,34 +240,54 @@ run_isoform_switch <- function(dte_results = NULL,
     group_counts <- table(meta_sub[[condition]])
 
     if (any(group_counts < 2)) {
-      warning("One or both groups have fewer than 2 samples. DTU/switch analysis may be unreliable.")
+      warning(
+        "One or both groups have fewer than 2 samples. DTU/switch analysis may be unreliable."
+      )
     }
 
     if (!is.null(custom_transcript_id_map)) {
-      if (is.character(custom_transcript_id_map) && file.exists(custom_transcript_id_map)) {
-        map_df <- data.table::fread(custom_transcript_id_map, header = TRUE, data.table = FALSE)
+      if (
+        is.character(custom_transcript_id_map) &&
+          file.exists(custom_transcript_id_map)
+      ) {
+        map_df <- data.table::fread(
+          custom_transcript_id_map,
+          header = TRUE,
+          data.table = FALSE
+        )
       } else if (is.data.frame(custom_transcript_id_map)) {
         map_df <- custom_transcript_id_map
       } else {
-        stop("custom_transcript_id_map must be a data.frame or a path to a TSV/CSV file.")
+        stop(
+          "custom_transcript_id_map must be a data.frame or a path to a TSV/CSV file."
+        )
       }
 
       required_cols <- c("count_id", "fasta_id")
 
       if (!all(required_cols %in% colnames(map_df))) {
-        stop("custom_transcript_id_map must contain columns: ", paste(required_cols, collapse = ", "))
+        stop(
+          "custom_transcript_id_map must contain columns: ",
+          paste(required_cols, collapse = ", ")
+        )
       }
 
       old_rownames <- rownames(count_matrix)
       new_rownames <- map_df$fasta_id[match(old_rownames, map_df$count_id)]
 
       if (any(is.na(new_rownames))) {
-        warning("Some count IDs were not found in the mapping file; they will be kept unchanged.")
+        warning(
+          "Some count IDs were not found in the mapping file; they will be kept unchanged."
+        )
         new_rownames[is.na(new_rownames)] <- old_rownames[is.na(new_rownames)]
       }
 
       rownames(count_matrix) <- new_rownames
-      message("  Remapped ", sum(!is.na(new_rownames)), " transcript IDs using custom map.")
+      message(
+        "  Remapped ",
+        sum(!is.na(new_rownames)),
+        " transcript IDs using custom map."
+      )
     }
 
     clean_id <- clean_transcript_id
@@ -211,7 +304,10 @@ run_isoform_switch <- function(dte_results = NULL,
       count_matrix <- count_matrix[keep_in_fasta, , drop = FALSE]
 
       message(
-        "  Kept ", nrow(count_matrix), " / ", length(clean_rownames),
+        "  Kept ",
+        nrow(count_matrix),
+        " / ",
+        length(clean_rownames),
         " transcripts matching the FASTA file."
       )
 
@@ -245,8 +341,11 @@ run_isoform_switch <- function(dte_results = NULL,
     tx2gene <- tx2gene[keep_genes, ]
 
     message(
-      "  Kept ", nrow(count_matrix), " transcripts from ",
-      length(unique(tx2gene$gene_id)), " genes after removing single-transcript genes."
+      "  Kept ",
+      nrow(count_matrix),
+      " transcripts from ",
+      length(unique(tx2gene$gene_id)),
+      " genes after removing single-transcript genes."
     )
 
     isoform_count_matrix <- round(count_matrix)
@@ -259,10 +358,14 @@ run_isoform_switch <- function(dte_results = NULL,
 
     rownames(design_matrix) <- design_matrix$sampleID
 
-    if (!"package:dplyr" %in% search()) attachNamespace("dplyr")
+    if (!"package:dplyr" %in% search()) {
+      attachNamespace("dplyr")
+    }
 
     .count_fasta_entries <- function(path) {
-      tryCatch(length(Biostrings::fasta.seqlengths(path)), error = function(e) NA_integer_)
+      tryCatch(length(Biostrings::fasta.seqlengths(path)), error = function(e) {
+        NA_integer_
+      })
     }
 
     .count_gtf_transcripts <- function(path) {
@@ -275,7 +378,9 @@ run_isoform_switch <- function(dte_results = NULL,
 
           repeat {
             lines <- readLines(con, n = 200000L, warn = FALSE)
-            if (length(lines) == 0L) break
+            if (length(lines) == 0L) {
+              break
+            }
             n <- n + sum(grepl("\ttranscript\t", lines, fixed = TRUE))
           }
 
@@ -295,8 +400,14 @@ run_isoform_switch <- function(dte_results = NULL,
       if (ratio < 0.5) {
         warning(
           "isoform_fasta and isoform_gff look like they describe very different ",
-          "transcript sets (", n_fasta, " fasta sequences vs. ", n_gtf, " GTF transcripts; ",
-          "count matrix after filtering has ", n_count, " transcripts). importRdata() will ",
+          "transcript sets (",
+          n_fasta,
+          " fasta sequences vs. ",
+          n_gtf,
+          " GTF transcripts; ",
+          "count matrix after filtering has ",
+          n_count,
+          " transcripts). importRdata() will ",
           "likely fail its Jaccard-similarity check below. Verify that both come from the ",
           "same annotation/quantification source.",
           immediate. = TRUE
@@ -309,9 +420,14 @@ run_isoform_switch <- function(dte_results = NULL,
     } else {
       file.path(out_dir, "cleaned_reference")
     }
-    if (!dir.exists(clean_ref_dir)) dir.create(clean_ref_dir, recursive = TRUE)
+    if (!dir.exists(clean_ref_dir)) {
+      dir.create(clean_ref_dir, recursive = TRUE)
+    }
 
-    fasta_file_clean <- file.path(clean_ref_dir, "isoform_fasta_ids_cleaned.fasta")
+    fasta_file_clean <- file.path(
+      clean_ref_dir,
+      "isoform_fasta_ids_cleaned.fasta"
+    )
     gff_file_clean <- file.path(clean_ref_dir, "isoform_gff_ids_cleaned.gtf")
 
     message(
@@ -325,8 +441,10 @@ run_isoform_switch <- function(dte_results = NULL,
 
     if (length(dup_fa) > 0) {
       stop(
-        "Cleaning transcript IDs in isoform_fasta produced ", length(dup_fa),
-        " duplicate ID(s) -- e.g. ", paste(utils::head(dup_fa, 5), collapse = ", "),
+        "Cleaning transcript IDs in isoform_fasta produced ",
+        length(dup_fa),
+        " duplicate ID(s) -- e.g. ",
+        paste(utils::head(dup_fa, 5), collapse = ", "),
         ". The FASTA contains near-duplicate headers that only differ in the part ",
         "clean_id() strips."
       )
@@ -351,7 +469,9 @@ run_isoform_switch <- function(dte_results = NULL,
 
       repeat {
         lines <- readLines(con_in, n = 200000L, warn = FALSE)
-        if (length(lines) == 0L) break
+        if (length(lines) == 0L) {
+          break
+        }
 
         lines <- gsub(version_re, "", lines, perl = TRUE)
 
@@ -370,7 +490,10 @@ run_isoform_switch <- function(dte_results = NULL,
 
           if (any(tx_row)) {
             m2 <- regexpr(id_re, lines[tx_row])
-            tx_ids_seen <- c(tx_ids_seen, sub(id_re, "\\1", regmatches(lines[tx_row], m2)))
+            tx_ids_seen <- c(
+              tx_ids_seen,
+              sub(id_re, "\\1", regmatches(lines[tx_row], m2))
+            )
           }
         }
 
@@ -379,7 +502,8 @@ run_isoform_switch <- function(dte_results = NULL,
 
       if (!any_id_seen) {
         stop(
-          "No `transcript_id \"...\"` attributes found in ", path_in,
+          "No `transcript_id \"...\"` attributes found in ",
+          path_in,
           " -- expected standard GTF2-style attributes."
         )
       }
@@ -388,7 +512,8 @@ run_isoform_switch <- function(dte_results = NULL,
 
       if (length(dup) > 0) {
         stop(
-          "Cleaning transcript IDs in isoform_gff produced ", length(dup),
+          "Cleaning transcript IDs in isoform_gff produced ",
+          length(dup),
           " duplicate transcript ID(s) among `transcript` feature rows -- e.g. ",
           paste(utils::head(dup, 5), collapse = ", "),
           ". The GTF contains near-duplicate transcript records that only differ in the ",
@@ -403,7 +528,10 @@ run_isoform_switch <- function(dte_results = NULL,
 
     importrdata_extra_args <- list(estimateDifferentialGeneRange = FALSE)
 
-    if ("detectAndCorrectUnwantedEffects" %in% names(formals(IsoformSwitchAnalyzeR::importRdata))) {
+    if (
+      "detectAndCorrectUnwantedEffects" %in%
+        names(formals(IsoformSwitchAnalyzeR::importRdata))
+    ) {
       importrdata_extra_args$detectAndCorrectUnwantedEffects <- FALSE
     }
 
@@ -444,13 +572,22 @@ run_isoform_switch <- function(dte_results = NULL,
   if (!already_analyzed) {
     message("Running DTU test using engine: ", test_engine)
 
-    if (!is.null(switch_list$ntSequence) && length(switch_list$ntSequence) > 0) {
+    if (
+      !is.null(switch_list$ntSequence) && length(switch_list$ntSequence) > 0
+    ) {
       genome_object <- NULL
-    } else if (!is.null(bsgenome_name) && requireNamespace(bsgenome_name, quietly = TRUE)) {
+    } else if (
+      !is.null(bsgenome_name) && requireNamespace(bsgenome_name, quietly = TRUE)
+    ) {
       genome_object <- getExportedValue(bsgenome_name, bsgenome_name)
       message("Using BSgenome: ", bsgenome_name)
-    } else if (requireNamespace("BSgenome.Hsapiens.UCSC.hg38", quietly = TRUE)) {
-      genome_object <- getExportedValue("BSgenome.Hsapiens.UCSC.hg38", "BSgenome.Hsapiens.UCSC.hg38")
+    } else if (
+      requireNamespace("BSgenome.Hsapiens.UCSC.hg38", quietly = TRUE)
+    ) {
+      genome_object <- getExportedValue(
+        "BSgenome.Hsapiens.UCSC.hg38",
+        "BSgenome.Hsapiens.UCSC.hg38"
+      )
       message("Using default BSgenome.Hsapiens.UCSC.hg38")
     } else {
       message("No BSgenome available - running WITHOUT ORF prediction.")
@@ -484,19 +621,29 @@ run_isoform_switch <- function(dte_results = NULL,
             sl
           },
           error = function(e) {
-            no_switches <- grepl("no genes were considered switching", conditionMessage(e), ignore.case = TRUE)
+            no_switches <- grepl(
+              "no genes were considered switching",
+              conditionMessage(e),
+              ignore.case = TRUE
+            )
 
             if (no_switches) {
               message("\n=== No isoform switches detected ===")
               message(
                 "isoformSwitchAnalysisCombined() found zero genes meeting the switching ",
-                "cutoffs for '", level, "' vs '", base, "'. Isoform switch analysis will be skipped, ",
+                "cutoffs for '",
+                level,
+                "' vs '",
+                base,
+                "'. Isoform switch analysis will be skipped, ",
                 "but DTE and DTU results are unaffected."
               )
             } else {
               message("\n=== isoformSwitchAnalysisCombined() failed ===")
               message("Error: ", conditionMessage(e))
-              message("Isoform switch analysis will be skipped; DTE and DTU results are unaffected.")
+              message(
+                "Isoform switch analysis will be skipped; DTE and DTU results are unaffected."
+              )
             }
 
             NULL
@@ -522,7 +669,10 @@ run_isoform_switch <- function(dte_results = NULL,
         required_cols <- c("gene_id", "feature_id", "pvalue", "adj_pvalue")
 
         if (!all(required_cols %in% colnames(drim_df))) {
-          stop("DRIMSeq results must contain columns: ", paste(required_cols, collapse = ", "))
+          stop(
+            "DRIMSeq results must contain columns: ",
+            paste(required_cols, collapse = ", ")
+          )
         }
 
         tryCatch(
@@ -540,7 +690,10 @@ run_isoform_switch <- function(dte_results = NULL,
             sl
           },
           error = function(e) {
-            message("Error in isoformSwitchAnalysisCombined with DRIMSeq results: ", e$message)
+            message(
+              "Error in isoformSwitchAnalysisCombined with DRIMSeq results: ",
+              e$message
+            )
             NULL
           }
         )
@@ -549,7 +702,9 @@ run_isoform_switch <- function(dte_results = NULL,
         message("Running satuRn DTU test...")
 
         if (!requireNamespace("satuRn", quietly = TRUE)) {
-          stop("Package 'satuRn' is required for test_engine = 'satuRn'. Install with BiocManager::install('satuRn').")
+          stop(
+            "Package 'satuRn' is required for test_engine = 'satuRn'. Install with BiocManager::install('satuRn')."
+          )
         }
 
         sl_tested <- tryCatch(
@@ -568,7 +723,9 @@ run_isoform_switch <- function(dte_results = NULL,
         )
 
         if (is.null(sl_tested)) {
-          message("satuRn test did not return a switchList. Skipping further analysis.")
+          message(
+            "satuRn test did not return a switchList. Skipping further analysis."
+          )
           NULL
         } else {
           message("Running isoformSwitchAnalysisPart2...")
@@ -618,7 +775,8 @@ run_isoform_switch <- function(dte_results = NULL,
       },
       error = function(e) {
         message(
-          "  Could not annotate alternative splicing events: ", e$message,
+          "  Could not annotate alternative splicing events: ",
+          e$message,
           "\n  Splicing-type summary/enrichment plots will be skipped; all other results are unaffected."
         )
         switch_list
@@ -629,10 +787,16 @@ run_isoform_switch <- function(dte_results = NULL,
   }
 
   if (isTRUE(run_predictors)) {
+    predictors_loaded <- FALSE
     if (.ckpt_exists("step3_predictors.rds")) {
       message("Loading external predictor results from step-3 checkpoint.")
-      switch_list <- .ckpt_load("step3_predictors.rds")
-    } else {
+      cached_switch_list <- .ckpt_load("step3_predictors.rds")
+      if (!is.null(cached_switch_list)) {
+        switch_list <- cached_switch_list
+        predictors_loaded <- TRUE
+      }
+    }
+    if (!predictors_loaded) {
       message("Running external isoform predictors...")
 
       switch_list <- .run_external_predictors(
@@ -661,11 +825,19 @@ run_isoform_switch <- function(dte_results = NULL,
   }
 
   if (isTRUE(run_predictors)) {
+    refresh_loaded <- FALSE
     if (.ckpt_exists("step3_5_refreshed.rds")) {
       message("Loading refreshed switch consequences from step-3.5 checkpoint.")
-      switch_list <- .ckpt_load("step3_5_refreshed.rds")
-    } else {
-      message("Refreshing switch consequence analysis and plots with predictor annotations...")
+      cached_switch_list <- .ckpt_load("step3_5_refreshed.rds")
+      if (!is.null(cached_switch_list)) {
+        switch_list <- cached_switch_list
+        refresh_loaded <- TRUE
+      }
+    }
+    if (!refresh_loaded) {
+      message(
+        "Refreshing switch consequence analysis and plots with predictor annotations..."
+      )
 
       # Lives under DTU_DTE_report/plots (not out_dir/plots) so it's inside
       # the same tree generate_dte_dtu_report() already scans for its PDF
@@ -679,27 +851,55 @@ run_isoform_switch <- function(dte_results = NULL,
       # switch_list already carries predictor annotations either way -- the
       # actual difference is that this set is filtered to switches with an
       # identified consequence and split by consequence type.
-      plot_refresh_dir <- file.path(out_dir, "DTU_DTE_report", "plots", "by_consequence")
+      plot_refresh_dir <- file.path(
+        out_dir,
+        "DTU_DTE_report",
+        "plots",
+        "by_consequence"
+      )
 
       switch_list <- tryCatch(
         {
           feat_cols <- colnames(switch_list$isoformFeatures)
-          consequences_available <- c("intron_retention", "ORF_seq_similarity", "NMD_status")
+          consequences_available <- c(
+            "intron_retention",
+            "ORF_seq_similarity",
+            "NMD_status"
+          )
 
-          if (any(grepl("coding_potential|coding_prob", feat_cols, ignore.case = TRUE))) {
-            consequences_available <- c(consequences_available, "coding_potential")
+          if (
+            any(grepl(
+              "coding_potential|coding_prob",
+              feat_cols,
+              ignore.case = TRUE
+            ))
+          ) {
+            consequences_available <- c(
+              consequences_available,
+              "coding_potential"
+            )
           }
 
           if (any(grepl("signal_peptide", feat_cols, ignore.case = TRUE))) {
-            consequences_available <- c(consequences_available, "signal_peptide_identified")
+            consequences_available <- c(
+              consequences_available,
+              "signal_peptide_identified"
+            )
           }
 
           if (any(grepl("^domain", feat_cols, ignore.case = TRUE))) {
-            consequences_available <- c(consequences_available, "domains_identified", "domain_isotype")
+            consequences_available <- c(
+              consequences_available,
+              "domains_identified",
+              "domain_isotype"
+            )
           }
 
           if (!is.null(switch_list$topologyAnalysis)) {
-            consequences_available <- c(consequences_available, "isoform_topology")
+            consequences_available <- c(
+              consequences_available,
+              "isoform_topology"
+            )
           }
 
           sl <- IsoformSwitchAnalyzeR::analyzeSwitchConsequences(
@@ -709,7 +909,9 @@ run_isoform_switch <- function(dte_results = NULL,
             dIFcutoff = 0.1
           )
 
-          if (!dir.exists(plot_refresh_dir)) dir.create(plot_refresh_dir, recursive = TRUE)
+          if (!dir.exists(plot_refresh_dir)) {
+            dir.create(plot_refresh_dir, recursive = TRUE)
+          }
 
           # switchPlotTopSwitches() doesn't expose plotTopology as a
           # parameter (verified against its signature and the
@@ -730,7 +932,11 @@ run_isoform_switch <- function(dte_results = NULL,
             )
           }
 
-          if (isTRUE(plot_topology)) run_switch_plots() else suppressMessages(run_switch_plots())
+          if (isTRUE(plot_topology)) {
+            run_switch_plots()
+          } else {
+            suppressMessages(run_switch_plots())
+          }
 
           message(
             "  Refreshed switch plots (now including predictor annotations) saved to: ",
@@ -741,7 +947,8 @@ run_isoform_switch <- function(dte_results = NULL,
         },
         error = function(e) {
           message(
-            "  Could not refresh switch consequences/plots with predictor data: ", e$message,
+            "  Could not refresh switch consequences/plots with predictor data: ",
+            e$message,
             "\n  Falling back to the plots generated in Step 2 (without predictor annotations)."
           )
           switch_list
@@ -754,6 +961,10 @@ run_isoform_switch <- function(dte_results = NULL,
 
   if (!is.null(save_dir)) {
     saveRDS(switch_list, file.path(save_dir, "switch_list.rds"))
+    saveRDS(
+      switch_checkpoint_signature,
+      file.path(save_dir, "switch_list.signature.rds")
+    )
     message("Saved final SwitchList to ", save_dir)
   }
 
