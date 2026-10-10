@@ -930,11 +930,7 @@ run_functional_analysis <- function(
     }
   }
 
-  lfc_ok <- if (has_lfc) !is.na(res_tbl$log2FoldChange) else TRUE
-  res_entrez <- res_tbl[
-    !is.na(res_tbl$entrezid) & res_tbl$entrezid != "" & lfc_ok,
-  ]
-  res_entrez <- res_entrez[!duplicated(res_entrez$entrezid), ]
+  res_entrez <- .mapped_entrez_universe(res_tbl)
 
   total_genes <- nrow(res_tbl)
   mapped_genes <- nrow(res_entrez)
@@ -955,15 +951,22 @@ run_functional_analysis <- function(
 
   if (isTRUE(run_gsea)) {
     message("   -> Generating ranked list using metric: ", gsea_metric)
+    rank_entrez <- if (has_lfc) {
+      .mapped_entrez_universe(
+        res_tbl[!is.na(res_tbl$log2FoldChange), , drop = FALSE]
+      )
+    } else {
+      res_entrez
+    }
     if (gsea_metric == "stat") {
-      if (!"stat" %in% colnames(res_entrez)) {
+      if (!"stat" %in% colnames(rank_entrez)) {
         stop(
           "Column 'stat' not found in results table. Verify that you injected res_unshrunken$stat back into your results."
         )
       }
       if (
         toupper(test_type) == "LRT" &&
-          !"contrast_stat" %in% colnames(res_entrez)
+          !"contrast_stat" %in% colnames(rank_entrez)
       ) {
         stop(
           "LRT GSEA requires a separate contrast-specific statistic; the omnibus LRT statistic is unsigned.",
@@ -972,11 +975,11 @@ run_functional_analysis <- function(
       }
 
       if (toupper(test_type) == "LRT") {
-        if ("contrast_stat" %in% colnames(res_entrez)) {
+        if ("contrast_stat" %in% colnames(rank_entrez)) {
           message(
             "   -> LRT detected: ranking by separate contrast-specific Wald statistics."
           )
-          metric_vals <- res_entrez$contrast_stat
+          metric_vals <- rank_entrez$contrast_stat
         } else {
           stop(
             "LRT enrichment ranking requires contrast-specific statistics; omnibus LRT statistics are not signed.",
@@ -987,12 +990,12 @@ run_functional_analysis <- function(
         message(
           "   -> Wald design detected. Using native directional Wald z-scores."
         )
-        metric_vals <- res_entrez$stat
+        metric_vals <- rank_entrez$stat
       }
     } else if (gsea_metric == "signed_pval") {
       pvalue_col <- if (
         toupper(test_type) == "LRT" &&
-          "contrast_pvalue" %in% colnames(res_entrez)
+          "contrast_pvalue" %in% colnames(rank_entrez)
       ) {
         "contrast_pvalue"
       } else {
@@ -1000,7 +1003,7 @@ run_functional_analysis <- function(
       }
       if (
         toupper(test_type) == "LRT" &&
-          !"contrast_pvalue" %in% colnames(res_entrez)
+          !"contrast_pvalue" %in% colnames(rank_entrez)
       ) {
         stop(
           "LRT signed-p-value ranking requires contrast-specific p-values.",
@@ -1008,18 +1011,18 @@ run_functional_analysis <- function(
         )
       }
       safe_pvals <- ifelse(
-        res_entrez[[pvalue_col]] == 0,
+        rank_entrez[[pvalue_col]] == 0,
         .Machine$double.xmin,
-        res_entrez[[pvalue_col]]
+        rank_entrez[[pvalue_col]]
       )
-      metric_vals <- sign(res_entrez$log2FoldChange) * -log10(safe_pvals)
+      metric_vals <- sign(rank_entrez$log2FoldChange) * -log10(safe_pvals)
     } else {
-      metric_vals <- res_entrez$log2FoldChange
+      metric_vals <- rank_entrez$log2FoldChange
     }
     set.seed(123456)
-    metric_vals <- metric_vals + runif(nrow(res_entrez), -1e-9, 1e-9)
+    metric_vals <- metric_vals + runif(nrow(rank_entrez), -1e-9, 1e-9)
     gsea_list <- sort(
-      purrr::set_names(metric_vals, as.character(res_entrez$entrezid)),
+      purrr::set_names(metric_vals, as.character(rank_entrez$entrezid)),
       decreasing = TRUE
     )
   } else {
@@ -1516,7 +1519,7 @@ run_fgsea_analysis <- function(
   ranks <- sort(ranks, decreasing = TRUE)
 
   for (gmt_item in gmt_list) {
-    if (is.null(gmt_item) || !file.exists(gmt_item)) {
+    if (is.null(gmt_item) || .is_msigdbr_collection(gmt_item)) {
       if (!requireNamespace("msigdbr", quietly = TRUE)) {
         stop(
           "Package 'msigdbr' is required to download pathways. Please install it."
@@ -1546,7 +1549,6 @@ run_fgsea_analysis <- function(
         "M8",
         "HALLMARK"
       )
-
       raw_input <- toupper(gmt_item)
       has_subcat <- grepl(":", raw_input)
       input_cat <- if (has_subcat) sub(":.*$", "", raw_input) else raw_input
@@ -1583,16 +1585,8 @@ run_fgsea_analysis <- function(
           msig_org,
           "..."
         )
-      } else {
-        message(
-          "Provided GMT file '",
-          gmt_item,
-          "' not recognized as MSigDB category. Falling back to Hallmark..."
-        )
-
-        msig_cat <- .resolve_msigdbr_collection("H", msig_org)
-        input_subcat <- NULL
-        gmt_name <- "hallmark_msigdbr"
+      } else if (!is.null(gmt_item)) {
+        stop("Unsupported MSigDB collection input: ", gmt_item, call. = FALSE)
       }
 
       .msigdbr_fetch <- function(species, cat, subcat = NULL) {

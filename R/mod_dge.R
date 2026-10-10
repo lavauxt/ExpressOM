@@ -237,6 +237,9 @@ import_counts <- function(
   custom_tx2gene = NULL,
   custom_gene_map = NULL
 ) {
+  custom_tx2gene <- .validate_optional_file(custom_tx2gene, "custom_tx2gene")
+  custom_gene_map <- .validate_optional_file(custom_gene_map, "custom_gene_map")
+
   if (!requireNamespace("ensembldb", quietly = TRUE)) {
     stop("Package 'ensembldb' is required but not installed.")
   }
@@ -272,8 +275,6 @@ import_counts <- function(
       stop("Custom tx2gene must contain columns 'tx_id' and 'gene_id'")
     }
     tx2gene <- tx2gene[, c("tx_id", "gene_id")]
-    tx2gene$tx_id <- strip_ensembl_version(tx2gene$tx_id)
-    tx2gene$gene_id <- strip_ensembl_version(tx2gene$gene_id)
   } else {
     tx2gene <- ensembldb::transcripts(
       edb,
@@ -281,9 +282,8 @@ import_counts <- function(
       return.type = "DataFrame"
     )
     tx2gene <- as.data.frame(tx2gene)
-    tx2gene$tx_id <- strip_ensembl_version(tx2gene$tx_id)
-    tx2gene$gene_id <- strip_ensembl_version(tx2gene$gene_id)
   }
+  tx2gene <- .normalize_tx2gene(tx2gene)
 
   org_info <- get_organism_info(edb)
   org_db <- org_info$org_db

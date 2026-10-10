@@ -75,6 +75,104 @@ test_that("tx2gene mappings must be unique after transcript normalization", {
     .validate_tx2gene(data.frame(tx_id = NA_character_, gene_id = "gene1")),
     "missing or empty"
   )
+  expect_error(
+    .normalize_tx2gene(data.frame(
+      tx_id = c("tx1.1", "tx1.2"),
+      gene_id = c("gene1.1", "gene2.1")
+    )),
+    "multiple genes"
+  )
+})
+
+test_that("reference resolution preserves a caller-supplied reference", {
+  refs <- list(
+    gtf = "downloaded.gtf",
+    cdna_fasta = "downloaded.cdna.fa",
+    ncrna_fasta = "downloaded.ncrna.fa"
+  )
+  resolved <- .resolve_isoform_references("custom.fa", NULL, refs)
+  expect_identical(resolved$fasta, "custom.fa")
+  expect_identical(resolved$gff, "downloaded.gtf")
+  resolved <- .resolve_isoform_references(NULL, "custom.gtf", refs)
+  expect_identical(
+    resolved$fasta,
+    c("downloaded.cdna.fa", "downloaded.ncrna.fa")
+  )
+  expect_identical(resolved$gff, "custom.gtf")
+})
+
+test_that("switch result fingerprints change when supplied results change", {
+  dtu <- data.frame(feature_id = "tx1", adj_pvalue = 0.1)
+  first <- .switch_results_fingerprint(NULL, dtu)
+  second <- .switch_results_fingerprint(
+    NULL,
+    transform(dtu, adj_pvalue = 0.01)
+  )
+  expect_false(identical(first, second))
+})
+
+test_that("invalid custom annotation paths are rejected", {
+  expect_error(
+    .validate_optional_file("missing-tx2gene.tsv", "custom_tx2gene"),
+    "custom_tx2gene.*existing file"
+  )
+  expect_error(
+    .validate_optional_file(tempdir(), "custom_gene_map"),
+    "custom_gene_map.*existing file"
+  )
+})
+
+test_that("GMT inputs distinguish collections from missing file paths", {
+  expect_identical(.validate_gmt_input(NULL), "H")
+  expect_identical(.validate_gmt_input("C5:GO:BP"), "C5:GO:BP")
+  gmt <- tempfile(fileext = ".gmt")
+  writeLines("pathway\tdescription\tGENE1", gmt)
+  on.exit(unlink(gmt), add = TRUE)
+  expect_identical(.validate_gmt_input(gmt), gmt)
+  expect_error(.validate_gmt_input("missing-pathways.gmt"), "does not exist")
+  expect_error(.validate_gmt_input(tempdir()), "does not exist")
+})
+
+test_that("ORA Entrez universe retains genes without fold changes", {
+  results <- data.frame(
+    gene = c("g1", "g2", "g3"),
+    entrezid = c("1", "2", NA),
+    log2FoldChange = c(1, NA, 2)
+  )
+  expect_identical(
+    .mapped_entrez_universe(results)$entrezid,
+    c("1", "2")
+  )
+})
+
+test_that("native installer defaults expand HOME but WSL defaults do not", {
+  native <- .native_or_wsl_default_path("$HOME/.cpat_data", FALSE)
+  expect_identical(native, path.expand("~/.cpat_data"))
+  expect_identical(
+    .native_or_wsl_default_path("$HOME/.cpat_data", TRUE),
+    "$HOME/.cpat_data"
+  )
+})
+
+test_that("invalid cached reference gzip files are replaced", {
+  dest <- tempfile(fileext = ".gz")
+  writeBin(charToRaw("truncated"), dest)
+  on.exit(unlink(dest), add = TRUE)
+  local_mocked_bindings(
+    download.file = function(url, destfile, mode) {
+      con <- gzfile(destfile, open = "wb")
+      writeBin(as.raw(rep(1L, 200L)), con)
+      close(con)
+      0L
+    },
+    .package = "utils"
+  )
+  .ensure_valid_gzip_reference(
+    "https://example.test/reference.gz",
+    dest,
+    "test"
+  )
+  expect_true(.is_valid_gzip_file(dest))
 })
 
 test_that("Reactome organism codes include rat", {

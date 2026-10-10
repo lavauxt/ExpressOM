@@ -61,7 +61,16 @@
   use_wsl = TRUE,
   log_dir = NULL
 ) {
-  export_line <- sprintf("export %s=%s", var, .dq(value))
+  export_value <- if (
+    length(value) == 1L &&
+      !is.na(value) &&
+      startsWith(as.character(value), "$HOME/")
+  ) {
+    .dq_home(value)
+  } else {
+    .dq(value)
+  }
+  export_line <- sprintf("export %s=%s", var, export_value)
   tmp_env <- paste0(.ISOFORM_ENV_FILE, ".tmp")
 
   body <- c(

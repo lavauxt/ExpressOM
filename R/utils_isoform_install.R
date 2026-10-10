@@ -807,6 +807,13 @@ install_isoform_databases <- function(
     intern = TRUE
   )
   find_cpat <- trimws(find_cpat[nzchar(trimws(find_cpat))])
+  cpat_path_arg <- function(path) {
+    if (via_wsl && startsWith(path, "$HOME/")) {
+      .dq_home(path)
+    } else {
+      .dq(path)
+    }
+  }
 
   if (length(find_cpat) > 0) {
     cpat_base <- dirname(dirname(find_cpat[1]))
@@ -819,7 +826,7 @@ install_isoform_databases <- function(
     )
   } else {
     if (is.null(cpat_data_dir)) {
-      cpat_data_dir <- "$HOME/.cpat_data"
+      cpat_data_dir <- .native_or_wsl_default_path("$HOME/.cpat_data", via_wsl)
     }
     message(
       "  CPAT not found on PATH/conda env (this is OK if you haven't installed it yet). ",
@@ -828,7 +835,10 @@ install_isoform_databases <- function(
     )
   }
 
-  mkdir_status <- .run(sprintf("mkdir -p %s", .dq(cpat_data_dir)))
+  mkdir_status <- .run(sprintf(
+    "mkdir -p %s",
+    cpat_path_arg(cpat_data_dir)
+  ))
 
   if (!isTRUE(mkdir_status == 0L)) {
     message(
@@ -894,12 +904,12 @@ install_isoform_databases <- function(
         '--header="Accept-Language: en-US,en;q=0.9"',
         "-O %s %s"
       ),
-      .dq(raw_dest),
+      cpat_path_arg(raw_dest),
       .dq(url)
     ))
 
     if (isTRUE(status == 0L) && gz) {
-      gz_status <- .run(sprintf("gunzip -f %s", .dq(raw_dest)))
+      gz_status <- .run(sprintf("gunzip -f %s", cpat_path_arg(raw_dest)))
       if (!isTRUE(gz_status == 0L)) return(gz_status)
     }
 
@@ -922,14 +932,18 @@ install_isoform_databases <- function(
         extdata_local
       }
 
-      cp_status <- .run(sprintf("cp %s %s", .dq(extdata_w), .dq(dest)))
+      cp_status <- .run(sprintf(
+        "cp %s %s",
+        .dq(extdata_w),
+        cpat_path_arg(dest)
+      ))
 
       if (
         isTRUE(cp_status == 0L) &&
           isTRUE(
             .run(sprintf(
               'sz=$(wc -c < %1$s 2>/dev/null || echo 0); [ "$sz" -ge 100 ] && ! head -c 512 %1$s | grep -qi "<!doctype html\\|<html[ >]"',
-              .dq(dest)
+              cpat_path_arg(dest)
             )) ==
               0L
           )
@@ -958,7 +972,7 @@ install_isoform_databases <- function(
         isTRUE(
           .run(sprintf(
             'sz=$(wc -c < %1$s 2>/dev/null || echo 0); [ "$sz" -ge 100 ] && ! head -c 512 %1$s | grep -qi "<!doctype html\\|<html[ >]"',
-            .dq(dest)
+            cpat_path_arg(dest)
           )) ==
             0L
         )
@@ -976,7 +990,7 @@ install_isoform_databases <- function(
       }
 
       if (isTRUE(status == 0L)) {
-        .run(sprintf("rm -f %s", .dq(dest)))
+        .run(sprintf("rm -f %s", cpat_path_arg(dest)))
       }
     }
 
@@ -1016,16 +1030,21 @@ install_isoform_databases <- function(
   message("Installing Pfam-A.hmm...")
 
   if (is.null(pfam_db_dir)) {
-    pfam_db_dir <- "$HOME/pfam_db"
+    pfam_db_dir <- .native_or_wsl_default_path("$HOME/pfam_db", via_wsl)
   }
 
-  .run(sprintf("mkdir -p %s", .dq(pfam_db_dir)))
+  path_arg <- if (via_wsl) .dq_home else .dq
+  .run(sprintf("mkdir -p %s", path_arg(pfam_db_dir)))
 
   pfam_url <- "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz"
-  pfam_hmm <- paste0(pfam_db_dir, "/Pfam-A.hmm")
+  pfam_hmm <- file.path(pfam_db_dir, "Pfam-A.hmm")
   pfam_gz <- paste0(pfam_hmm, ".gz")
 
-  dl_status <- .run(sprintf("wget -q -O %s %s", .dq(pfam_gz), .dq(pfam_url)))
+  dl_status <- .run(sprintf(
+    "wget -q -O %s %s",
+    path_arg(pfam_gz),
+    .dq(pfam_url)
+  ))
 
   if (!isTRUE(dl_status == 0L)) {
     message(
@@ -1036,7 +1055,7 @@ install_isoform_databases <- function(
   } else {
     message("  \u2713 Downloaded Pfam-A.hmm.gz")
 
-    gz_status <- .run(sprintf("gunzip -f %s", .dq(pfam_gz)))
+    gz_status <- .run(sprintf("gunzip -f %s", path_arg(pfam_gz)))
 
     if (!isTRUE(gz_status == 0L)) {
       message(
@@ -1050,7 +1069,7 @@ install_isoform_databases <- function(
       hmmpress_found <- .run("command -v hmmpress >/dev/null 2>&1")
 
       if (isTRUE(hmmpress_found == 0L)) {
-        press_status <- .run(sprintf("hmmpress -f %s", .dq(pfam_hmm)))
+        press_status <- .run(sprintf("hmmpress -f %s", path_arg(pfam_hmm)))
 
         if (isTRUE(press_status == 0L)) {
           message(

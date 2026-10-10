@@ -77,6 +77,149 @@
   )
 }
 
+.validate_optional_file <- function(path, arg) {
+  if (is.null(path)) {
+    return(NULL)
+  }
+  if (
+    length(path) != 1L ||
+      is.na(path) ||
+      !nzchar(path) ||
+      !file.exists(path) ||
+      dir.exists(path)
+  ) {
+    stop("`", arg, "` must be NULL or an existing file path.", call. = FALSE)
+  }
+  path
+}
+
+.resolve_isoform_references <- function(isoform_fasta, isoform_gff, refs) {
+  if (is.null(isoform_gff)) {
+    isoform_gff <- refs$gtf
+  }
+  if (is.null(isoform_fasta)) {
+    isoform_fasta <- c(refs$cdna_fasta, refs$ncrna_fasta)
+  }
+  list(fasta = isoform_fasta, gff = isoform_gff)
+}
+
+.mapped_entrez_universe <- function(res_tbl) {
+  if (!"entrezid" %in% names(res_tbl)) {
+    return(res_tbl[FALSE, , drop = FALSE])
+  }
+  keep <- !is.na(res_tbl$entrezid) & res_tbl$entrezid != ""
+  res_entrez <- res_tbl[keep, , drop = FALSE]
+  res_entrez[!duplicated(res_entrez$entrezid), , drop = FALSE]
+}
+
+.is_msigdbr_collection <- function(x) {
+  length(x) == 1L &&
+    !is.na(x) &&
+    grepl(
+      "^(HALLMARK|H|C[1-9]|MH|M[1-35]|M[78])(:[^:]+(:[^:]+)?)?$",
+      toupper(x)
+    )
+}
+
+.validate_gmt_input <- function(x) {
+  if (is.null(x)) {
+    return("H")
+  }
+  if (!is.character(x) || length(x) != 1L || is.na(x) || !nzchar(x)) {
+    stop(
+      "Each GMT input must be NULL, an MSigDB collection, or a GMT file path.",
+      call. = FALSE
+    )
+  }
+  if (.is_msigdbr_collection(x)) {
+    return(x)
+  }
+  if (file.exists(x) && !dir.exists(x)) {
+    if (!grepl("\\.gmt$", x, ignore.case = TRUE)) {
+      stop(
+        "Path supplied as a GMT file must have a .gmt extension: ",
+        x,
+        call. = FALSE
+      )
+    }
+    return(x)
+  }
+  stop(
+    "GMT file does not exist or input is not a supported MSigDB collection: ",
+    x,
+    call. = FALSE
+  )
+}
+
+.switch_results_fingerprint <- function(dte_results, dtu_results) {
+  .object_md5(list(
+    dte_results = dte_results,
+    dtu_results = dtu_results
+  ))
+}
+
+.native_or_wsl_default_path <- function(path, via_wsl) {
+  if (isTRUE(via_wsl)) {
+    path
+  } else {
+    path.expand(sub("^\\$HOME", "~", path))
+  }
+}
+
+.is_valid_gzip_file <- function(path) {
+  if (!file.exists(path) || dir.exists(path) || file.info(path)$size < 10) {
+    return(FALSE)
+  }
+  con <- tryCatch(gzfile(path, open = "rb"), error = function(e) NULL)
+  if (is.null(con)) {
+    return(FALSE)
+  }
+  on.exit(close(con), add = TRUE)
+  tryCatch(
+    {
+      total <- 0
+      repeat {
+        chunk <- readBin(con, what = "raw", n = 1024L * 1024L)
+        if (!length(chunk)) {
+          break
+        }
+        total <- total + length(chunk)
+      }
+      total >= 100L
+    },
+    error = function(e) FALSE,
+    warning = function(w) FALSE
+  )
+}
+
+.download_valid_gzip <- function(url, dest) {
+  tmp <- tempfile(pattern = paste0(basename(dest), "."), tmpdir = dirname(dest))
+  on.exit(unlink(tmp), add = TRUE)
+  status <- download.file(url, destfile = tmp, mode = "wb")
+  if (!identical(as.integer(status), 0L)) {
+    stop("Download failed with status ", status, ": ", url, call. = FALSE)
+  }
+  if (!.is_valid_gzip_file(tmp)) {
+    stop("Downloaded reference is not a valid gzip file: ", url, call. = FALSE)
+  }
+  if (!file.rename(tmp, dest)) {
+    stop("Could not move validated download to: ", dest, call. = FALSE)
+  }
+  invisible(dest)
+}
+
+.ensure_valid_gzip_reference <- function(url, dest, label) {
+  if (.is_valid_gzip_file(dest)) {
+    message(label, " already exists and passed gzip validation: ", dest)
+    return(invisible(dest))
+  }
+  if (file.exists(dest)) {
+    unlink(dest)
+  }
+  message("Downloading ", label, " from: ", url)
+  .download_valid_gzip(url, dest)
+}
+
 .resolve_quantification_files <- function(
   data_dir,
   sample_ids,
@@ -596,6 +739,12 @@ clean_transcript_id <- function(x) {
     )
   }
   tx2gene
+}
+
+.normalize_tx2gene <- function(tx2gene) {
+  tx2gene$tx_id <- sub("\\.[0-9]+$", "", as.character(tx2gene$tx_id))
+  tx2gene$gene_id <- sub("\\.[0-9]+$", "", as.character(tx2gene$gene_id))
+  .validate_tx2gene(tx2gene)
 }
 
 .object_md5 <- function(object) {
@@ -1286,26 +1435,9 @@ download_ensembl_refs <- function(
   options(timeout = max(1800L, old_timeout %||% 60L))
   on.exit(options(timeout = old_timeout), add = TRUE)
 
-  if (!file.exists(gtf_dest)) {
-    message("Downloading GTF from: ", gtf_url)
-    download.file(gtf_url, destfile = gtf_dest, mode = "wb")
-  } else {
-    message("GTF already exists at: ", gtf_dest)
-  }
-
-  if (!file.exists(cdna_dest)) {
-    message("Downloading cDNA FASTA from: ", cdna_url)
-    download.file(cdna_url, destfile = cdna_dest, mode = "wb")
-  } else {
-    message("cDNA FASTA already exists at: ", cdna_dest)
-  }
-
-  if (!file.exists(ncrna_dest)) {
-    message("Downloading ncRNA FASTA from: ", ncrna_url)
-    download.file(ncrna_url, destfile = ncrna_dest, mode = "wb")
-  } else {
-    message("ncRNA FASTA already exists at: ", ncrna_dest)
-  }
+  .ensure_valid_gzip_reference(gtf_url, gtf_dest, "GTF")
+  .ensure_valid_gzip_reference(cdna_url, cdna_dest, "cDNA FASTA")
+  .ensure_valid_gzip_reference(ncrna_url, ncrna_dest, "ncRNA FASTA")
 
   message("Reference downloads complete.")
 

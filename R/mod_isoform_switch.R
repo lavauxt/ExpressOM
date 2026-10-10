@@ -54,6 +54,7 @@ run_isoform_switch <- function(
     },
     metadata = isoform_obj$meta,
     tx2gene = isoform_obj$tx2gene,
+    precomputed_results = .switch_results_fingerprint(dte_results, dtu_results),
     condition = condition,
     level = level,
     base = base,

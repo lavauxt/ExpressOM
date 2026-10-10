@@ -857,8 +857,13 @@ expressom <- function(
           out_dir = ref_dir
         )
 
-        isoform_gff <- refs$gtf
-        isoform_fasta <- c(refs$cdna_fasta, refs$ncrna_fasta)
+        isoform_refs <- .resolve_isoform_references(
+          isoform_fasta,
+          isoform_gff,
+          refs
+        )
+        isoform_fasta <- isoform_refs$fasta
+        isoform_gff <- isoform_refs$gff
       }
 
       quant_files <- switch(
