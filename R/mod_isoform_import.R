@@ -196,8 +196,8 @@ import_transcript_counts <- function(data_dir,
       colnames(counts_df), rownames(sample_df)
     )
     count_mat <- as.matrix(counts_df[, valid_samples, drop = FALSE])
-    mode(count_mat) <- "numeric"
-    count_mat[is.na(count_mat)] <- 0
+    suppressWarnings(mode(count_mat) <- "numeric")
+    count_mat <- .validate_raw_count_matrix(count_mat)
 
     rownames(count_mat) <- clean_transcript_id(rownames(count_mat))
     meta <- sample_df[valid_samples, , drop = FALSE]
