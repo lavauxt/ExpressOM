@@ -206,6 +206,21 @@
   results_df
 }
 
+.integerize_dtu_counts <- function(counts) {
+  counts <- round(as.matrix(counts))
+  storage.mode(counts) <- "integer"
+  counts
+}
+
+.normalize_dtu_pvalues <- function(results_df) {
+  pcol <- intersect(c("pvalue", "p_value"), colnames(results_df))[1]
+  if (is.na(pcol)) {
+    stop("No p-value column found in results.", call. = FALSE)
+  }
+  results_df$pvalue <- suppressWarnings(as.numeric(as.character(results_df[[pcol]])))
+  results_df
+}
+
 #' Run DTU using DRIMSeq
 #' @export
 run_dtu <- function(
@@ -270,7 +285,7 @@ run_dtu <- function(
     current_genes <- gene_chunks[[i]]
     idx <- which(gene_id_map %in% current_genes)
 
-    curr_counts <- counts[idx, , drop = FALSE]
+    curr_counts <- .integerize_dtu_counts(counts[idx, , drop = FALSE])
     curr_gene_ids <- gene_id_map[idx]
     curr_tx_ids <- tx_ids_original[idx]
 
@@ -381,13 +396,8 @@ run_dtu <- function(
 
   dtu_results$test_unit <- "transcript-feature-level; gene-level FDR is not provided"
 
-  pcol <- intersect(c("pvalue", "p_value"), colnames(dtu_results))[1]
-
-  if (is.na(pcol)) {
-    stop("No p-value column found in results.")
-  }
-
-  dtu_results$adj_pvalue <- p.adjust(dtu_results[[pcol]], method = "BH")
+  dtu_results <- .normalize_dtu_pvalues(dtu_results)
+  dtu_results$adj_pvalue <- stats::p.adjust(dtu_results$pvalue, method = "BH")
 
   dtu_results$gene_symbol <- isoform_obj$gene_map$symbol[
     match(dtu_results$gene_id, isoform_obj$gene_map$ensembl)

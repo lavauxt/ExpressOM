@@ -326,6 +326,40 @@
   invisible(NULL)
 }
 
+.map_eda_symbols <- function(gene_ids, edb) {
+  fallback <- stats::setNames(gene_ids, gene_ids)
+  org_db <- tryCatch(get_organism_info(edb)$org_db, error = function(e) NULL)
+  if (is.null(org_db)) {
+    message("   -> Warning: Could not determine organism database. Using original row names.")
+    return(fallback)
+  }
+
+  org_obj <- tryCatch(.load_org_db(org_db), error = function(e) NULL)
+  if (is.null(org_obj)) {
+    message(
+      "   -> Warning: Optional annotation database '", org_db,
+      "' is unavailable. Using original row names."
+    )
+    return(fallback)
+  }
+
+  symbols <- tryCatch(
+    suppressMessages(AnnotationDbi::mapIds(
+      org_obj,
+      keys = gene_ids,
+      column = "SYMBOL",
+      keytype = "ENSEMBL",
+      multiVals = "first"
+    )),
+    error = function(e) {
+      message("   -> Warning: Could not map keys. Using original row names.")
+      fallback
+    }
+  )
+  symbols[is.na(symbols)] <- names(symbols)[is.na(symbols)]
+  symbols
+}
+
 #' Exploratory Data Analysis for DESeq2
 #'
 #' @param dds DESeqDataSet object
@@ -353,19 +387,8 @@ run_eda <- function(dds, edb, out_dir, level, base,
 
   rld <- DESeq2::rlog(dds, blind = TRUE)
 
-  org_info <- get_organism_info(edb)
-  org_obj <- .load_org_db(org_info$org_db)
   message("Mapping IDs for EDA plots...")
-  symbols <- tryCatch({
-    suppressMessages(AnnotationDbi::mapIds(
-      org_obj, keys = rownames(rld), column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first"
-    ))
-  }, error = function(e) {
-    message("   -> Warning: Could not map keys. They may already be symbols. Using original row names.")
-    stats::setNames(rownames(rld), rownames(rld))
-  })
-
-  symbols[is.na(symbols)] <- names(symbols)[is.na(symbols)]
+  symbols <- .map_eda_symbols(rownames(rld), edb)
   rownames(rld) <- symbols
 
   plot_dir <- file.path(out_dir, "Plots")

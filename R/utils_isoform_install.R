@@ -1181,7 +1181,15 @@ load_isoform_results <- function(save_dir) {
 
     if (file.exists(p)) {
       message("Loaded ", s$label, " from ", p)
-      readRDS(p)
+      saved <- readRDS(p)
+      if (
+        is.list(saved) &&
+          all(c("signature", "object") %in% names(saved))
+      ) {
+        saved$object
+      } else {
+        saved
+      }
     } else {
       NULL
     }

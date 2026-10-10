@@ -67,11 +67,10 @@ generate_dte_dtu_report <- function(dte_results,
   )
 
   dtu <- dtu_results$dtu_results
+  dtu <- .normalize_dtu_pvalues(dtu)
 
-  for (col in c("pvalue", "adj_pvalue")) {
-    if (col %in% colnames(dtu)) {
-      dtu[[col]] <- suppressWarnings(as.numeric(as.character(dtu[[col]])))
-    }
+  if ("adj_pvalue" %in% colnames(dtu)) {
+    dtu$adj_pvalue <- suppressWarnings(as.numeric(as.character(dtu$adj_pvalue)))
   }
 
   gene_map <- isoform_obj$gene_map[, c("ensembl", "symbol")]

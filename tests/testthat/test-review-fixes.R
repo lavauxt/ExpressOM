@@ -46,6 +46,20 @@ test_that("isoform checkpoint signatures gate checkpoint reuse", {
   expect_null(.checkpoint_load(path, signature = "first"))
 })
 
+test_that("resume loader unwraps signed checkpoints and keeps legacy files", {
+  save_dir <- withr::local_tempdir()
+  signed <- list(value = "signed")
+  legacy <- list(value = "legacy")
+  .checkpoint_save(signed, file.path(save_dir, "isoform_import.rds"), "sig")
+  saveRDS(legacy, file.path(save_dir, "dte_results.rds"))
+
+  loaded <- load_isoform_results(save_dir)
+
+  expect_identical(loaded$isoform_import, signed)
+  expect_identical(loaded$dte_results, legacy)
+  expect_null(loaded$dtu_results)
+})
+
 test_that("isoform switch covariates are explicitly reported", {
   expect_warning(
     .warn_isoform_switch_covariates("~ batch + condition", "condition"),
