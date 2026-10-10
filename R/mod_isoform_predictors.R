@@ -44,7 +44,9 @@
 #' Convert an InterProScan '-f tsv' (Pfam-filtered) file into pfam_scan.pl format
 #' @keywords internal
 .pfam_from_interproscan_tsv <- function(ips_tsv_path, dest_path) {
-  if (!file.exists(ips_tsv_path) || file.info(ips_tsv_path)$size == 0) return(NULL)
+  if (!file.exists(ips_tsv_path) || file.info(ips_tsv_path)$size == 0) {
+    return(NULL)
+  }
 
   raw <- tryCatch(
     utils::read.delim(
@@ -59,13 +61,17 @@
     error = function(e) NULL
   )
 
-  if (is.null(raw) || nrow(raw) == 0) return(NULL)
+  if (is.null(raw) || nrow(raw) == 0) {
+    return(NULL)
+  }
 
   # -appl Pfam already restricts the run to Pfam, and status "T" = successful
   # match; filter on both defensively rather than assuming.
   keep <- raw$V4 == "Pfam" & grepl("^PF|^PB", raw$V5) & toupper(raw$V10) == "T"
   raw <- raw[keep, , drop = FALSE]
-  if (nrow(raw) == 0) return(NULL)
+  if (nrow(raw) == 0) {
+    return(NULL)
+  }
 
   clean_text <- function(x) {
     x <- gsub("[\t\r\n]+", " ", x)
@@ -76,15 +82,15 @@
   hmm_name[!nzchar(hmm_name)] <- raw$V5[!nzchar(hmm_name)]
 
   out <- data.frame(
-    V1  = raw$V1,
-    V2  = raw$V7,
-    V3  = raw$V8,
-    V4  = raw$V7,
-    V5  = raw$V8,
-    V6  = raw$V5,
-    V7  = hmm_name,
-    V8  = "Domain",
-    V9  = NA_character_,
+    V1 = raw$V1,
+    V2 = raw$V7,
+    V3 = raw$V8,
+    V4 = raw$V7,
+    V5 = raw$V8,
+    V6 = raw$V5,
+    V7 = hmm_name,
+    V8 = "Domain",
+    V9 = NA_character_,
     V10 = NA_character_,
     V11 = NA_character_,
     V12 = NA_character_,
@@ -101,12 +107,16 @@
 #' Convert hmmscan '--domtblout' output into pfam_scan.pl format
 #' @keywords internal
 .pfam_from_hmmscan_domtblout <- function(domtblout_path, dest_path) {
-  if (!file.exists(domtblout_path) || file.info(domtblout_path)$size == 0) return(NULL)
+  if (!file.exists(domtblout_path) || file.info(domtblout_path)$size == 0) {
+    return(NULL)
+  }
 
   lines <- readLines(domtblout_path, warn = FALSE)
   lines <- lines[!grepl("^#", lines)]
   lines <- lines[nzchar(trimws(lines))]
-  if (length(lines) == 0) return(NULL)
+  if (length(lines) == 0) {
+    return(NULL)
+  }
 
   # domtblout is whitespace-delimited with 23 fixed columns; column 23
   # ("description of target") can itself contain spaces, so cap the split.
@@ -117,32 +127,54 @@
 
   ok <- vapply(fields, length, integer(1)) == 22
   fields <- fields[ok]
-  if (length(fields) == 0) return(NULL)
+  if (length(fields) == 0) {
+    return(NULL)
+  }
 
   raw <- as.data.frame(
     do.call(rbind, fields),
     stringsAsFactors = FALSE
   )
   colnames(raw) <- c(
-    "target_name", "target_acc", "tlen", "query_name", "query_acc", "qlen",
-    "seq_evalue", "seq_score", "seq_bias", "dom_num", "dom_of",
-    "c_evalue", "i_evalue", "dom_score", "dom_bias",
-    "hmm_from", "hmm_to", "ali_from", "ali_to", "env_from", "env_to", "acc"
+    "target_name",
+    "target_acc",
+    "tlen",
+    "query_name",
+    "query_acc",
+    "qlen",
+    "seq_evalue",
+    "seq_score",
+    "seq_bias",
+    "dom_num",
+    "dom_of",
+    "c_evalue",
+    "i_evalue",
+    "dom_score",
+    "dom_bias",
+    "hmm_from",
+    "hmm_to",
+    "ali_from",
+    "ali_to",
+    "env_from",
+    "env_to",
+    "acc"
   )
 
   raw <- raw[grepl("^PF|^PB", raw$target_acc), , drop = FALSE]
-  if (nrow(raw) == 0) return(NULL)
+  if (nrow(raw) == 0) {
+    return(NULL)
+  }
 
   out <- data.frame(
-    V1  = raw$query_name,
-    V2  = raw$ali_from,
-    V3  = raw$ali_to,
-    V4  = raw$env_from,
-    V5  = raw$env_to,
-    V6  = raw$target_acc,
-    V7  = raw$target_name,
-    V8  = "Domain",
-    V9  = raw$hmm_from,
+    V1 = raw$query_name,
+    V2 = raw$ali_from,
+    V3 = raw$ali_to,
+    V4 = raw$env_from,
+    V5 = raw$env_to,
+    V6 = raw$target_acc,
+    V7 = raw$target_name,
+    V8 = "Domain",
+    V9 = raw$hmm_from,
     V10 = raw$hmm_to,
     V11 = raw$tlen,
     V12 = raw$dom_score,
@@ -156,22 +188,27 @@
   .write_pfam_scan_table(out, dest_path)
 }
 
-.run_external_predictors <- function(switch_list,
-                                     fasta_file,
-                                     out_dir,
-                                     use_wsl,
-                                     wsl_distro,
-                                     isoform_obj,
-                                     save_dir,
-                                     n_cpu = NULL,
-                                     log_dir = NULL,
-                                     organism = NULL) {
-
+.run_external_predictors <- function(
+  switch_list,
+  fasta_file,
+  out_dir,
+  use_wsl,
+  wsl_distro,
+  isoform_obj,
+  save_dir,
+  n_cpu = NULL,
+  log_dir = NULL,
+  organism = NULL
+) {
   is_windows <- .Platform$OS.type == "windows"
   via_wsl <- is_windows && isTRUE(use_wsl)
 
-  if (is.null(log_dir)) log_dir <- file.path(out_dir, "Log")
-  if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+  if (is.null(log_dir)) {
+    log_dir <- file.path(out_dir, "Log")
+  }
+  if (!dir.exists(log_dir)) {
+    dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+  }
 
   # Each tool's own raw output (CPAT's ORF/probability tables, SignalP's
   # prediction_results.txt, the InterProScan/hmmscan Pfam tables and their
@@ -179,16 +216,25 @@
   # out_dir root, so results_.../IsoformSwitch stops accumulating a flat
   # pile of per-tool files next to Plots/, Log/, sequences/, etc.
   tool_save_dir <- function(family) {
-    d <- if (!is.null(save_dir)) file.path(save_dir, family) else file.path(out_dir, family)
-    if (!dir.exists(d)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    d <- if (!is.null(save_dir)) {
+      file.path(save_dir, family)
+    } else {
+      file.path(out_dir, family)
+    }
+    if (!dir.exists(d)) {
+      dir.create(d, recursive = TRUE, showWarnings = FALSE)
+    }
     d
   }
 
   predictor_log_path <- file.path(log_dir, "predictor_status.log")
 
   message(
-    "Predictor run logging to: ", predictor_log_path, " (step-by-step status) and ",
-    file.path(log_dir, "wsl_commands.log"), " (every shell command, in real time)."
+    "Predictor run logging to: ",
+    predictor_log_path,
+    " (step-by-step status) and ",
+    file.path(log_dir, "wsl_commands.log"),
+    " (every shell command, in real time)."
   )
 
   .log_predictor_status <- function(step, status, detail = "") {
@@ -206,15 +252,34 @@
     invisible(NULL)
   }
 
-  cat("\n\n############################################################\n", file = predictor_log_path, append = TRUE)
-  cat(sprintf("# NEW PREDICTOR RUN: %s\n", format(Sys.time())), file = predictor_log_path, append = TRUE)
-  cat(sprintf("# Output dir: %s\n", out_dir), file = predictor_log_path, append = TRUE)
-  cat("############################################################\n\n", file = predictor_log_path, append = TRUE)
+  cat(
+    "\n\n############################################################\n",
+    file = predictor_log_path,
+    append = TRUE
+  )
+  cat(
+    sprintf("# NEW PREDICTOR RUN: %s\n", format(Sys.time())),
+    file = predictor_log_path,
+    append = TRUE
+  )
+  cat(
+    sprintf("# Output dir: %s\n", out_dir),
+    file = predictor_log_path,
+    append = TRUE
+  )
+  cat(
+    "############################################################\n\n",
+    file = predictor_log_path,
+    append = TRUE
+  )
 
   message("Predictor status log: ", predictor_log_path)
 
   if (is.null(n_cpu) || !is.finite(n_cpu) || n_cpu < 1) {
-    detected <- tryCatch(parallel::detectCores(logical = TRUE), error = function(e) NA_integer_)
+    detected <- tryCatch(
+      parallel::detectCores(logical = TRUE),
+      error = function(e) NA_integer_
+    )
     n_cpu <- if (is.na(detected) || detected < 1) 1L else max(1L, detected - 1L)
   }
 
@@ -244,7 +309,11 @@
     # not guaranteed to put the env's tools on PATH, which was silently
     # failing every tool_ok() check below despite debug_wsl() reporting the
     # same tools as present.
-    conda_sh <- .find_conda_sh(wsl_distro = wsl_distro, use_wsl = via_wsl, log_dir = log_dir)
+    conda_sh <- .find_conda_sh(
+      wsl_distro = wsl_distro,
+      use_wsl = via_wsl,
+      log_dir = log_dir
+    )
     has_conda_env <- FALSE
 
     if (!is.null(conda_sh)) {
@@ -264,9 +333,15 @@
       has_conda_env <- isTRUE(env_check == 0L)
     }
 
-    if (!has_conda_env) conda_sh <- NULL
+    if (!has_conda_env) {
+      conda_sh <- NULL
+    }
 
-    assign(cache_key, if (has_conda_env) conda_sh else "", envir = .expressom_cache)
+    assign(
+      cache_key,
+      if (has_conda_env) conda_sh else "",
+      envir = .expressom_cache
+    )
 
     if (has_conda_env) {
       message("  Using conda env 'isoform_tools' (", conda_sh, ")")
@@ -280,10 +355,16 @@
   run_tool <- function(cmd_str, show_stderr = TRUE, tool_name = "tool") {
     tool_family <- sub("_.*$", "", tool_name)
     tool_log_dir <- file.path(log_dir, tool_family)
-    if (!dir.exists(tool_log_dir)) dir.create(tool_log_dir, recursive = TRUE, showWarnings = FALSE)
+    if (!dir.exists(tool_log_dir)) {
+      dir.create(tool_log_dir, recursive = TRUE, showWarnings = FALSE)
+    }
     tool_log <- file.path(tool_log_dir, paste0(tool_name, ".log"))
 
-    cat(sprintf("\n===== %s — %s =====\n", tool_name, format(Sys.time())), file = tool_log, append = TRUE)
+    cat(
+      sprintf("\n===== %s — %s =====\n", tool_name, format(Sys.time())),
+      file = tool_log,
+      append = TRUE
+    )
     cat(sprintf("Working dir: %s\n", getwd()), file = tool_log, append = TRUE)
     cat(sprintf("Command: %s\n\n", cmd_str), file = tool_log, append = TRUE)
 
@@ -308,7 +389,11 @@
       cat(paste(res, collapse = "\n"), "\n", file = tool_log, append = TRUE)
     }
 
-    cat(sprintf("--- exit code: %d ---\n", as.integer(exit_code)), file = tool_log, append = TRUE)
+    cat(
+      sprintf("--- exit code: %d ---\n", as.integer(exit_code)),
+      file = tool_log,
+      append = TRUE
+    )
 
     if (length(res) > 0) {
       msg <- paste(res, collapse = "\n")
@@ -318,8 +403,13 @@
 
         if (length(msg_lines) > 30) {
           message(
-            "  [", tool_name, "] Output (first 15 + last 15 of ",
-            length(msg_lines), " lines; full log: ", tool_log, "):"
+            "  [",
+            tool_name,
+            "] Output (first 15 + last 15 of ",
+            length(msg_lines),
+            " lines; full log: ",
+            tool_log,
+            "):"
           )
           message(paste(head(msg_lines, 15), collapse = "\n"))
           message("  ... (", length(msg_lines) - 30, " lines omitted) ...")
@@ -332,8 +422,12 @@
     }
 
     message(
-      "  [", tool_name, "] Exit code: ", as.integer(exit_code),
-      " — ", if (exit_code == 0L) "SUCCESS" else "FAILED"
+      "  [",
+      tool_name,
+      "] Exit code: ",
+      as.integer(exit_code),
+      " — ",
+      if (exit_code == 0L) "SUCCESS" else "FAILED"
     )
 
     .log_predictor_status(
@@ -357,32 +451,54 @@
   }
 
   w2l <- function(p) {
-    if (is.null(p) || length(p) == 0 || !any(nzchar(p))) return(p)
+    if (is.null(p) || length(p) == 0 || !any(nzchar(p))) {
+      return(p)
+    }
     if (length(p) > 1) {
       return(vapply(p, w2l, character(1), USE.NAMES = FALSE))
     }
-    if (!nzchar(p)) return(p)
+    if (!nzchar(p)) {
+      return(p)
+    }
     if (is_windows && use_wsl) .to_wsl_path(p, wsl_distro) else p
   }
 
   syms <- isoform_obj$gene_map$symbol[!is.na(isoform_obj$gene_map$symbol)]
   first_sym <- if (length(syms) > 0) syms[1] else ""
 
-  organism_cpat <- if (!is.null(organism) && grepl("Homo sapiens", organism, ignore.case = TRUE)) {
+  organism_cpat <- if (
+    !is.null(organism) && grepl("Homo sapiens", organism, ignore.case = TRUE)
+  ) {
     "Human"
-  } else if (!is.null(organism) && grepl("Mus musculus", organism, ignore.case = TRUE)) {
+  } else if (
+    !is.null(organism) && grepl("Mus musculus", organism, ignore.case = TRUE)
+  ) {
     "Mouse"
   } else {
     if (!is.null(organism)) {
       message(
-        "  Organism '", organism, "' is not Human or Mouse (CPAT only ships prebuilt logit ",
+        "  Organism '",
+        organism,
+        "' is not Human or Mouse (CPAT only ships prebuilt logit ",
         "models for those two); falling back to a gene-symbol-casing guess for the CPAT model choice."
       )
     }
-    if (grepl("^[A-Z]+$", first_sym) && nchar(first_sym) > 2) "Human" else "Mouse"
+    if (grepl("^[A-Z]+$", first_sym) && nchar(first_sym) > 2) {
+      "Human"
+    } else {
+      "Mouse"
+    }
   }
 
-  message("Organism detected for CPAT: ", organism_cpat, if (!is.null(organism)) paste0(" (from EnsDb: ", organism, ")") else " (guessed from gene symbol casing -- pass organism = ... for a reliable result)")
+  message(
+    "Organism detected for CPAT: ",
+    organism_cpat,
+    if (!is.null(organism)) {
+      paste0(" (from EnsDb: ", organism, ")")
+    } else {
+      " (guessed from gene symbol casing -- pass organism = ... for a reliable result)"
+    }
+  )
 
   seq_dir <- file.path(out_dir, "sequences")
   dir.create(seq_dir, recursive = TRUE, showWarnings = FALSE)
@@ -391,7 +507,9 @@
   aa_fa_local <- file.path(seq_dir, "isoform_AA.fa")
 
   if (!file.exists(nt_fa_local) || !file.exists(aa_fa_local)) {
-    message("Extracting NT / AA sequences from SwitchList for external tools...")
+    message(
+      "Extracting NT / AA sequences from SwitchList for external tools..."
+    )
 
     tryCatch(
       {
@@ -414,34 +532,65 @@
         # no (or the wrong) sequence input. Find what was actually written
         # by pattern instead of assuming an exact name, so this survives
         # IsoformSwitchAnalyzeR version differences too.
-        written <- list.files(seq_dir, pattern = "\\.fa(sta)?$", full.names = TRUE, ignore.case = TRUE)
+        written <- list.files(
+          seq_dir,
+          pattern = "\\.fa(sta)?$",
+          full.names = TRUE,
+          ignore.case = TRUE
+        )
         written <- setdiff(written, c(nt_fa_local, aa_fa_local))
-        written <- written[!grepl("complete|split|subset", basename(written), ignore.case = TRUE)]
+        written <- written[
+          !grepl("complete|split|subset", basename(written), ignore.case = TRUE)
+        ]
 
-        nt_src <- written[grepl("(^|[_.-])nt([_.-]|$)", basename(written), ignore.case = TRUE)]
-        aa_src <- written[grepl("(^|[_.-])aa([_.-]|$)", basename(written), ignore.case = TRUE)]
+        nt_src <- written[grepl(
+          "(^|[_.-])nt([_.-]|$)",
+          basename(written),
+          ignore.case = TRUE
+        )]
+        aa_src <- written[grepl(
+          "(^|[_.-])aa([_.-]|$)",
+          basename(written),
+          ignore.case = TRUE
+        )]
 
-        if (length(nt_src) >= 1 && !file.exists(nt_fa_local)) file.rename(nt_src[1], nt_fa_local)
-        if (length(aa_src) >= 1 && !file.exists(aa_fa_local)) file.rename(aa_src[1], aa_fa_local)
+        if (length(nt_src) >= 1 && !file.exists(nt_fa_local)) {
+          file.rename(nt_src[1], nt_fa_local)
+        }
+        if (length(aa_src) >= 1 && !file.exists(aa_fa_local)) {
+          file.rename(aa_src[1], aa_fa_local)
+        }
 
         if (!file.exists(nt_fa_local) || !file.exists(aa_fa_local)) {
           message(
             "  extractSequence() ran but expected output was not found by pattern in ",
-            seq_dir, " (files present: ",
-            paste(basename(list.files(seq_dir)), collapse = ", "), ")"
+            seq_dir,
+            " (files present: ",
+            paste(basename(list.files(seq_dir)), collapse = ", "),
+            ")"
           )
         }
       },
       error = function(e) {
         message("  Could not extract sequences from SwitchList: ", e$message)
-        message("  CPAT will use the provided fasta_file; SignalP / Pfam may be skipped.")
+        message(
+          "  CPAT will use the provided fasta_file; SignalP / Pfam may be skipped."
+        )
         .log_predictor_status("extractSequence", "FAILED", e$message)
       }
     )
   }
 
-  n_nt <- if (file.exists(nt_fa_local)) length(grep("^>", readLines(nt_fa_local, warn = FALSE))) else 0L
-  n_aa <- if (file.exists(aa_fa_local)) length(grep("^>", readLines(aa_fa_local, warn = FALSE))) else 0L
+  n_nt <- if (file.exists(nt_fa_local)) {
+    length(grep("^>", readLines(nt_fa_local, warn = FALSE)))
+  } else {
+    0L
+  }
+  n_aa <- if (file.exists(aa_fa_local)) {
+    length(grep("^>", readLines(aa_fa_local, warn = FALSE)))
+  } else {
+    0L
+  }
 
   .log_predictor_status(
     "extractSequence",
@@ -458,8 +607,11 @@
   } else {
     if (length(fasta_file) > 1) {
       message(
-        "  fasta_file has ", length(fasta_file), " entries (e.g. combined cDNA + ncRNA ",
-        "references); CPAT takes a single FASTA, so only the first (", fasta_file[1],
+        "  fasta_file has ",
+        length(fasta_file),
+        " entries (e.g. combined cDNA + ncRNA ",
+        "references); CPAT takes a single FASTA, so only the first (",
+        fasta_file[1],
         ") will be used as a fallback. Sequence extraction from the SwitchList failed above, ",
         "which is why this fallback path was needed at all -- CPAT results may be incomplete."
       )
@@ -494,13 +646,25 @@
 
   if (is.null(hexamer_local)) {
     message(
-      "  Hexamer table (", organism_cpat, "_Hexamer.tsv) not found in $CPAT_DATA / $HOME/.cpat_data. ",
+      "  Hexamer table (",
+      organism_cpat,
+      "_Hexamer.tsv) not found in $CPAT_DATA / $HOME/.cpat_data. ",
       "Run install_isoform_databases() first. Skipping CPAT."
     )
-    .log_predictor_status("CPAT", "SKIPPED", "hexamer table not found (run install_isoform_databases())")
+    .log_predictor_status(
+      "CPAT",
+      "SKIPPED",
+      "hexamer table not found (run install_isoform_databases())"
+    )
   } else if (is.null(logit_local)) {
-    message("  Logit model not found. Run install_isoform_databases() first. Skipping CPAT.")
-    .log_predictor_status("CPAT", "SKIPPED", "logit model not found (run install_isoform_databases())")
+    message(
+      "  Logit model not found. Run install_isoform_databases() first. Skipping CPAT."
+    )
+    .log_predictor_status(
+      "CPAT",
+      "SKIPPED",
+      "logit model not found (run install_isoform_databases())"
+    )
   } else {
     hexamer_w <- hexamer_local
     logit_w <- logit_local
@@ -512,12 +676,18 @@
 
     if (!has_cpat3 && !has_cpat2) {
       message("  Neither 'cpat' nor 'run_cpat.py' found. Skipping.")
-      .log_predictor_status("CPAT", "SKIPPED", "neither 'cpat' nor 'run_cpat.py' found on PATH/conda env")
+      .log_predictor_status(
+        "CPAT",
+        "SKIPPED",
+        "neither 'cpat' nor 'run_cpat.py' found on PATH/conda env"
+      )
     } else {
       cpat_exe <- if (has_cpat3) "cpat" else "run_cpat.py"
 
       cpat_log_dir_l <- file.path(log_dir, "CPAT")
-      if (!dir.exists(cpat_log_dir_l)) dir.create(cpat_log_dir_l, recursive = TRUE, showWarnings = FALSE)
+      if (!dir.exists(cpat_log_dir_l)) {
+        dir.create(cpat_log_dir_l, recursive = TRUE, showWarnings = FALSE)
+      }
 
       # CPAT's --log-file defaults to a bare "CPAT_run_info.log" (see `cpat
       # -h`), written relative to the shell's cwd at invocation time -- NOT
@@ -589,17 +759,35 @@
 
         if (cpat_import_ok) {
           message("  CPAT results imported successfully.")
-          .log_predictor_status("CPAT", "OK", paste("result file:", cpat_result))
+          .log_predictor_status(
+            "CPAT",
+            "OK",
+            paste("result file:", cpat_result)
+          )
         } else {
-          message("  CPAT import failed; coding-potential annotation NOT added to switch_list.")
-          .log_predictor_status("CPAT", "IMPORT_FAILED", paste("analyzeCPAT() errored:", cpat_err))
+          message(
+            "  CPAT import failed; coding-potential annotation NOT added to switch_list."
+          )
+          .log_predictor_status(
+            "CPAT",
+            "IMPORT_FAILED",
+            paste("analyzeCPAT() errored:", cpat_err)
+          )
         }
       } else {
-        message("  CPAT failed or result file not found (", basename(cpat_result), "). Skipping.")
+        message(
+          "  CPAT failed or result file not found (",
+          basename(cpat_result),
+          "). Skipping."
+        )
         .log_predictor_status(
           "CPAT",
           "FAILED",
-          sprintf("exit code %s, result file exists: %s", cpat_status, file.exists(cpat_result))
+          sprintf(
+            "exit code %s, result file exists: %s",
+            cpat_status,
+            file.exists(cpat_result)
+          )
         )
       }
     }
@@ -645,7 +833,11 @@
       }
     } else {
       message("  signalp6 not found in PATH / conda env. Skipping.")
-      .log_predictor_status("SignalP", "SKIPPED", "signalp6 not found on PATH/conda env")
+      .log_predictor_status(
+        "SignalP",
+        "SKIPPED",
+        "signalp6 not found on PATH/conda env"
+      )
     }
 
     if (!is.null(sp_result_file)) {
@@ -676,17 +868,33 @@
 
       if (sp_import_ok) {
         message("  SignalP results imported successfully.")
-        .log_predictor_status("SignalP", "OK", paste("result file:", sp_result_file))
+        .log_predictor_status(
+          "SignalP",
+          "OK",
+          paste("result file:", sp_result_file)
+        )
       } else {
-        message("  SignalP import failed; signal-peptide annotation NOT added to switch_list.")
-        .log_predictor_status("SignalP", "IMPORT_FAILED", paste("analyzeSignalP() errored:", sp_err))
+        message(
+          "  SignalP import failed; signal-peptide annotation NOT added to switch_list."
+        )
+        .log_predictor_status(
+          "SignalP",
+          "IMPORT_FAILED",
+          paste("analyzeSignalP() errored:", sp_err)
+        )
       }
     } else if (sp_attempted && !is.na(sp_status) && sp_status != 0L) {
       message("  SignalP execution failed (exit ", sp_status, "). Skipping.")
       .log_predictor_status("SignalP", "FAILED", paste("exit code", sp_status))
     } else if (sp_attempted) {
-      message("  SignalP exited successfully but no expected result file was found. Skipping.")
-      .log_predictor_status("SignalP", "FAILED", "exit code 0 but no expected output file found")
+      message(
+        "  SignalP exited successfully but no expected result file was found. Skipping."
+      )
+      .log_predictor_status(
+        "SignalP",
+        "FAILED",
+        "exit code 0 but no expected output file found"
+      )
     }
   }
 
@@ -697,8 +905,14 @@
     .log_predictor_status("DeepTMHMM", "SKIPPED", "no AA FASTA extracted")
   } else if (!tool_ok("biolib")) {
     message("  'biolib' not found in PATH / conda env. Skipping DeepTMHMM.")
-    message("  (install inside the isoform_tools env with: pip install pybiolib)")
-    .log_predictor_status("DeepTMHMM", "SKIPPED", "biolib not found on PATH/conda env (pip install pybiolib)")
+    message(
+      "  (install inside the isoform_tools env with: pip install pybiolib)"
+    )
+    .log_predictor_status(
+      "DeepTMHMM",
+      "SKIPPED",
+      "biolib not found on PATH/conda env (pip install pybiolib)"
+    )
   } else {
     tmhmm_out_dir_l <- file.path(out_dir, "deeptmhmm_out")
     dir.create(tmhmm_out_dir_l, recursive = TRUE, showWarnings = FALSE)
@@ -710,7 +924,9 @@
       shQuote(sp_fa_w, type = "sh")
     )
 
-    message("  Running DeepTMHMM via biolib (sequences are uploaded to BioLib's cloud servers)...")
+    message(
+      "  Running DeepTMHMM via biolib (sequences are uploaded to BioLib's cloud servers)..."
+    )
     tmhmm_status <- run_tool(tmhmm_cmd, tool_name = "DeepTMHMM")
 
     tmhmm_gff <- file.path(tmhmm_out_dir_l, "biolib_results", "TMRs.gff3")
@@ -740,17 +956,35 @@
 
       if (tmhmm_import_ok) {
         message("  DeepTMHMM results imported successfully.")
-        .log_predictor_status("DeepTMHMM", "OK", paste("result file:", tmhmm_gff))
+        .log_predictor_status(
+          "DeepTMHMM",
+          "OK",
+          paste("result file:", tmhmm_gff)
+        )
       } else {
-        message("  DeepTMHMM import failed; topology annotation NOT added to switch_list.")
-        .log_predictor_status("DeepTMHMM", "IMPORT_FAILED", paste("analyzeDeepTMHMM() errored:", tmhmm_err))
+        message(
+          "  DeepTMHMM import failed; topology annotation NOT added to switch_list."
+        )
+        .log_predictor_status(
+          "DeepTMHMM",
+          "IMPORT_FAILED",
+          paste("analyzeDeepTMHMM() errored:", tmhmm_err)
+        )
       }
     } else {
-      message("  DeepTMHMM failed or result file not found (", tmhmm_gff, "). Skipping.")
+      message(
+        "  DeepTMHMM failed or result file not found (",
+        tmhmm_gff,
+        "). Skipping."
+      )
       .log_predictor_status(
         "DeepTMHMM",
         "FAILED",
-        sprintf("exit code %s, result file exists: %s", tmhmm_status, file.exists(tmhmm_gff))
+        sprintf(
+          "exit code %s, result file exists: %s",
+          tmhmm_status,
+          file.exists(tmhmm_gff)
+        )
       )
     }
   }
@@ -773,7 +1007,10 @@
       iprscan_tsv_l <- file.path(tool_save_dir("Pfam"), "interproscan.tsv")
       iprscan_tsv_w <- w2l(iprscan_tsv_l)
 
-      ips_temp_dir_w <- paste0("$HOME/.isoform_tools_tmp/ips_", basename(tempfile("")))
+      ips_temp_dir_w <- paste0(
+        "$HOME/.isoform_tools_tmp/ips_",
+        basename(tempfile(""))
+      )
 
       ips_cmd <- sprintf(
         paste(
@@ -781,7 +1018,7 @@
           "interproscan.sh -i %2$s -f tsv -o %3$s -dp -appl Pfam -goterms -iprlookup -cpu %4$d -T %1$s;",
           "_ips_status=$?; set -e; rm -rf %1$s; exit $_ips_status"
         ),
-        .dq(ips_temp_dir_w),
+        .dq_home(ips_temp_dir_w),
         shQuote(pfam_fa_w, type = "sh"),
         shQuote(iprscan_tsv_w, type = "sh"),
         n_cpu
@@ -795,11 +1032,13 @@
       # (/mnt/c/...) destination hasn't fully synced by the time this check
       # runs. A short wait-and-recheck absorbs that without silently
       # mistaking it for "genuinely zero Pfam hits" or a parsing problem.
-      ips_output_empty <- file.exists(iprscan_tsv_l) && isTRUE(file.info(iprscan_tsv_l)$size == 0)
+      ips_output_empty <- file.exists(iprscan_tsv_l) &&
+        isTRUE(file.info(iprscan_tsv_l)$size == 0)
 
       if (ips_status == 0L && ips_output_empty) {
         Sys.sleep(2)
-        ips_output_empty <- file.exists(iprscan_tsv_l) && isTRUE(file.info(iprscan_tsv_l)$size == 0)
+        ips_output_empty <- file.exists(iprscan_tsv_l) &&
+          isTRUE(file.info(iprscan_tsv_l)$size == 0)
       }
 
       if (ips_status == 0L && ips_output_empty) {
@@ -811,17 +1050,25 @@
         .log_predictor_status(
           "Pfam-InterProScan",
           "FAILED",
-          paste("exit code 0 but output file is empty (0 bytes):", iprscan_tsv_l)
+          paste(
+            "exit code 0 but output file is empty (0 bytes):",
+            iprscan_tsv_l
+          )
         )
       } else if (ips_status == 0L && file.exists(iprscan_tsv_l)) {
         ips_import_ok <- FALSE
         ips_err <- NULL
 
-        ips_pfam_l <- file.path(tool_save_dir("Pfam"), "interproscan_as_pfam_scan.txt")
+        ips_pfam_l <- file.path(
+          tool_save_dir("Pfam"),
+          "interproscan_as_pfam_scan.txt"
+        )
         ips_converted <- .pfam_from_interproscan_tsv(iprscan_tsv_l, ips_pfam_l)
 
         if (is.null(ips_converted)) {
-          message("  No Pfam hits could be parsed from InterProScan's output; trying hmmscan fallback...")
+          message(
+            "  No Pfam hits could be parsed from InterProScan's output; trying hmmscan fallback..."
+          )
           .log_predictor_status(
             "Pfam-InterProScan",
             "IMPORT_FAILED",
@@ -850,7 +1097,11 @@
 
           if (ips_import_ok) {
             message("  InterProScan Pfam results imported successfully.")
-            .log_predictor_status("Pfam-InterProScan", "OK", paste("result file:", ips_converted))
+            .log_predictor_status(
+              "Pfam-InterProScan",
+              "OK",
+              paste("result file:", ips_converted)
+            )
           } else {
             message("  InterProScan import failed; trying hmmscan fallback...")
             .log_predictor_status(
@@ -861,27 +1112,54 @@
           }
         }
       } else {
-        message("  InterProScan failed (exit ", ips_status, "). Trying hmmscan fallback...")
+        message(
+          "  InterProScan failed (exit ",
+          ips_status,
+          "). Trying hmmscan fallback..."
+        )
         .log_predictor_status(
           "Pfam-InterProScan",
           "FAILED",
-          sprintf("exit code %s, result file exists: %s", ips_status, file.exists(iprscan_tsv_l))
+          sprintf(
+            "exit code %s, result file exists: %s",
+            ips_status,
+            file.exists(iprscan_tsv_l)
+          )
         )
       }
     } else {
-      .log_predictor_status("Pfam-InterProScan", "SKIPPED", "interproscan.sh not found on PATH/conda env")
+      .log_predictor_status(
+        "Pfam-InterProScan",
+        "SKIPPED",
+        "interproscan.sh not found on PATH/conda env"
+      )
     }
 
     if (!pfam_done) {
       if (!tool_ok("hmmscan")) {
         message("  hmmscan not found. Skipping Pfam analysis.")
-        .log_predictor_status("Pfam-hmmscan", "SKIPPED", "hmmscan not found on PATH/conda env")
+        .log_predictor_status(
+          "Pfam-hmmscan",
+          "SKIPPED",
+          "hmmscan not found on PATH/conda env"
+        )
       } else {
-        pfam_db_w <- .find_pfam_db(wsl_distro, via_wsl, active_conda, log_dir = log_dir)
+        pfam_db_w <- .find_pfam_db(
+          wsl_distro,
+          via_wsl,
+          active_conda,
+          log_dir = log_dir
+        )
 
         if (is.null(pfam_db_w)) {
-          message("  Pfam-A.hmm not found. Run install_isoform_databases() first. Skipping.")
-          .log_predictor_status("Pfam-hmmscan", "SKIPPED", "Pfam-A.hmm not found")
+          message(
+            "  Pfam-A.hmm not found. Run install_isoform_databases() first. Skipping."
+          )
+          .log_predictor_status(
+            "Pfam-hmmscan",
+            "SKIPPED",
+            "Pfam-A.hmm not found"
+          )
         } else {
           pfam_tbl_l <- file.path(tool_save_dir("Pfam"), "pfam_domtblout.txt")
           pfam_tbl_w <- w2l(pfam_tbl_l)
@@ -905,11 +1183,16 @@
             # layout from what analyzePFAM() parses (pfam_scan.pl's 16
             # columns) -- feeding it in raw is what was erroring here even
             # though hmmscan itself succeeded. Convert first.
-            hm_pfam_l <- file.path(tool_save_dir("Pfam"), "hmmscan_as_pfam_scan.txt")
+            hm_pfam_l <- file.path(
+              tool_save_dir("Pfam"),
+              "hmmscan_as_pfam_scan.txt"
+            )
             hm_converted <- .pfam_from_hmmscan_domtblout(pfam_tbl_l, hm_pfam_l)
 
             if (is.null(hm_converted)) {
-              message("  No Pfam hits could be parsed from hmmscan's domtblout output.")
+              message(
+                "  No Pfam hits could be parsed from hmmscan's domtblout output."
+              )
               .log_predictor_status(
                 "Pfam-hmmscan",
                 "IMPORT_FAILED",
@@ -936,9 +1219,15 @@
 
               if (hm_import_ok) {
                 message("  hmmscan Pfam results imported successfully.")
-                .log_predictor_status("Pfam-hmmscan", "OK", paste("result file:", hm_converted))
+                .log_predictor_status(
+                  "Pfam-hmmscan",
+                  "OK",
+                  paste("result file:", hm_converted)
+                )
               } else {
-                message("  hmmscan import failed; Pfam domain annotation NOT added to switch_list.")
+                message(
+                  "  hmmscan import failed; Pfam domain annotation NOT added to switch_list."
+                )
                 .log_predictor_status(
                   "Pfam-hmmscan",
                   "IMPORT_FAILED",
@@ -951,7 +1240,11 @@
             .log_predictor_status(
               "Pfam-hmmscan",
               "FAILED",
-              sprintf("exit code %s, result file exists: %s", hm_status, file.exists(pfam_tbl_l))
+              sprintf(
+                "exit code %s, result file exists: %s",
+                hm_status,
+                file.exists(pfam_tbl_l)
+              )
             )
           }
         }
@@ -959,7 +1252,11 @@
     }
   }
 
-  n_orf <- if (!is.null(switch_list$orfAnalysis)) nrow(switch_list$orfAnalysis) else 0L
+  n_orf <- if (!is.null(switch_list$orfAnalysis)) {
+    nrow(switch_list$orfAnalysis)
+  } else {
+    0L
+  }
 
   n_domain <- if (!is.null(switch_list$domainAnalysis)) {
     length(unique(switch_list$domainAnalysis$isoform_id))
@@ -973,8 +1270,10 @@
     0L
   }
 
-  n_cds <- if (!is.null(switch_list$isoformFeatures) &&
-               "codingPotential" %in% colnames(switch_list$isoformFeatures)) {
+  n_cds <- if (
+    !is.null(switch_list$isoformFeatures) &&
+      "codingPotential" %in% colnames(switch_list$isoformFeatures)
+  ) {
     sum(!is.na(switch_list$isoformFeatures$codingPotential))
   } else {
     0L
@@ -999,7 +1298,11 @@
 
   .log_predictor_status(
     "SUMMARY",
-    if (n_domain > 0 || n_sigp > 0 || n_cds > 0 || n_topology > 0) "OK" else "EMPTY",
+    if (n_domain > 0 || n_sigp > 0 || n_cds > 0 || n_topology > 0) {
+      "OK"
+    } else {
+      "EMPTY"
+    },
     summary_msg
   )
 
@@ -1007,12 +1310,27 @@
   message("  Log directory: ", log_dir)
   message("  Per-tool logs:")
 
-  all_logs <- list.files(log_dir, pattern = "\\.log$", full.names = TRUE, recursive = TRUE)
-  log_rel_paths <- sub(paste0("^", gsub("([][{}()+*^$|\\\\.?])", "\\\\\\1", log_dir), "[/\\\\]?"), "", all_logs)
+  all_logs <- list.files(
+    log_dir,
+    pattern = "\\.log$",
+    full.names = TRUE,
+    recursive = TRUE
+  )
+  log_rel_paths <- sub(
+    paste0("^", gsub("([][{}()+*^$|\\\\.?])", "\\\\\\1", log_dir), "[/\\\\]?"),
+    "",
+    all_logs
+  )
 
   for (i in seq_along(all_logs)) {
     sz <- file.info(all_logs[i])$size
-    message("     ", log_rel_paths[i], " (", format(round(sz / 1024, 1)), " KB)")
+    message(
+      "     ",
+      log_rel_paths[i],
+      " (",
+      format(round(sz / 1024, 1)),
+      " KB)"
+    )
   }
 
   message("  Status summary: ", summary_msg)

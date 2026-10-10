@@ -3,20 +3,21 @@
 
 #' Shared count-matrix preparation and filtering for DTU testing
 #' @keywords internal
-.prepare_dtu_counts <- function(isoform_obj,
-                                condition,
-                                level,
-                                base,
-                                design = NULL,
-                                min_transcript_total,
-                                min_transcript_expr,
-                                min_samps_feature_expr,
-                                min_gene_expr,
-                                min_samps_gene_expr,
-                                max_transcripts,
-                                apply_gene_expr_filter = FALSE,
-                                require_multi_transcript = FALSE) {
-
+.prepare_dtu_counts <- function(
+  isoform_obj,
+  condition,
+  level,
+  base,
+  design = NULL,
+  min_transcript_total,
+  min_transcript_expr,
+  min_samps_feature_expr,
+  min_gene_expr,
+  min_samps_gene_expr,
+  max_transcripts,
+  apply_gene_expr_filter = FALSE,
+  require_multi_transcript = FALSE
+) {
   counts <- if (isoform_obj$type == "tximport") {
     isoform_obj$txi$counts
   } else {
@@ -25,21 +26,28 @@
 
   design <- design %||% stats::reformulate(condition)
   design_info <- .validate_isoform_design(
-    design, condition, isoform_obj$meta
+    design,
+    condition,
+    isoform_obj$meta
   )
   sample_data <- design_info$metadata
 
   keep_samples <- sample_data[[condition]] %in% c(base, level)
 
   if (sum(keep_samples) < 2) {
-    stop("Fewer than 2 samples available for comparison. Need at least one sample in each condition.")
+    stop(
+      "Fewer than 2 samples available for comparison. Need at least one sample in each condition."
+    )
   }
 
   sample_data <- sample_data[keep_samples, , drop = FALSE]
   counts <- counts[, rownames(sample_data), drop = FALSE]
 
   sample_data <- .set_contrast_reference(
-    sample_data, condition, base, level
+    sample_data,
+    condition,
+    base,
+    level
   )
 
   sample_data$condition <- factor(
@@ -87,7 +95,11 @@
 
   if (n_mapped < 0.5 * n_total) {
     warning(
-      "Only ", n_mapped, " / ", n_total, " transcripts (",
+      "Only ",
+      n_mapped,
+      " / ",
+      n_total,
+      " transcripts (",
       round(100 * n_mapped / n_total, 1),
       "%) could be mapped to genes. This may indicate an annotation mismatch.",
       call. = FALSE
@@ -189,22 +201,28 @@
   )
 }
 
+.adjust_dexseq_feature_pvalues <- function(results_df) {
+  results_df$padj <- stats::p.adjust(results_df$pvalue, method = "BH")
+  results_df
+}
+
 #' Run DTU using DRIMSeq
 #' @export
-run_dtu <- function(isoform_obj,
-                    condition,
-                    level,
-                    base,
-                    min_gene_expr = 10,
-                    min_transcript_expr = 0.05,
-                    min_samps_gene_expr = NULL,
-                    min_samps_feature_expr = 3,
-                    chunk_size = 5000,
-                    max_transcripts = 300,
-                    min_transcript_total = 10,
-                    bpparam = NULL,
-                    design = NULL) {
-
+run_dtu <- function(
+  isoform_obj,
+  condition,
+  level,
+  base,
+  min_gene_expr = 10,
+  min_transcript_expr = 0.05,
+  min_samps_gene_expr = NULL,
+  min_samps_feature_expr = 3,
+  chunk_size = 5000,
+  max_transcripts = 300,
+  min_transcript_total = 10,
+  bpparam = NULL,
+  design = NULL
+) {
   if (!requireNamespace("DRIMSeq", quietly = TRUE)) {
     stop("DRIMSeq is required for DTU analysis.")
   }
@@ -236,7 +254,10 @@ run_dtu <- function(isoform_obj,
   min_samps_feature_expr <- prep$min_samps_feature_expr
 
   unique_genes <- unique(gene_id_map)
-  gene_chunks <- split(unique_genes, ceiling(seq_along(unique_genes) / chunk_size))
+  gene_chunks <- split(
+    unique_genes,
+    ceiling(seq_along(unique_genes) / chunk_size)
+  )
 
   all_results <- list()
 
@@ -256,7 +277,11 @@ run_dtu <- function(isoform_obj,
     common_samples <- intersect(colnames(curr_counts), rownames(sample_data))
 
     if (length(common_samples) == 0) {
-      warning("Chunk ", i, ": No common samples between counts and metadata. Skipping.")
+      warning(
+        "Chunk ",
+        i,
+        ": No common samples between counts and metadata. Skipping."
+      )
       next
     }
 
@@ -294,21 +319,32 @@ run_dtu <- function(isoform_obj,
 
     if (nrow(samples_d) != ncol(counts_d)) {
       warning(
-        "Chunk ", i, ": Design matrix rows (", nrow(samples_d),
-        ") do not match number of samples (", ncol(counts_d), "). Skipping."
+        "Chunk ",
+        i,
+        ": Design matrix rows (",
+        nrow(samples_d),
+        ") do not match number of samples (",
+        ncol(counts_d),
+        "). Skipping."
       )
       next
     }
 
     design_info <- .validate_isoform_design(
-      design %||% stats::reformulate(condition), condition, samples_d
+      design %||% stats::reformulate(condition),
+      condition,
+      samples_d
     )
     model_matrix <- stats::model.matrix(
       design_info$formula,
       data = design_info$metadata
     )
     coef_name <- .design_contrast_coef(
-      design_info$formula, design_info$metadata, condition, level, base
+      design_info$formula,
+      design_info$metadata,
+      condition,
+      level,
+      base
     )
 
     res <- tryCatch(
@@ -361,30 +397,36 @@ run_dtu <- function(isoform_obj,
     match(dtu_results$gene_id, isoform_obj$gene_map$ensembl)
   ]
 
-  dtu_results$gene <- .coalesce_gene_label(dtu_results$gene_symbol, dtu_results$feature_id)
+  dtu_results$gene <- .coalesce_gene_label(
+    dtu_results$gene_symbol,
+    dtu_results$feature_id
+  )
 
   return(list(dtu_results = dtu_results))
 }
 
 #' Run DEXSeq-based DTU
 #' @export
-run_dexseq_dtu <- function(isoform_obj,
-                           condition,
-                           level,
-                           base,
-                           min_gene_expr = 10,
-                           min_transcript_expr = 0.05,
-                           min_samps_gene_expr = NULL,
-                           min_samps_feature_expr = 3,
-                           chunk_size = 2000,
-                           max_transcripts = 300,
-                           min_transcript_total = 10,
-                           keep_dxr = TRUE,
-                           bpparam = NULL,
-                           design = NULL) {
-
+run_dexseq_dtu <- function(
+  isoform_obj,
+  condition,
+  level,
+  base,
+  min_gene_expr = 10,
+  min_transcript_expr = 0.05,
+  min_samps_gene_expr = NULL,
+  min_samps_feature_expr = 3,
+  chunk_size = 2000,
+  max_transcripts = 300,
+  min_transcript_total = 10,
+  keep_dxr = TRUE,
+  bpparam = NULL,
+  design = NULL
+) {
   if (!requireNamespace("DEXSeq", quietly = TRUE)) {
-    stop("DEXSeq is required for run_dexseq_dtu(). Install with BiocManager::install('DEXSeq').")
+    stop(
+      "DEXSeq is required for run_dexseq_dtu(). Install with BiocManager::install('DEXSeq')."
+    )
   }
 
   bp_param <- if (is.null(bpparam)) BiocParallel::SerialParam() else bpparam
@@ -412,16 +454,23 @@ run_dexseq_dtu <- function(isoform_obj,
   sample_data <- prep$sample_data
 
   message(
-    "DEXSeq DTU: ", nrow(counts), " transcripts across ",
-    length(unique(gene_id_map)), " genes."
+    "DEXSeq DTU: ",
+    nrow(counts),
+    " transcripts across ",
+    length(unique(gene_id_map)),
+    " genes."
   )
 
   unique_genes <- unique(gene_id_map)
-  gene_chunks <- split(unique_genes, ceiling(seq_along(unique_genes) / chunk_size))
+  gene_chunks <- split(
+    unique_genes,
+    ceiling(seq_along(unique_genes) / chunk_size)
+  )
 
   sample_meta <- sample_data[colnames(counts), , drop = FALSE]
   dex_designs <- .dexseq_usage_designs(
-    prep$design, condition
+    prep$design,
+    condition
   )
 
   all_results <- list()
@@ -448,17 +497,28 @@ run_dexseq_dtu <- function(isoform_obj,
         )
       },
       error = function(e) {
-        message("  Chunk ", i, " DEXSeqDataSet construction failed: ", e$message)
+        message(
+          "  Chunk ",
+          i,
+          " DEXSeqDataSet construction failed: ",
+          e$message
+        )
         NULL
       }
     )
 
-    if (is.null(dxd)) next
+    if (is.null(dxd)) {
+      next
+    }
 
     res <- tryCatch(
       {
         dxd <- DEXSeq::estimateSizeFactors(dxd)
-        dxd <- DEXSeq::estimateDispersions(dxd, quiet = TRUE, BPPARAM = bp_param)
+        dxd <- DEXSeq::estimateDispersions(
+          dxd,
+          quiet = TRUE,
+          BPPARAM = bp_param
+        )
         dxd <- DEXSeq::testForDEU(
           dxd,
           fullModel = dex_designs$full,
@@ -466,7 +526,9 @@ run_dexseq_dtu <- function(isoform_obj,
           BPPARAM = bp_param
         )
         dxd <- DEXSeq::estimateExonFoldChanges(
-          dxd, fitExpToVar = condition, BPPARAM = bp_param
+          dxd,
+          fitExpToVar = condition,
+          BPPARAM = bp_param
         )
         DEXSeq::DEXSeqResults(dxd, independentFiltering = FALSE)
       },
@@ -503,22 +565,33 @@ run_dexseq_dtu <- function(isoform_obj,
     gc()
   }
 
-  if (length(all_results) == 0) stop("No DEXSeq DTU results were produced.")
+  if (length(all_results) == 0) {
+    stop("No DEXSeq DTU results were produced.")
+  }
 
   results_df <- do.call(rbind, all_results)
   rm(all_results)
   gc()
 
+  # Chunks are an implementation detail: adjust feature-level p-values over
+  # the full set of tested transcripts, not independently within each chunk.
+  results_df <- .adjust_dexseq_feature_pvalues(results_df)
   results_df$test_unit <- "transcript-feature rows; DEXSeq feature-level results"
 
   pval_by_gene <- split(results_df$pvalue, results_df$groupID)
 
-  gene_pvals <- vapply(pval_by_gene, function(p) {
-    p <- p[!is.na(p)]
-    if (length(p) == 0) return(NA_real_)
-    n <- length(p)
-    min(sort(p) * n / seq_len(n))
-  }, numeric(1))
+  gene_pvals <- vapply(
+    pval_by_gene,
+    function(p) {
+      p <- p[!is.na(p)]
+      if (length(p) == 0) {
+        return(NA_real_)
+      }
+      n <- length(p)
+      min(sort(p) * n / seq_len(n))
+    },
+    numeric(1)
+  )
 
   gene_qvals <- stats::p.adjust(gene_pvals, method = "BH")
 
@@ -532,13 +605,19 @@ run_dexseq_dtu <- function(isoform_obj,
     match(results_df$gene_id, isoform_obj$gene_map$ensembl)
   ]
 
-  results_df$gene <- .coalesce_gene_label(results_df$gene_symbol, results_df$transcript_id)
+  results_df$gene <- .coalesce_gene_label(
+    results_df$gene_symbol,
+    results_df$transcript_id
+  )
 
   n_sig_genes <- sum(gene_qvals < 0.05, na.rm = TRUE)
 
   message(
-    "DEXSeq DTU complete: ", length(unique(results_df$gene_id)), " genes tested, ",
-    n_sig_genes, " significant at gene q-value < 0.05."
+    "DEXSeq DTU complete: ",
+    length(unique(results_df$gene_id)),
+    " genes tested, ",
+    n_sig_genes,
+    " significant at gene q-value < 0.05."
   )
 
   list(results_df = results_df, dxr_list = dxr_list)
@@ -546,26 +625,42 @@ run_dexseq_dtu <- function(isoform_obj,
 
 #' DEXSeq-style transcript usage plot for a single gene
 #' @export
-plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL,
-                             splicing = FALSE, condition = "condition") {
+plot_dexseq_gene <- function(
+  dxr_list,
+  gene_id,
+  plot_dir,
+  gene_symbol = NULL,
+  splicing = FALSE,
+  condition = "condition"
+) {
   if (!requireNamespace("DEXSeq", quietly = TRUE)) {
     message("DEXSeq is required for plot_dexseq_gene(). Skipping.")
     return(invisible(NULL))
   }
 
   if (is.null(dxr_list) || length(dxr_list) == 0) {
-    message("No DEXSeqResults available (run run_dexseq_dtu() with keep_dxr = TRUE). Skipping.")
+    message(
+      "No DEXSeqResults available (run run_dexseq_dtu() with keep_dxr = TRUE). Skipping."
+    )
     return(invisible(NULL))
   }
 
-  label <- if (!is.null(gene_symbol) && nzchar(gene_symbol)) gene_symbol else gene_id
+  label <- if (!is.null(gene_symbol) && nzchar(gene_symbol)) {
+    gene_symbol
+  } else {
+    gene_id
+  }
   pdf_path <- file.path(plot_dir, paste0("DEXSeq_", label, ".pdf"))
 
   plotted <- FALSE
 
   for (dxr in dxr_list) {
-    if (is.null(dxr)) next
-    if (!(gene_id %in% dxr$groupID)) next
+    if (is.null(dxr)) {
+      next
+    }
+    if (!(gene_id %in% dxr$groupID)) {
+      next
+    }
 
     ok <- tryCatch(
       {
@@ -587,7 +682,9 @@ plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL,
         TRUE
       },
       error = function(e) {
-        if (grDevices::dev.cur() > 1) grDevices::dev.off()
+        if (grDevices::dev.cur() > 1) {
+          grDevices::dev.off()
+        }
         message("   -> plotDEXSeq() failed for ", label, ": ", e$message)
         FALSE
       }
@@ -600,7 +697,11 @@ plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL,
   }
 
   if (!plotted) {
-    message("   -> Gene '", label, "' not found in DEXSeq results (or not testable). Skipping plot.")
+    message(
+      "   -> Gene '",
+      label,
+      "' not found in DEXSeq results (or not testable). Skipping plot."
+    )
     return(invisible(NULL))
   }
 
@@ -608,4 +709,3 @@ plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL,
 
   invisible(pdf_path)
 }
-

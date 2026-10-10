@@ -9,19 +9,32 @@
 # Shared persistent-environment-variable file.
 .ISOFORM_ENV_FILE <- "$HOME/.isoform_tools_env.sh"
 
-#' Double-quote a shell argument while preserving `$VAR`-style expansion
-#'
-#' Unlike shQuote(x, type = "sh"), which single-quotes and freezes `$HOME`,
-#' this wraps x in double quotes and escapes only characters special inside
-#' double quotes, so `$HOME/path` still expands in the generated shell script.
+#' Quote a literal shell argument, preventing variable and command expansion
 #' @keywords internal
 .dq <- function(x) {
   x <- as.character(x)
   x <- gsub("\\", "\\\\", x, fixed = TRUE)
   x <- gsub('"', '\\\"', x, fixed = TRUE)
   x <- gsub('`', '\\`', x, fixed = TRUE)
+  x <- gsub("$", "\\$", x, fixed = TRUE)
 
   sprintf('"%s"', x)
+}
+
+.dq_home <- function(x) {
+  x <- as.character(x)
+  if (
+    length(x) != 1L ||
+      !(identical(x, "$HOME") || startsWith(x, "$HOME/"))
+  ) {
+    return(.dq(x))
+  }
+  suffix <- substring(x, 6L)
+  if (startsWith(suffix, "/")) {
+    suffix <- substring(suffix, 2L)
+  }
+  # Split the intentional HOME expansion from the literal path suffix.
+  paste0('"${HOME}"', if (nzchar(suffix)) paste0("/", .dq(suffix)) else "")
 }
 
 #' Resolve where WSL command logs are written when a caller doesn't specify
@@ -41,25 +54,31 @@
 #' Appends or replaces an `export VAR="value"` line in the dedicated env file
 #' sourced by `.wsl_exec_script()` on every invocation.
 #' @keywords internal
-.wsl_write_env_var <- function(var, value, wsl_distro = "Ubuntu-22.04", use_wsl = TRUE, log_dir = NULL) {
+.wsl_write_env_var <- function(
+  var,
+  value,
+  wsl_distro = "Ubuntu-22.04",
+  use_wsl = TRUE,
+  log_dir = NULL
+) {
   export_line <- sprintf("export %s=%s", var, .dq(value))
   tmp_env <- paste0(.ISOFORM_ENV_FILE, ".tmp")
 
   body <- c(
-    sprintf("touch %s", .dq(.ISOFORM_ENV_FILE)),
+    sprintf("touch %s", .dq_home(.ISOFORM_ENV_FILE)),
     sprintf(
       "(grep -v %s %s || true) > %s",
       .dq(paste0("^export ", var, "=")),
-      .dq(.ISOFORM_ENV_FILE),
-      .dq(tmp_env)
+      .dq_home(.ISOFORM_ENV_FILE),
+      .dq_home(tmp_env)
     ),
     paste0(
       "printf '%s\\n' ",
       shQuote(export_line, type = "sh"),
       " >> ",
-      .dq(tmp_env)
+      .dq_home(tmp_env)
     ),
-    sprintf("mv %s %s", .dq(tmp_env), .dq(.ISOFORM_ENV_FILE))
+    sprintf("mv %s %s", .dq_home(tmp_env), .dq_home(.ISOFORM_ENV_FILE))
   )
 
   status <- .wsl_exec_script(
@@ -74,10 +93,19 @@
   ok <- isTRUE(status == 0L)
 
   if (ok) {
-    message("  -> Persisted ", var, " for future predictor runs (", .ISOFORM_ENV_FILE, ")")
+    message(
+      "  -> Persisted ",
+      var,
+      " for future predictor runs (",
+      .ISOFORM_ENV_FILE,
+      ")"
+    )
   } else {
     message(
-      "  ! Could not persist ", var, " to ", .ISOFORM_ENV_FILE,
+      "  ! Could not persist ",
+      var,
+      " to ",
+      .ISOFORM_ENV_FILE,
       " (non-fatal; export it manually inside the execution environment if predictors can't find it)"
     )
   }
@@ -87,7 +115,11 @@
 
 #' Best-effort discovery of a conda profile script (conda.sh)
 #' @keywords internal
-.find_conda_sh <- function(wsl_distro = "Ubuntu-22.04", use_wsl = TRUE, log_dir = NULL) {
+.find_conda_sh <- function(
+  wsl_distro = "Ubuntu-22.04",
+  use_wsl = TRUE,
+  log_dir = NULL
+) {
   body <- c(
     'base="$(conda info --base 2>/dev/null || true)"',
     'if [ -n "$base" ] && [ -f "$base/etc/profile.d/conda.sh" ]; then',
@@ -127,8 +159,12 @@
 #' Convert a Windows file path to a WSL-compatible Unix path
 #' @keywords internal
 .to_wsl_path <- function(win_path, distro = "Ubuntu-22.04") {
-  if (.Platform$OS.type != "windows") return(win_path)
-  if (is.null(win_path) || !nzchar(trimws(as.character(win_path)))) return(win_path)
+  if (.Platform$OS.type != "windows") {
+    return(win_path)
+  }
+  if (is.null(win_path) || !nzchar(trimws(as.character(win_path)))) {
+    return(win_path)
+  }
 
   p <- normalizePath(win_path, winslash = "/", mustWork = FALSE)
 
@@ -146,7 +182,9 @@
   )
 
   r <- trimws(r[nzchar(trimws(r))])
-  if (length(r) > 0) return(r[1])
+  if (length(r) > 0) {
+    return(r[1])
+  }
 
   if (grepl("^[A-Za-z]:/", p)) {
     return(paste0("/mnt/", tolower(substr(p, 1, 1)), substring(p, 3)))
@@ -157,7 +195,13 @@
 
 #' Write a WSL command execution to log
 #' @keywords internal
-.log_wsl_command <- function(cmd, exit_code, stdout = NULL, stderr = NULL, log_dir) {
+.log_wsl_command <- function(
+  cmd,
+  exit_code,
+  stdout = NULL,
+  stderr = NULL,
+  log_dir
+) {
   if (!dir.exists(log_dir)) {
     dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
   }
@@ -198,30 +242,39 @@
 #' "not found") printed nothing but an exit code: the one piece of text that
 #' would explain *why* was thrown away.
 #' @keywords internal
-.wsl_exec_script <- function(bash_body,
-                             wsl_distro = "Ubuntu-22.04",
-                             use_wsl = TRUE,
-                             conda_sh = NULL,
-                             conda_env = "isoform_tools",
-                             intern = FALSE,
-                             ignore_stderr = TRUE,
-                             log_dir = NULL,
-                             verbose = TRUE) {
-
-  effective_log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
+.wsl_exec_script <- function(
+  bash_body,
+  wsl_distro = "Ubuntu-22.04",
+  use_wsl = TRUE,
+  conda_sh = NULL,
+  conda_env = "isoform_tools",
+  intern = FALSE,
+  ignore_stderr = TRUE,
+  log_dir = NULL,
+  verbose = TRUE
+) {
+  effective_log_dir <- if (!is.null(log_dir)) {
+    log_dir
+  } else {
+    .default_wsl_log_dir()
+  }
   cmd_preview <- paste(bash_body, collapse = "; ")
 
   if (isTRUE(verbose)) {
     message(
       "  [wsl] $ ",
-      if (nchar(cmd_preview) > 200) paste0(substr(cmd_preview, 1, 200), " ...") else cmd_preview
+      if (nchar(cmd_preview) > 200) {
+        paste0(substr(cmd_preview, 1, 200), " ...")
+      } else {
+        cmd_preview
+      }
     )
   }
 
   env_file_source <- sprintf(
     '[ -f %s ] && . %s 2>/dev/null || true',
-    .dq(.ISOFORM_ENV_FILE),
-    .dq(.ISOFORM_ENV_FILE)
+    .dq_home(.ISOFORM_ENV_FILE),
+    .dq_home(.ISOFORM_ENV_FILE)
   )
 
   activate <- env_file_source
@@ -230,7 +283,10 @@
     activate <- c(
       activate,
       sprintf('. %s 2>/dev/null || true', .dq(conda_sh)),
-      sprintf("conda activate %s 2>/dev/null || true", shQuote(conda_env, type = "sh"))
+      sprintf(
+        "conda activate %s 2>/dev/null || true",
+        shQuote(conda_env, type = "sh")
+      )
     )
   }
 
@@ -254,7 +310,9 @@
       {
         o <- suppressWarnings(system2(cmd, args, stdout = TRUE, stderr = TRUE))
         st <- attr(o, "status")
-        if (is.null(st)) st <- 0L
+        if (is.null(st)) {
+          st <- 0L
+        }
         list(out = o, status = as.integer(st))
       },
       error = function(e) {
@@ -310,7 +368,11 @@
     run_status <- 127L
   } else if (run_status != 0L) {
     if (!isTRUE(ignore_stderr)) {
-      warning("WSL/shell command exited with status ", run_status, call. = FALSE)
+      warning(
+        "WSL/shell command exited with status ",
+        run_status,
+        call. = FALSE
+      )
     }
 
     if (isTRUE(verbose) && length(out) > 0) {
@@ -319,8 +381,11 @@
 
       if (length(out) > 30) {
         message(
-          "  ... (", length(out) - 30, " more lines in ",
-          file.path(effective_log_dir, "wsl_commands.log"), ")"
+          "  ... (",
+          length(out) - 30,
+          " more lines in ",
+          file.path(effective_log_dir, "wsl_commands.log"),
+          ")"
         )
       }
     }
@@ -349,14 +414,19 @@
 
 #' Check whether a command-line tool is accessible in the execution environment
 #' @keywords internal
-.wsl_tool_exists <- function(tool_name,
-                             wsl_distro = "Ubuntu-22.04",
-                             use_wsl = TRUE,
-                             conda_sh = NULL,
-                             conda_env = "isoform_tools",
-                             log_dir = NULL) {
+.wsl_tool_exists <- function(
+  tool_name,
+  wsl_distro = "Ubuntu-22.04",
+  use_wsl = TRUE,
+  conda_sh = NULL,
+  conda_env = "isoform_tools",
+  log_dir = NULL
+) {
   status <- .wsl_exec_script(
-    bash_body = sprintf("command -v %s >/dev/null 2>&1", shQuote(tool_name, type = "sh")),
+    bash_body = sprintf(
+      "command -v %s >/dev/null 2>&1",
+      shQuote(tool_name, type = "sh")
+    ),
     wsl_distro = wsl_distro,
     use_wsl = use_wsl,
     conda_sh = conda_sh,
@@ -368,4 +438,3 @@
 
   isTRUE(status == 0L)
 }
-

@@ -3,13 +3,21 @@
 
 #' Install SignalP from a Windows directory into WSL
 #' @export
-install_signalp_from_windows <- function(windows_signalp_dir,
-                                         distro = "Ubuntu-22.04",
-                                         install_path = "/usr/local/signalp",
-                                         log_dir = NULL) {
-
-  effective_log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
-  message("Logging every command to: ", file.path(effective_log_dir, "wsl_commands.log"))
+install_signalp_from_windows <- function(
+  windows_signalp_dir,
+  distro = "Ubuntu-22.04",
+  install_path = "/usr/local/signalp",
+  log_dir = NULL
+) {
+  effective_log_dir <- if (!is.null(log_dir)) {
+    log_dir
+  } else {
+    .default_wsl_log_dir()
+  }
+  message(
+    "Logging every command to: ",
+    file.path(effective_log_dir, "wsl_commands.log")
+  )
 
   if (!check_wsl(distro)) {
     stop("WSL with distro ", distro, " not available.")
@@ -47,7 +55,13 @@ install_signalp_from_windows <- function(windows_signalp_dir,
     wsl_windows_path <- wsl_windows_path[1]
   }
 
-  message("Copying SignalP from Windows (", wsl_windows_path, ") to WSL (", install_path, ")...")
+  message(
+    "Copying SignalP from Windows (",
+    wsl_windows_path,
+    ") to WSL (",
+    install_path,
+    ")..."
+  )
 
   mkdir_status <- .wsl_exec_script(
     sprintf("sudo mkdir -p %s", .dq(install_path)),
@@ -57,7 +71,13 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   )
 
   if (!isTRUE(mkdir_status == 0L)) {
-    message("Failed to create ", install_path, " (exit code ", mkdir_status, "). Check sudo permissions.")
+    message(
+      "Failed to create ",
+      install_path,
+      " (exit code ",
+      mkdir_status,
+      "). Check sudo permissions."
+    )
     return(FALSE)
   }
 
@@ -69,7 +89,11 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   )
 
   if (!isTRUE(cp_status == 0L)) {
-    message("Failed to copy SignalP files (exit code ", cp_status, "). Check permissions and path.")
+    message(
+      "Failed to copy SignalP files (exit code ",
+      cp_status,
+      "). Check permissions and path."
+    )
     return(FALSE)
   }
 
@@ -91,8 +115,12 @@ install_signalp_from_windows <- function(windows_signalp_dir,
 
   if (!isTRUE(chmod_status == 0L) || !isTRUE(ln_status == 0L)) {
     message(
-      "  ! Warning: chmod/symlink step reported a non-zero exit code (chmod=", chmod_status,
-      ", ln=", ln_status, "). signalp may not be directly callable as `signalp`; check ", bin_path
+      "  ! Warning: chmod/symlink step reported a non-zero exit code (chmod=",
+      chmod_status,
+      ", ln=",
+      ln_status,
+      "). signalp may not be directly callable as `signalp`; check ",
+      bin_path
     )
   }
 
@@ -106,16 +134,27 @@ install_signalp_from_windows <- function(windows_signalp_dir,
   )
 
   if (isTRUE(data_dir_exists == 0L)) {
-    .wsl_write_env_var("SIGNALP_DIR", data_dir, wsl_distro = distro, use_wsl = TRUE, log_dir = effective_log_dir)
+    .wsl_write_env_var(
+      "SIGNALP_DIR",
+      data_dir,
+      wsl_distro = distro,
+      use_wsl = TRUE,
+      log_dir = effective_log_dir
+    )
   } else {
     message(
-      "  ! No 'data' subdirectory found under ", install_path,
+      "  ! No 'data' subdirectory found under ",
+      install_path,
       " -- SIGNALP_DIR was not set. If this SignalP version stores models elsewhere, ",
       "set the appropriate env var manually via .wsl_write_env_var()."
     )
   }
 
-  message("SignalP installed to ", install_path, " and linked to /usr/local/bin/signalp")
+  message(
+    "SignalP installed to ",
+    install_path,
+    " and linked to /usr/local/bin/signalp"
+  )
 
   TRUE
 }
@@ -143,13 +182,18 @@ install_signalp_from_windows <- function(windows_signalp_dir,
 #' @param log_dir Directory for `wsl_commands.log`; defaults per
 #'   `.default_wsl_log_dir()`.
 #' @export
-install_signalp_from_tarball <- function(tarball_path = NULL,
-                                         distro = "Ubuntu-22.04",
-                                         conda_env = "isoform_tools",
-                                         log_dir = NULL) {
-
+install_signalp_from_tarball <- function(
+  tarball_path = NULL,
+  distro = "Ubuntu-22.04",
+  conda_env = "isoform_tools",
+  log_dir = NULL
+) {
   if (is.null(tarball_path)) {
-    tarball_path <- system.file("extdata", "signalp-6.0i.fast.tar.gz", package = "ExpressOM")
+    tarball_path <- system.file(
+      "extdata",
+      "signalp-6.0i.fast.tar.gz",
+      package = "ExpressOM"
+    )
 
     if (!nzchar(tarball_path) || !file.exists(tarball_path)) {
       tarball_path <- "inst/extdata/signalp-6.0i.fast.tar.gz"
@@ -158,14 +202,22 @@ install_signalp_from_tarball <- function(tarball_path = NULL,
 
   if (!file.exists(tarball_path)) {
     stop(
-      "SignalP archive not found: ", tarball_path,
+      "SignalP archive not found: ",
+      tarball_path,
       ". Pass tarball_path = ... pointing at your downloaded ",
       "signalp-6.0*.tar.gz (from https://services.healthtech.dtu.dk/services/SignalP-6.0/)."
     )
   }
 
-  effective_log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
-  message("Logging every command to: ", file.path(effective_log_dir, "wsl_commands.log"))
+  effective_log_dir <- if (!is.null(log_dir)) {
+    log_dir
+  } else {
+    .default_wsl_log_dir()
+  }
+  message(
+    "Logging every command to: ",
+    file.path(effective_log_dir, "wsl_commands.log")
+  )
 
   if (!check_wsl(distro)) {
     stop("WSL with distro ", distro, " not available.")
@@ -176,7 +228,11 @@ install_signalp_from_tarball <- function(tarball_path = NULL,
 
   message("Installing SignalP 6.0 from archive: ", tarball_path)
 
-  conda_sh <- .find_conda_sh(wsl_distro = distro, use_wsl = TRUE, log_dir = effective_log_dir)
+  conda_sh <- .find_conda_sh(
+    wsl_distro = distro,
+    use_wsl = TRUE,
+    log_dir = effective_log_dir
+  )
 
   if (is.null(conda_sh)) {
     stop(
@@ -200,7 +256,9 @@ install_signalp_from_tarball <- function(tarball_path = NULL,
 
   if (!isTRUE(env_check == 0L)) {
     stop(
-      "Conda environment '", conda_env, "' not found. Run install_wsl_isoform_tools() ",
+      "Conda environment '",
+      conda_env,
+      "' not found. Run install_wsl_isoform_tools() ",
       "(or create it manually) before installing SignalP into it."
     )
   }
@@ -221,7 +279,13 @@ install_signalp_from_tarball <- function(tarball_path = NULL,
   )
 
   if (!isTRUE(extract_status == 0L)) {
-    stop("Failed to extract ", tarball_path, " inside WSL (exit code ", extract_status, ").")
+    stop(
+      "Failed to extract ",
+      tarball_path,
+      " inside WSL (exit code ",
+      extract_status,
+      ")."
+    )
   }
 
   pkg_dir_probe <- .wsl_exec_script(
@@ -242,13 +306,19 @@ install_signalp_from_tarball <- function(tarball_path = NULL,
     stop(
       "Could not find a 'signalp-6-package' directory inside the extracted archive. ",
       "The archive layout may differ from the expected 'signalp6_fast/signalp-6-package/' ",
-      "structure -- inspect ", extract_dir, " inside WSL manually."
+      "structure -- inspect ",
+      extract_dir,
+      " inside WSL manually."
     )
   }
 
   pkg_dir <- pkg_dir[1]
   message("  Found package directory: ", pkg_dir)
-  message("  Installing signalp Python package into conda env '", conda_env, "'...")
+  message(
+    "  Installing signalp Python package into conda env '",
+    conda_env,
+    "'..."
+  )
 
   pip_status <- .wsl_exec_script(
     bash_body = sprintf(
@@ -264,7 +334,8 @@ install_signalp_from_tarball <- function(tarball_path = NULL,
 
   if (!isTRUE(pip_status == 0L)) {
     stop(
-      "pip install of the signalp package failed (exit code ", pip_status,
+      "pip install of the signalp package failed (exit code ",
+      pip_status,
       "). See wsl_commands.log for the full pip output."
     )
   }
@@ -310,9 +381,14 @@ install_signalp_from_tarball <- function(tarball_path = NULL,
 
   if (!isTRUE(copy_status == 0L)) {
     message(
-      "  ! Failed to copy model weight files into ", model_weights_dir, " (exit code ", copy_status,
+      "  ! Failed to copy model weight files into ",
+      model_weights_dir,
+      " (exit code ",
+      copy_status,
       "). signalp6 will likely fail at runtime with a missing-weights error; copy them manually, ",
-      "e.g. from ", pkg_dir, "/models/ inside WSL."
+      "e.g. from ",
+      pkg_dir,
+      "/models/ inside WSL."
     )
   } else {
     message("  Model weights copied to: ", model_weights_dir)
@@ -332,11 +408,13 @@ install_signalp_from_tarball <- function(tarball_path = NULL,
   if (isTRUE(verify_status == 0L)) {
     message(
       "SignalP 6.0 installed successfully. `signalp6` is available inside conda env '",
-      conda_env, "'. Run debug_wsl() to confirm it is now detected."
+      conda_env,
+      "'. Run debug_wsl() to confirm it is now detected."
     )
   } else {
     message(
-      "  ! 'signalp6' command was not found on PATH inside conda env '", conda_env,
+      "  ! 'signalp6' command was not found on PATH inside conda env '",
+      conda_env,
       "' after installation. The pip install reported success, but check wsl_commands.log ",
       "for details -- you may need to re-activate the conda env or check for a console-script ",
       "entry-point issue."
@@ -356,19 +434,21 @@ install_signalp_from_tarball <- function(tarball_path = NULL,
 
 #' Install required external tools inside WSL using mamba or apt/pip
 #' @export
-install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
-                                      use_mamba = TRUE,
-                                      install_databases = TRUE,
-                                      windows_signalp_dir = NULL,
-                                      log_dir = NULL) {
-
+install_wsl_isoform_tools <- function(
+  distro = "Ubuntu-22.04",
+  use_mamba = TRUE,
+  install_databases = TRUE,
+  windows_signalp_dir = NULL,
+  log_dir = NULL
+) {
   if (!check_wsl(distro)) {
     stop("WSL with distro ", distro, " not available.")
   }
 
   log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
   message(
-    "Logging every command in real time to: ", file.path(log_dir, "wsl_commands.log"),
+    "Logging every command in real time to: ",
+    file.path(log_dir, "wsl_commands.log"),
     " (tail -f that file from another terminal to watch progress as it happens)"
   )
 
@@ -377,15 +457,20 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
   .run <- function(cmd, conda = FALSE) {
     body <- if (conda) {
       sprintf(
-        'bash -c "source %s 2>/dev/null && conda activate isoform_tools && %s"',
-        .dq(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh"),
+        '. %s 2>/dev/null && conda activate isoform_tools && %s',
+        .dq_home(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh"),
         cmd
       )
     } else {
       cmd
     }
 
-    .wsl_exec_script(body, wsl_distro = distro, use_wsl = TRUE, log_dir = log_dir)
+    .wsl_exec_script(
+      body,
+      wsl_distro = distro,
+      use_wsl = TRUE,
+      log_dir = log_dir
+    )
   }
 
   .run_intern <- function(cmd) {
@@ -451,8 +536,8 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
     }
 
     env_check <- .run_intern(sprintf(
-      'bash -c "source %s 2>/dev/null && conda env list | grep isoform_tools || true"',
-      .dq(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh")
+      '. %s 2>/dev/null && conda env list | grep isoform_tools || true',
+      .dq_home(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh")
     ))
 
     env_check <- trimws(env_check[nzchar(trimws(env_check))])
@@ -461,14 +546,15 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
       message("Creating conda environment 'isoform_tools'...")
 
       create_status <- .run(sprintf(
-        'bash -c "source %s && conda activate base && mamba create -y -n isoform_tools python=3.9"',
-        .dq(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh")
+        '. %s && conda activate base && mamba create -y -n isoform_tools python=3.9',
+        .dq_home(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh")
       ))
 
       if (!isTRUE(create_status == 0L)) {
         message(
           "  \u2717 Failed to create conda environment 'isoform_tools' (exit code ",
-          create_status, "). Aborting -- fix this before tool installs can proceed."
+          create_status,
+          "). Aborting -- fix this before tool installs can proceed."
         )
         return(invisible(FALSE))
       }
@@ -490,7 +576,10 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
         message("  \u2713 ", icmd)
       } else {
         message(
-          "  \u2717 FAILED: ", icmd, " (exit code ", status,
+          "  \u2717 FAILED: ",
+          icmd,
+          " (exit code ",
+          status,
           "). Try running this manually inside the 'isoform_tools' conda env to see the full error."
         )
       }
@@ -498,7 +587,11 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
 
     if (!is.null(windows_signalp_dir)) {
       message("Installing SignalP from Windows directory...")
-      install_signalp_from_windows(windows_signalp_dir, distro, log_dir = log_dir)
+      install_signalp_from_windows(
+        windows_signalp_dir,
+        distro,
+        log_dir = log_dir
+      )
     } else {
       message(
         "SignalP was not installed (no conda/apt package exists for it -- academic license). ",
@@ -511,13 +604,19 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
       )
     }
 
-    message("Tool install step complete for conda environment 'isoform_tools'. Run debug_wsl() to verify.")
+    message(
+      "Tool install step complete for conda environment 'isoform_tools'. Run debug_wsl() to verify."
+    )
   } else {
     message("Installing tools using apt/pip (legacy method)...")
 
     apt_ok <- TRUE
 
-    for (cmd in c("sudo apt update", "sudo apt install -y python3-pip hmmer", "pip3 install cpat")) {
+    for (cmd in c(
+      "sudo apt update",
+      "sudo apt install -y python3-pip hmmer",
+      "pip3 install cpat"
+    )) {
       status <- .run(cmd)
 
       if (isTRUE(status == 0L)) {
@@ -529,7 +628,9 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
     }
 
     if (!apt_ok) {
-      message("  ! One or more base package installs failed -- CPAT/hmmscan may not work until resolved.")
+      message(
+        "  ! One or more base package installs failed -- CPAT/hmmscan may not work until resolved."
+      )
     }
 
     message("Resolving latest InterProScan release...")
@@ -552,15 +653,28 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
     } else {
       message("  Found: ", iprscan_url[1])
 
-      dl_status <- .run(sprintf("wget -q %s -O /tmp/interproscan.tar.gz", shQuote(iprscan_url[1], type = "sh")))
+      dl_status <- .run(sprintf(
+        "wget -q %s -O /tmp/interproscan.tar.gz",
+        shQuote(iprscan_url[1], type = "sh")
+      ))
 
       if (!isTRUE(dl_status == 0L)) {
-        message("  \u2717 Download failed (exit code ", dl_status, "). Skipping InterProScan (hmmscan fallback still available).")
+        message(
+          "  \u2717 Download failed (exit code ",
+          dl_status,
+          "). Skipping InterProScan (hmmscan fallback still available)."
+        )
       } else {
-        extract_status <- .run("mkdir -p $HOME/interproscan && tar -xzf /tmp/interproscan.tar.gz -C $HOME/interproscan --strip-components=1")
+        extract_status <- .run(
+          "mkdir -p $HOME/interproscan && tar -xzf /tmp/interproscan.tar.gz -C $HOME/interproscan --strip-components=1"
+        )
 
         if (!isTRUE(extract_status == 0L)) {
-          message("  \u2717 Extraction failed (exit code ", extract_status, "). Skipping InterProScan.")
+          message(
+            "  \u2717 Extraction failed (exit code ",
+            extract_status,
+            "). Skipping InterProScan."
+          )
         } else {
           java_ok <- .run("command -v java >/dev/null 2>&1")
 
@@ -570,19 +684,30 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
               "then re-run `python3 $HOME/interproscan/initial_setup.py` manually."
             )
           } else {
-            setup_status <- .run("cd $HOME/interproscan && python3 initial_setup.py")
+            setup_status <- .run(
+              "cd $HOME/interproscan && python3 initial_setup.py"
+            )
 
             if (isTRUE(setup_status == 0L)) {
-              link_status <- .run("sudo ln -sf $HOME/interproscan/interproscan.sh /usr/local/bin/interproscan.sh")
+              link_status <- .run(
+                "sudo ln -sf $HOME/interproscan/interproscan.sh /usr/local/bin/interproscan.sh"
+              )
 
               if (isTRUE(link_status == 0L)) {
-                message("  \u2713 InterProScan installed and linked to /usr/local/bin/interproscan.sh")
+                message(
+                  "  \u2713 InterProScan installed and linked to /usr/local/bin/interproscan.sh"
+                )
               } else {
-                message("  ! InterProScan set up but symlink step failed (exit code ", link_status, ")")
+                message(
+                  "  ! InterProScan set up but symlink step failed (exit code ",
+                  link_status,
+                  ")"
+                )
               }
             } else {
               message(
-                "  \u2717 initial_setup.py failed (exit code ", setup_status,
+                "  \u2717 initial_setup.py failed (exit code ",
+                setup_status,
                 "). InterProScan install incomplete; hmmscan fallback still available."
               )
             }
@@ -593,7 +718,11 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
 
     if (!is.null(windows_signalp_dir)) {
       message("Installing SignalP from Windows directory...")
-      install_signalp_from_windows(windows_signalp_dir, distro, log_dir = log_dir)
+      install_signalp_from_windows(
+        windows_signalp_dir,
+        distro,
+        log_dir = log_dir
+      )
     } else {
       message(
         "SignalP was not installed (no apt package exists for it -- academic license). ",
@@ -610,11 +739,16 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
   }
 
   if (install_databases) {
-    install_isoform_databases(distro = distro, use_wsl = TRUE, log_dir = log_dir)
+    install_isoform_databases(
+      distro = distro,
+      use_wsl = TRUE,
+      log_dir = log_dir
+    )
   }
 
   message(
-    "Installation complete. Run debug_wsl(distro = ", shQuote(distro, type = "sh"),
+    "Installation complete. Run debug_wsl(distro = ",
+    shQuote(distro, type = "sh"),
     ", use_wsl = TRUE) to verify every tool and database is now detected."
   )
 
@@ -623,21 +757,27 @@ install_wsl_isoform_tools <- function(distro = "Ubuntu-22.04",
 
 #' Install required databases for CPAT, Pfam, and SignalP
 #' @export
-install_isoform_databases <- function(distro = "Ubuntu-22.04",
-                                      use_wsl = (.Platform$OS.type == "windows"),
-                                      cpat_data_dir = NULL,
-                                      pfam_db_dir = NULL,
-                                      conda_env = "isoform_tools",
-                                      log_dir = NULL) {
-
+install_isoform_databases <- function(
+  distro = "Ubuntu-22.04",
+  use_wsl = (.Platform$OS.type == "windows"),
+  cpat_data_dir = NULL,
+  pfam_db_dir = NULL,
+  conda_env = "isoform_tools",
+  log_dir = NULL
+) {
   via_wsl <- use_wsl && .Platform$OS.type == "windows"
   log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
   message(
-    "Logging every command in real time to: ", file.path(log_dir, "wsl_commands.log"),
+    "Logging every command in real time to: ",
+    file.path(log_dir, "wsl_commands.log"),
     " (tail -f that file from another terminal to watch progress as it happens)"
   )
 
-  conda_sh <- .find_conda_sh(wsl_distro = distro, use_wsl = via_wsl, log_dir = log_dir)
+  conda_sh <- .find_conda_sh(
+    wsl_distro = distro,
+    use_wsl = via_wsl,
+    log_dir = log_dir
+  )
 
   if (is.null(conda_sh)) {
     message(
@@ -662,25 +802,42 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
 
   message("Installing CPAT hexamer and logit models...")
 
-  find_cpat <- .run("command -v cpat || command -v run_cpat.py || true", intern = TRUE)
+  find_cpat <- .run(
+    "command -v cpat || command -v run_cpat.py || true",
+    intern = TRUE
+  )
   find_cpat <- trimws(find_cpat[nzchar(trimws(find_cpat))])
 
   if (length(find_cpat) > 0) {
     cpat_base <- dirname(dirname(find_cpat[1]))
     cpat_data_dir <- file.path(cpat_base, "data")
-    message("  CPAT found at: ", find_cpat[1], ". Installing data to: ", cpat_data_dir)
+    message(
+      "  CPAT found at: ",
+      find_cpat[1],
+      ". Installing data to: ",
+      cpat_data_dir
+    )
   } else {
-    if (is.null(cpat_data_dir)) cpat_data_dir <- "$HOME/.cpat_data"
+    if (is.null(cpat_data_dir)) {
+      cpat_data_dir <- "$HOME/.cpat_data"
+    }
     message(
       "  CPAT not found on PATH/conda env (this is OK if you haven't installed it yet). ",
-      "Installing data to: ", cpat_data_dir
+      "Installing data to: ",
+      cpat_data_dir
     )
   }
 
   mkdir_status <- .run(sprintf("mkdir -p %s", .dq(cpat_data_dir)))
 
   if (!isTRUE(mkdir_status == 0L)) {
-    message("  ! Could not create ", cpat_data_dir, " (exit code ", mkdir_status, ") -- check permissions.")
+    message(
+      "  ! Could not create ",
+      cpat_data_dir,
+      " (exit code ",
+      mkdir_status,
+      ") -- check permissions."
+    )
   }
 
   # Each entry is one target file with an ordered list of source URLs to try.
@@ -696,20 +853,32 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
   # better headers won't help and a different host is the only fix. No
   # equivalent second mirror was found for the Mouse files.
   cpat_targets <- list(
-    list(fname = "Human_Hexamer.tsv", urls = c(
-      "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_Hexamer.tsv/download",
-      "https://zenodo.org/record/5076056/files/Human_Hexamer.tsv"
-    )),
-    list(fname = "Mouse_Hexamer.tsv", urls = c(
-      "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_Hexamer.tsv/download"
-    )),
-    list(fname = "Human_logitModel.RData", urls = c(
-      "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_logitModel.RData/download",
-      "https://zenodo.org/record/5076056/files/Human_logitModel.RData.gz"
-    )),
-    list(fname = "Mouse_logitModel.RData", urls = c(
-      "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_logitModel.RData/download"
-    ))
+    list(
+      fname = "Human_Hexamer.tsv",
+      urls = c(
+        "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_Hexamer.tsv/download",
+        "https://zenodo.org/record/5076056/files/Human_Hexamer.tsv"
+      )
+    ),
+    list(
+      fname = "Mouse_Hexamer.tsv",
+      urls = c(
+        "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_Hexamer.tsv/download"
+      )
+    ),
+    list(
+      fname = "Human_logitModel.RData",
+      urls = c(
+        "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Human_logitModel.RData/download",
+        "https://zenodo.org/record/5076056/files/Human_logitModel.RData.gz"
+      )
+    ),
+    list(
+      fname = "Mouse_logitModel.RData",
+      urls = c(
+        "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/Mouse_logitModel.RData/download"
+      )
+    )
   )
 
   .browser_wget <- function(url, dest) {
@@ -755,11 +924,21 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
 
       cp_status <- .run(sprintf("cp %s %s", .dq(extdata_w), .dq(dest)))
 
-      if (isTRUE(cp_status == 0L) && isTRUE(.run(sprintf(
-        'sz=$(wc -c < %1$s 2>/dev/null || echo 0); [ "$sz" -ge 100 ] && ! head -c 512 %1$s | grep -qi "<!doctype html\\|<html[ >]"',
-        .dq(dest)
-      )) == 0L)) {
-        message("  \u2713 Installed: ", fname, " (from ExpressOM's inst/extdata)")
+      if (
+        isTRUE(cp_status == 0L) &&
+          isTRUE(
+            .run(sprintf(
+              'sz=$(wc -c < %1$s 2>/dev/null || echo 0); [ "$sz" -ge 100 ] && ! head -c 512 %1$s | grep -qi "<!doctype html\\|<html[ >]"',
+              .dq(dest)
+            )) ==
+              0L
+          )
+      ) {
+        message(
+          "  \u2713 Installed: ",
+          fname,
+          " (from ExpressOM's inst/extdata)"
+        )
         downloaded <- TRUE
       }
     }
@@ -775,13 +954,23 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
       # saved file is plausible data (not tiny, not an HTML page) before
       # trusting it -- this is what was letting an HTML page silently take
       # the place of Human_Hexamer.tsv and crash CPAT later.
-      content_ok <- isTRUE(status == 0L) && isTRUE(.run(sprintf(
-        'sz=$(wc -c < %1$s 2>/dev/null || echo 0); [ "$sz" -ge 100 ] && ! head -c 512 %1$s | grep -qi "<!doctype html\\|<html[ >]"',
-        .dq(dest)
-      )) == 0L)
+      content_ok <- isTRUE(status == 0L) &&
+        isTRUE(
+          .run(sprintf(
+            'sz=$(wc -c < %1$s 2>/dev/null || echo 0); [ "$sz" -ge 100 ] && ! head -c 512 %1$s | grep -qi "<!doctype html\\|<html[ >]"',
+            .dq(dest)
+          )) ==
+            0L
+        )
 
       if (content_ok) {
-        message("  \u2713 Downloaded: ", fname, " (from ", sub("^(https?://[^/]+).*", "\\1", url), ")")
+        message(
+          "  \u2713 Downloaded: ",
+          fname,
+          " (from ",
+          sub("^(https?://[^/]+).*", "\\1", url),
+          ")"
+        )
         downloaded <- TRUE
         break
       }
@@ -794,26 +983,41 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
     if (!downloaded) {
       cpat_ok <- FALSE
       message(
-        "  \u2717 FAILED to download ", fname, " from ", length(target$urls),
+        "  \u2717 FAILED to download ",
+        fname,
+        " from ",
+        length(target$urls),
         if (length(target$urls) > 1) " sources tried" else " source tried",
         ". Download it manually from ",
         "https://sourceforge.net/projects/rna-cpat/files/v1.2.2/prebuilt_model/ (a browser succeeds ",
-        "even when scripted downloads are being blocked/rejected) and place it in ", cpat_data_dir
+        "even when scripted downloads are being blocked/rejected) and place it in ",
+        cpat_data_dir
       )
     }
   }
 
-  .wsl_write_env_var("CPAT_DATA", cpat_data_dir, wsl_distro = distro, use_wsl = via_wsl, log_dir = log_dir)
+  .wsl_write_env_var(
+    "CPAT_DATA",
+    cpat_data_dir,
+    wsl_distro = distro,
+    use_wsl = via_wsl,
+    log_dir = log_dir
+  )
 
   message(
-    if (cpat_ok) "CPAT data installed successfully. CPAT_DATA -> " else
-      "CPAT data installed with errors (see above). CPAT_DATA -> ",
+    if (cpat_ok) {
+      "CPAT data installed successfully. CPAT_DATA -> "
+    } else {
+      "CPAT data installed with errors (see above). CPAT_DATA -> "
+    },
     cpat_data_dir
   )
 
   message("Installing Pfam-A.hmm...")
 
-  if (is.null(pfam_db_dir)) pfam_db_dir <- "$HOME/pfam_db"
+  if (is.null(pfam_db_dir)) {
+    pfam_db_dir <- "$HOME/pfam_db"
+  }
 
   .run(sprintf("mkdir -p %s", .dq(pfam_db_dir)))
 
@@ -825,7 +1029,8 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
 
   if (!isTRUE(dl_status == 0L)) {
     message(
-      "  \u2717 FAILED to download Pfam-A.hmm.gz (exit code ", dl_status,
+      "  \u2717 FAILED to download Pfam-A.hmm.gz (exit code ",
+      dl_status,
       "). Check network access to ftp.ebi.ac.uk inside the execution environment. Aborting Pfam install."
     )
   } else {
@@ -834,7 +1039,11 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
     gz_status <- .run(sprintf("gunzip -f %s", .dq(pfam_gz)))
 
     if (!isTRUE(gz_status == 0L)) {
-      message("  \u2717 gunzip failed (exit code ", gz_status, ") -- Pfam-A.hmm.gz may be corrupt or incomplete.")
+      message(
+        "  \u2717 gunzip failed (exit code ",
+        gz_status,
+        ") -- Pfam-A.hmm.gz may be corrupt or incomplete."
+      )
     } else {
       message("  \u2713 Extracted Pfam-A.hmm")
 
@@ -844,31 +1053,59 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
         press_status <- .run(sprintf("hmmpress -f %s", .dq(pfam_hmm)))
 
         if (isTRUE(press_status == 0L)) {
-          message("  \u2713 hmmpress indexed ", pfam_hmm, " -- hmmscan is ready to use.")
+          message(
+            "  \u2713 hmmpress indexed ",
+            pfam_hmm,
+            " -- hmmscan is ready to use."
+          )
         } else {
           message(
-            "  \u2717 hmmpress FAILED (exit code ", press_status, ") on ", pfam_hmm,
+            "  \u2717 hmmpress FAILED (exit code ",
+            press_status,
+            ") on ",
+            pfam_hmm,
             " -- hmmscan will not work against this database until this is resolved."
           )
         }
       } else {
         message(
           "  \u2717 hmmpress not found (looked ",
-          if (!is.null(conda_sh)) paste0("inside conda env '", conda_env, "' and ") else "",
+          if (!is.null(conda_sh)) {
+            paste0("inside conda env '", conda_env, "' and ")
+          } else {
+            ""
+          },
           "on PATH). Pfam database NOT indexed -- hmmscan will fail against it. ",
-          "Install hmmer (`mamba install -c bioconda hmmer` inside '", conda_env,
+          "Install hmmer (`mamba install -c bioconda hmmer` inside '",
+          conda_env,
           "', or install_wsl_isoform_tools()) and re-run install_isoform_databases()."
         )
       }
     }
   }
 
-  .wsl_write_env_var("PFAM_DB", pfam_hmm, wsl_distro = distro, use_wsl = via_wsl, log_dir = log_dir)
+  .wsl_write_env_var(
+    "PFAM_DB",
+    pfam_hmm,
+    wsl_distro = distro,
+    use_wsl = via_wsl,
+    log_dir = log_dir
+  )
 
-  message("Pfam database step complete. Location: ", pfam_db_dir, " (PFAM_DB -> ", pfam_hmm, ")")
+  message(
+    "Pfam database step complete. Location: ",
+    pfam_db_dir,
+    " (PFAM_DB -> ",
+    pfam_hmm,
+    ")"
+  )
 
-  message("SignalP models require a license and cannot be automatically installed.")
-  message("Use install_signalp_from_windows() to copy a local SignalP distribution into WSL.")
+  message(
+    "SignalP models require a license and cannot be automatically installed."
+  )
+  message(
+    "Use install_signalp_from_windows() to copy a local SignalP distribution into WSL."
+  )
   message(
     "\nAll database installation steps attempted. Review any \u2717 messages above ",
     "-- run debug_wsl() to re-check the environment once you've resolved them."
@@ -881,15 +1118,43 @@ install_isoform_databases <- function(distro = "Ubuntu-22.04",
 #' @export
 load_isoform_results <- function(save_dir) {
   slots <- list(
-    list(slot = "isoform_import", file = "isoform_import.rds", label = "Isoform import"),
+    list(
+      slot = "isoform_import",
+      file = "isoform_import.rds",
+      label = "Isoform import"
+    ),
     list(slot = "dte_results", file = "dte_results.rds", label = "DTE results"),
     list(slot = "dtu_results", file = "dtu_results.rds", label = "DTU results"),
-    list(slot = "switch_list", file = "switch_list.rds", label = "Final SwitchList"),
-    list(slot = "switch_step1", file = "step1_imported.rds", label = "SwitchList step-1 (imported)"),
-    list(slot = "switch_step2", file = "step2_analyzed.rds", label = "SwitchList step-2 (analyzed)"),
-    list(slot = "switch_step3", file = "step3_predictors.rds", label = "SwitchList step-3 (predictors)"),
-    list(slot = "switch_step3_5", file = "step3_5_refreshed.rds", label = "SwitchList step-3.5 (consequences refreshed)"),
-    list(slot = "dexseq_results", file = "dexseq_results.rds", label = "DEXSeq DTU results")
+    list(
+      slot = "switch_list",
+      file = "switch_list.rds",
+      label = "Final SwitchList"
+    ),
+    list(
+      slot = "switch_step1",
+      file = "step1_imported.rds",
+      label = "SwitchList step-1 (imported)"
+    ),
+    list(
+      slot = "switch_step2",
+      file = "step2_analyzed.rds",
+      label = "SwitchList step-2 (analyzed)"
+    ),
+    list(
+      slot = "switch_step3",
+      file = "step3_predictors.rds",
+      label = "SwitchList step-3 (predictors)"
+    ),
+    list(
+      slot = "switch_step3_5",
+      file = "step3_5_refreshed.rds",
+      label = "SwitchList step-3.5 (consequences refreshed)"
+    ),
+    list(
+      slot = "dexseq_results",
+      file = "dexseq_results.rds",
+      label = "DEXSeq DTU results"
+    )
   )
 
   res <- lapply(slots, function(s) {

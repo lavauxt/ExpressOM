@@ -3,13 +3,18 @@
 #' @return NULL, or a sorted vector of unique cutoffs
 #' @keywords internal
 .validate_deg_cutoffs <- function(cutoffs) {
-  if (is.null(cutoffs) || length(cutoffs) == 0) return(NULL)
+  if (is.null(cutoffs) || length(cutoffs) == 0) {
+    return(NULL)
+  }
 
   vals <- suppressWarnings(as.numeric(cutoffs))
 
   if (anyNA(vals) || any(vals <= 0 | vals > 1)) {
-    stop("`deg_padj_cutoffs` must be NULL or numbers in (0, 1], e.g. c(0.01, 0.05); got: ",
-         paste(cutoffs, collapse = ", "), call. = FALSE)
+    stop(
+      "`deg_padj_cutoffs` must be NULL or numbers in (0, 1], e.g. c(0.01, 0.05); got: ",
+      paste(cutoffs, collapse = ", "),
+      call. = FALSE
+    )
   }
 
   sort(unique(vals))
@@ -26,32 +31,77 @@
 #' @param lfc_cutoff Absolute log2 fold-change threshold for the `*_lfc` columns
 #' @return data.frame
 #' @keywords internal
-.deg_count_table <- function(res_tbl, padj_cutoffs, lfc_cutoff = 1,
-                             test_type = "Wald") {
+.deg_count_table <- function(
+  res_tbl,
+  padj_cutoffs,
+  lfc_cutoff = 1,
+  test_type = "Wald"
+) {
   padj <- res_tbl$padj
-  lfc  <- res_tbl$log2FoldChange
+  lfc <- res_tbl$log2FoldChange
 
   rows <- lapply(sort(unique(padj_cutoffs)), function(p) {
-    sig     <- !is.na(padj) & padj < p
+    sig <- !is.na(padj) & padj < p
     sig_dir <- sig & !is.na(lfc)
     sig_lfc <- sig_dir & abs(lfc) > lfc_cutoff
 
     data.frame(
-      padj_cutoff   = p,
-      n_tested      = sum(!is.na(padj)),
-      n_sig         = sum(sig),
-      n_up          = if (test_type == "LRT") NA_integer_ else sum(sig_dir & lfc > 0),
-      n_down        = if (test_type == "LRT") NA_integer_ else sum(sig_dir & lfc < 0),
+      padj_cutoff = p,
+      n_tested = sum(!is.na(padj)),
+      n_sig = sum(sig),
+      n_up = if (test_type == "LRT") NA_integer_ else sum(sig_dir & lfc > 0),
+      n_down = if (test_type == "LRT") NA_integer_ else sum(sig_dir & lfc < 0),
       log2FC_cutoff = lfc_cutoff,
-      n_sig_lfc     = sum(sig_lfc),
-      n_up_lfc      = if (test_type == "LRT") NA_integer_ else sum(sig_lfc & lfc > 0),
-      n_down_lfc    = if (test_type == "LRT") NA_integer_ else sum(sig_lfc & lfc < 0),
-      test_type     = test_type,
+      n_sig_lfc = sum(sig_lfc),
+      n_up_lfc = if (test_type == "LRT") {
+        NA_integer_
+      } else {
+        sum(sig_lfc & lfc > 0)
+      },
+      n_down_lfc = if (test_type == "LRT") {
+        NA_integer_
+      } else {
+        sum(sig_lfc & lfc < 0)
+      },
+      test_type = test_type,
       stringsAsFactors = FALSE
     )
   })
 
   do.call(rbind, rows)
+}
+
+.validate_raw_count_matrix <- function(count_mat) {
+  if (!is.matrix(count_mat) || !is.numeric(count_mat)) {
+    stop("Count matrix must be a numeric matrix of raw counts.", call. = FALSE)
+  }
+  if (anyNA(count_mat) || any(!is.finite(count_mat))) {
+    stop(
+      "Count matrix contains missing or non-finite values; resolve these in the input rather than treating them as zero.",
+      call. = FALSE
+    )
+  }
+  if (any(count_mat < 0)) {
+    stop(
+      "Count matrix contains negative values; raw counts must be non-negative.",
+      call. = FALSE
+    )
+  }
+  if (any(count_mat != floor(count_mat))) {
+    stop(
+      "Count matrix contains fractional values; provide unnormalized integer raw counts.",
+      call. = FALSE
+    )
+  }
+  if (any(count_mat > .Machine$integer.max)) {
+    stop(
+      "Count matrix values exceed the supported integer range.",
+      call. = FALSE
+    )
+  }
+
+  storage.mode(count_mat) <- "integer"
+  count_mat
 }
 
 #' Write structured DGE parameters log
@@ -61,14 +111,25 @@
 #'   NULL, falls back to the last term in the formula, which matches the old
 #'   behaviour for models where the contrasted factor is written last.
 #' @keywords internal
-.write_dge_log <- function(out_dir, comp_name, model, test, reduced,
-                           level, base, shrink_method, padj_cutoff,
-                           n_genes_input, n_genes_after_filter,
-                           n_de_genes_up, n_de_genes_down,
-                           filter_criterion = "rowSums(counts) >= 1",
-                           lfc_cutoff = 1,
-                           test_type = "Wald",
-                           main_condition = NULL) {
+.write_dge_log <- function(
+  out_dir,
+  comp_name,
+  model,
+  test,
+  reduced,
+  level,
+  base,
+  shrink_method,
+  padj_cutoff,
+  n_genes_input,
+  n_genes_after_filter,
+  n_de_genes_up,
+  n_de_genes_down,
+  filter_criterion = "rowSums(counts) >= 1",
+  lfc_cutoff = 1,
+  test_type = "Wald",
+  main_condition = NULL
+) {
   if (is.null(main_condition)) {
     main_condition <- tail(all.vars(as.formula(model)), 1)
   }
@@ -76,7 +137,9 @@
   if (!requireNamespace("jsonlite", quietly = TRUE)) {
     warning("jsonlite not installed; writing log as text file.")
     log_dir <- file.path(out_dir, "Log", "DGE")
-    if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
+    if (!dir.exists(log_dir)) {
+      dir.create(log_dir, recursive = TRUE)
+    }
     log_file <- file.path(log_dir, paste0("DGE_params_", comp_name, ".txt"))
     con <- file(log_file, open = "wt")
     on.exit(close(con), add = TRUE)
@@ -84,7 +147,9 @@
     cat(paste("Comparison:", comp_name, "\n"), file = con)
     cat(paste("Design formula:", model, "\n"), file = con)
     cat(paste("Test type:", test, "\n"), file = con)
-    if (test == "LRT") cat(paste("Reduced formula:", reduced, "\n"), file = con)
+    if (test == "LRT") {
+      cat(paste("Reduced formula:", reduced, "\n"), file = con)
+    }
     cat(paste("Contrast factor:", main_condition, "\n"), file = con)
     cat(paste("Contrast:", level, "vs", base, "\n"), file = con)
     cat(paste("Shrinkage method:", shrink_method, "\n"), file = con)
@@ -93,37 +158,54 @@
     cat(paste("Genes before filter:", n_genes_input, "\n"), file = con)
     cat(paste("Genes after filter:", n_genes_after_filter, "\n"), file = con)
     if (test_type == "LRT") {
-      cat("Directional DE gene counts: not reported for omnibus LRT p-values.\n", file = con)
+      cat(
+        "Directional DE gene counts: not reported for omnibus LRT p-values.\n",
+        file = con
+      )
     } else {
-      cat(paste0("DE genes up (log2FC>", lfc_cutoff, "): ", n_de_genes_up, "\n"), file = con)
-      cat(paste0("DE genes down (log2FC<-", lfc_cutoff, "): ", n_de_genes_down, "\n"), file = con)
+      cat(
+        paste0("DE genes up (log2FC>", lfc_cutoff, "): ", n_de_genes_up, "\n"),
+        file = con
+      )
+      cat(
+        paste0(
+          "DE genes down (log2FC<-",
+          lfc_cutoff,
+          "): ",
+          n_de_genes_down,
+          "\n"
+        ),
+        file = con
+      )
     }
     return()
   }
 
   params <- list(
-    timestamp          = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
-    comparison         = comp_name,
-    design_formula     = model,
-    test_type          = test,
-    reduced_formula    = if (!is.null(reduced)) reduced else "none",
-    contrast           = list(factor = main_condition, level = level, base = base),
-    shrinkage_method   = shrink_method,
-    padj_cutoff        = padj_cutoff,
-    lfc_cutoff         = lfc_cutoff,
-    filter_criterion   = filter_criterion,
+    timestamp = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
+    comparison = comp_name,
+    design_formula = model,
+    test_type = test,
+    reduced_formula = if (!is.null(reduced)) reduced else "none",
+    contrast = list(factor = main_condition, level = level, base = base),
+    shrinkage_method = shrink_method,
+    padj_cutoff = padj_cutoff,
+    lfc_cutoff = lfc_cutoff,
+    filter_criterion = filter_criterion,
     genes_before_filter = n_genes_input,
-    genes_after_filter  = n_genes_after_filter,
-    de_genes_up        = n_de_genes_up,
-    de_genes_down      = n_de_genes_down,
-    de_genes_total     = n_de_genes_up + n_de_genes_down
+    genes_after_filter = n_genes_after_filter,
+    de_genes_up = n_de_genes_up,
+    de_genes_down = n_de_genes_down,
+    de_genes_total = n_de_genes_up + n_de_genes_down
   )
   if (test_type == "LRT") {
     params$directional_de_genes <- "not reported: LRT p-values are omnibus"
     params$de_genes_total <- NA_integer_
   }
-  log_dir  <- file.path(out_dir, "Log", "DGE")
-  if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
+  log_dir <- file.path(out_dir, "Log", "DGE")
+  if (!dir.exists(log_dir)) {
+    dir.create(log_dir, recursive = TRUE)
+  }
   log_file <- file.path(log_dir, paste0("DGE_params_", comp_name, ".json"))
   jsonlite::write_json(params, log_file, pretty = TRUE, auto_unbox = TRUE)
   invisible(params)
@@ -143,26 +225,49 @@
 #' @param custom_gene_map Optional path to a custom gene annotation file (TSV with columns 'gene_id', 'symbol', and optionally 'entrezid')
 #' @return A list containing txi (or counts), meta, edb, gene_map, and type.
 #' @export
-import_counts <- function(data_dir, sample_table, ensembl_package_name, count_type = "salmon",
-                          out_dir, matrix_file = NULL, subset_sample = NULL, remove_sample = NULL,
-                          custom_tx2gene = NULL, custom_gene_map = NULL) {
-
+import_counts <- function(
+  data_dir,
+  sample_table,
+  ensembl_package_name,
+  count_type = "salmon",
+  out_dir,
+  matrix_file = NULL,
+  subset_sample = NULL,
+  remove_sample = NULL,
+  custom_tx2gene = NULL,
+  custom_gene_map = NULL
+) {
   if (!requireNamespace("ensembldb", quietly = TRUE)) {
     stop("Package 'ensembldb' is required but not installed.")
   }
 
-  if (!file.exists(sample_table)) stop("Sample table not found: ", sample_table)
-  sample_df  <- data.table::fread(sample_table, header = TRUE, data.table = FALSE)
+  if (!file.exists(sample_table)) {
+    stop("Sample table not found: ", sample_table)
+  }
+  sample_df <- data.table::fread(
+    sample_table,
+    header = TRUE,
+    data.table = FALSE
+  )
   sample_col <- .sample_id_column(sample_df)
 
-  sample_df <- .apply_sample_filters(sample_df, sample_col, remove_sample, subset_sample)
+  sample_df <- .apply_sample_filters(
+    sample_df,
+    sample_col,
+    remove_sample,
+    subset_sample
+  )
 
   rownames(sample_df) <- sample_df[[sample_col]]
-  edb     <- getExportedValue(ensembl_package_name, ensembl_package_name)
+  edb <- getExportedValue(ensembl_package_name, ensembl_package_name)
 
   if (!is.null(custom_tx2gene) && file.exists(custom_tx2gene)) {
     message("Using custom tx2gene file: ", custom_tx2gene)
-    tx2gene <- data.table::fread(custom_tx2gene, header = TRUE, data.table = FALSE)
+    tx2gene <- data.table::fread(
+      custom_tx2gene,
+      header = TRUE,
+      data.table = FALSE
+    )
     if (!all(c("tx_id", "gene_id") %in% colnames(tx2gene))) {
       stop("Custom tx2gene must contain columns 'tx_id' and 'gene_id'")
     }
@@ -170,24 +275,40 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     tx2gene$tx_id <- strip_ensembl_version(tx2gene$tx_id)
     tx2gene$gene_id <- strip_ensembl_version(tx2gene$gene_id)
   } else {
-    tx2gene <- ensembldb::transcripts(edb, columns = c("tx_id", "gene_id"), return.type = "DataFrame")
+    tx2gene <- ensembldb::transcripts(
+      edb,
+      columns = c("tx_id", "gene_id"),
+      return.type = "DataFrame"
+    )
     tx2gene <- as.data.frame(tx2gene)
     tx2gene$tx_id <- strip_ensembl_version(tx2gene$tx_id)
     tx2gene$gene_id <- strip_ensembl_version(tx2gene$gene_id)
   }
 
   org_info <- get_organism_info(edb)
-  org_db   <- org_info$org_db
-  org_obj  <- if (requireNamespace(org_db, quietly = TRUE)) .load_org_db(org_db) else NULL
+  org_db <- org_info$org_db
+  org_obj <- if (requireNamespace(org_db, quietly = TRUE)) {
+    .load_org_db(org_db)
+  } else {
+    NULL
+  }
 
   if (!is.null(custom_gene_map) && file.exists(custom_gene_map)) {
     message("Using custom gene annotation file: ", custom_gene_map)
-    gene_map <- data.table::fread(custom_gene_map, header = TRUE, data.table = FALSE)
-    if (!("gene_id" %in% colnames(gene_map)) && "ensembl" %in% colnames(gene_map)) {
+    gene_map <- data.table::fread(
+      custom_gene_map,
+      header = TRUE,
+      data.table = FALSE
+    )
+    if (
+      !("gene_id" %in% colnames(gene_map)) && "ensembl" %in% colnames(gene_map)
+    ) {
       colnames(gene_map)[colnames(gene_map) == "ensembl"] <- "gene_id"
     }
     if (!all(c("gene_id", "symbol") %in% colnames(gene_map))) {
-      stop("Custom gene map must contain columns 'gene_id' (or 'ensembl') and 'symbol'")
+      stop(
+        "Custom gene map must contain columns 'gene_id' (or 'ensembl') and 'symbol'"
+      )
     }
     gene_map$gene_id <- strip_ensembl_version(gene_map$gene_id)
     colnames(gene_map)[colnames(gene_map) == "gene_id"] <- "ensembl"
@@ -196,27 +317,45 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
     }
     gene_map <- gene_map[, c("ensembl", "symbol", "entrezid")]
     gene_map <- gene_map[!duplicated(gene_map$ensembl), ]
-    gene_map$symbol[is.na(gene_map$symbol) | gene_map$symbol == ""] <- gene_map$ensembl[is.na(gene_map$symbol) | gene_map$symbol == ""]
+    gene_map$symbol[
+      is.na(gene_map$symbol) | gene_map$symbol == ""
+    ] <- gene_map$ensembl[is.na(gene_map$symbol) | gene_map$symbol == ""]
 
     if (!is.null(org_obj)) {
-      gene_map <- .fill_entrez_with_bitr(gene_map, org_obj, id_col = "ensembl", symbol_col = "symbol")
+      gene_map <- .fill_entrez_with_bitr(
+        gene_map,
+        org_obj,
+        id_col = "ensembl",
+        symbol_col = "symbol"
+      )
     }
-    
+
     entrez_present <- sum(!is.na(gene_map$entrezid) & gene_map$entrezid != "")
-    message("  Gene map loaded: ", nrow(gene_map), " genes, ", entrez_present, " with Entrez IDs")
-    
+    message(
+      "  Gene map loaded: ",
+      nrow(gene_map),
+      " genes, ",
+      entrez_present,
+      " with Entrez IDs"
+    )
   } else {
-    gene_map <- ensembldb::genes(edb, columns = c("gene_id", "gene_name"), return.type = "DataFrame")
+    gene_map <- ensembldb::genes(
+      edb,
+      columns = c("gene_id", "gene_name"),
+      return.type = "DataFrame"
+    )
     gene_map <- as.data.frame(gene_map)
     colnames(gene_map) <- c("ensembl", "symbol")
     gene_map$ensembl <- strip_ensembl_version(gene_map$ensembl)
     if (!is.null(org_obj)) {
       mapped_entrez <- suppressMessages(
-        AnnotationDbi::mapIds(org_obj,
-                              keys = gene_map$ensembl,
-                              column = "ENTREZID",
-                              keytype = "ENSEMBL",
-                              multiVals = "first")
+        AnnotationDbi::mapIds(
+          org_obj,
+          keys = gene_map$ensembl,
+          column = "ENTREZID",
+          keytype = "ENSEMBL",
+          multiVals = "first"
+        )
       )
       gene_map$entrezid <- as.character(mapped_entrez)
     } else {
@@ -225,50 +364,71 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
   }
 
   if (count_type != "matrix") {
-    count_file_name <- switch(count_type,
-      "salmon"    = "quant.sf",
-      "kallisto"  = "abundance.tsv",
-      "rsem"      = "quant.genes.results",
+    count_file_name <- switch(
+      count_type,
+      "salmon" = "quant.sf",
+      "kallisto" = "abundance.tsv",
+      "rsem" = "quant.genes.results",
       "stringtie" = "t_data.ctab",
       stop("Unsupported count_type for tximport: ", count_type)
     )
 
-    if (count_type == "rsem")
-      message("NOTE: rsem mode imports gene-level counts (quant.genes.results). For isoform analysis use isoforms.results.")
+    if (count_type == "rsem") {
+      message(
+        "NOTE: rsem mode imports gene-level counts (quant.genes.results). For isoform analysis use isoforms.results."
+      )
+    }
     tximport_file_list <- .resolve_quantification_files(
-      data_dir, sample_df[[sample_col]], count_type, count_file_name
+      data_dir,
+      sample_df[[sample_col]],
+      count_type,
+      count_file_name
     )
 
     message("Importing ", count_type, " files via tximport...")
     txi <- tximport::tximport(
       tximport_file_list,
-      type                 = count_type,
-      tx2gene              = tx2gene,
-      ignoreTxVersion      = TRUE,
-      countsFromAbundance  = "lengthScaledTPM"
+      type = count_type,
+      tx2gene = tx2gene,
+      ignoreTxVersion = TRUE,
+      countsFromAbundance = "lengthScaledTPM"
     )
 
     meta <- sample_df[colnames(txi$counts), , drop = FALSE]
     gene_map <- .standardize_gene_map(gene_map)
-    return(list(txi = txi, meta = meta, edb = edb, gene_map = gene_map, type = "tximport"))
-
+    return(list(
+      txi = txi,
+      meta = meta,
+      edb = edb,
+      gene_map = gene_map,
+      type = "tximport"
+    ))
   } else if (count_type == "matrix") {
-    if (is.null(matrix_file) || !file.exists(matrix_file)) stop("Matrix file not specified or found.")
+    if (is.null(matrix_file) || !file.exists(matrix_file)) {
+      stop("Matrix file not specified or found.")
+    }
 
     counts_df <- data.table::fread(matrix_file, data.table = FALSE)
     rownames(counts_df) <- counts_df[, 1]
     counts_df <- counts_df[, -1, drop = FALSE]
 
     valid_samples <- .match_matrix_samples(
-      colnames(counts_df), rownames(sample_df)
+      colnames(counts_df),
+      rownames(sample_df)
     )
 
     count_mat <- as.matrix(counts_df[, valid_samples, drop = FALSE])
-    mode(count_mat) <- "numeric"
-    count_mat[is.na(count_mat)] <- 0
+    suppressWarnings(mode(count_mat) <- "numeric")
+    count_mat <- .validate_raw_count_matrix(count_mat)
 
     meta <- sample_df[valid_samples, , drop = FALSE]
-    return(list(counts = count_mat, meta = meta, edb = edb, gene_map = gene_map, type = "matrix"))
+    return(list(
+      counts = count_mat,
+      meta = meta,
+      edb = edb,
+      gene_map = gene_map,
+      type = "matrix"
+    ))
   } else {
     stop("Unsupported count_type: ", count_type)
   }
@@ -284,7 +444,6 @@ import_counts <- function(data_dir, sample_table, ensembl_package_name, count_ty
 #' @return DESeqDataSet object
 #' @export
 create_dds_object <- function(tx_data, level, base, model, replicate_col) {
-
   meta <- tx_data$meta
   design_formula <- as.formula(model)
 
@@ -292,8 +451,11 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
     dds <- if (tx_data$type == "tximport") {
       DESeq2::DESeqDataSetFromTximport(tx_data$txi, colData = meta, design = ~1)
     } else {
-      DESeq2::DESeqDataSetFromMatrix(countData = round(tx_data$counts),
-                                     colData = meta, design = ~1)
+      DESeq2::DESeqDataSetFromMatrix(
+        countData = .validate_raw_count_matrix(tx_data$counts),
+        colData = meta,
+        design = ~1
+      )
     }
     keep <- rowSums(DESeq2::counts(dds)) >= 1
     dds <- dds[keep, ]
@@ -314,13 +476,24 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
   meta[[main_condition]] <- as.factor(meta[[main_condition]])
 
   dds <- if (tx_data$type == "tximport") {
-    DESeq2::DESeqDataSetFromTximport(tx_data$txi, colData = meta, design = design_formula)
+    DESeq2::DESeqDataSetFromTximport(
+      tx_data$txi,
+      colData = meta,
+      design = design_formula
+    )
   } else {
-    DESeq2::DESeqDataSetFromMatrix(countData = round(tx_data$counts),
-                                   colData = meta, design = design_formula)
+    DESeq2::DESeqDataSetFromMatrix(
+      countData = .validate_raw_count_matrix(tx_data$counts),
+      colData = meta,
+      design = design_formula
+    )
   }
 
-  dds[[main_condition]] <- .safe_relevel_condition(dds[[main_condition]], base, label = main_condition)
+  dds[[main_condition]] <- .safe_relevel_condition(
+    dds[[main_condition]],
+    base,
+    label = main_condition
+  )
 
   keep <- rowSums(DESeq2::counts(dds)) >= 1
   dds <- dds[keep, ]
@@ -345,24 +518,42 @@ create_dds_object <- function(tx_data, level, base, model, replicate_col) {
 #' @param lfc_cutoff Absolute log2 fold-change threshold used to count up/down genes in the DGE log (default 1)
 #' @return List containing res_unshrunken, res_shrunken, and the computed dds
 #' @export
-run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
-                                padj_cutoff, test = "Wald", reduced = NULL, lfc_cutoff = 1) {
-
+run_deseq2_analysis <- function(
+  dds,
+  model,
+  level,
+  base,
+  shrink_method,
+  out_dir,
+  padj_cutoff,
+  test = "Wald",
+  reduced = NULL,
+  lfc_cutoff = 1
+) {
   n_genes_input <- nrow(dds)
 
   # Resolve the contrasted factor BEFORE running DESeq so we can also log it
   # correctly. Uses colData(dds) so the factor levels are already set up the
   # same way the model will see them.
   meta_for_cond <- as.data.frame(SummarizedExperiment::colData(dds))
-  main_condition <- .resolve_main_condition(as.formula(model), meta_for_cond, level, base)
+  main_condition <- .resolve_main_condition(
+    as.formula(model),
+    meta_for_cond,
+    level,
+    base
+  )
 
   test <- match.arg(test, c("Wald", "LRT"))
   comparison <- c(main_condition, level, base)
 
   if (test == "LRT") {
-    if (is.null(reduced)) stop("You must provide a reduced model for LRT.")
+    if (is.null(reduced)) {
+      stop("You must provide a reduced model for LRT.")
+    }
     if (shrink_method != "ashr") {
-      message("NOTE: LRT is only compatible with shrink_method = 'ashr'. Overriding to 'ashr'.")
+      message(
+        "NOTE: LRT is only compatible with shrink_method = 'ashr'. Overriding to 'ashr'."
+      )
       shrink_method <- "ashr"
     }
     dds <- DESeq2::DESeq(dds, test = "LRT", reduced = as.formula(reduced))
@@ -373,7 +564,9 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
   if (test == "LRT") {
     res_unshrunken <- DESeq2::results(dds, alpha = padj_cutoff)
     res_contrast <- DESeq2::results(
-      dds, contrast = comparison, alpha = padj_cutoff
+      dds,
+      contrast = comparison,
+      alpha = padj_cutoff
     )
     res_shrunken <- suppressMessages(
       DESeq2::lfcShrink(dds, contrast = comparison, type = "ashr")
@@ -386,36 +579,71 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
     res_shrunken$padj <- res_unshrunken$padj
     res_shrunken$stat <- res_unshrunken$stat
   } else {
-    res_unshrunken <- DESeq2::results(dds, contrast = comparison, alpha = padj_cutoff)
-    res_shrunken   <- DESeq2::lfcShrink(dds, contrast = comparison, type = shrink_method)
+    res_unshrunken <- DESeq2::results(
+      dds,
+      contrast = comparison,
+      alpha = padj_cutoff
+    )
+    res_shrunken <- DESeq2::lfcShrink(
+      dds,
+      contrast = comparison,
+      type = shrink_method
+    )
     res_shrunken$stat <- res_unshrunken$stat
   }
   res_shrunken$test_type <- test
 
-  res_df      <- as.data.frame(res_shrunken)
+  res_df <- as.data.frame(res_shrunken)
   direction_padj <- if (test == "LRT") res_df$contrast_padj else res_df$padj
-  sig_up <- if (test == "LRT") NA_integer_ else sum(
-    direction_padj < padj_cutoff & res_df$log2FoldChange > lfc_cutoff,
-    na.rm = TRUE
-  )
-  sig_down <- if (test == "LRT") NA_integer_ else sum(
-    direction_padj < padj_cutoff & res_df$log2FoldChange < -lfc_cutoff,
-    na.rm = TRUE
-  )
+  sig_up <- if (test == "LRT") {
+    NA_integer_
+  } else {
+    sum(
+      direction_padj < padj_cutoff & res_df$log2FoldChange > lfc_cutoff,
+      na.rm = TRUE
+    )
+  }
+  sig_down <- if (test == "LRT") {
+    NA_integer_
+  } else {
+    sum(
+      direction_padj < padj_cutoff & res_df$log2FoldChange < -lfc_cutoff,
+      na.rm = TRUE
+    )
+  }
   n_genes_after_filter <- nrow(dds)
 
   comp_name <- paste0(level, "_vs_", base)
 
   base_dir <- file.path(out_dir, "DE_raw_results")
-  if (!dir.exists(base_dir)) dir.create(base_dir, recursive = TRUE)
+  if (!dir.exists(base_dir)) {
+    dir.create(base_dir, recursive = TRUE)
+  }
 
-  .write_dge_log(out_dir, comp_name, model, test, reduced, level, base,
-                 shrink_method, padj_cutoff, n_genes_input, n_genes_after_filter,
-                 sig_up, sig_down, lfc_cutoff = lfc_cutoff,
-                 test_type = test,
-                 main_condition = main_condition)
+  .write_dge_log(
+    out_dir,
+    comp_name,
+    model,
+    test,
+    reduced,
+    level,
+    base,
+    shrink_method,
+    padj_cutoff,
+    n_genes_input,
+    n_genes_after_filter,
+    sig_up,
+    sig_down,
+    lfc_cutoff = lfc_cutoff,
+    test_type = test,
+    main_condition = main_condition
+  )
 
-  return(list(dds = dds, res_unshrunken = res_unshrunken, res_shrunken = res_shrunken))
+  return(list(
+    dds = dds,
+    res_unshrunken = res_unshrunken,
+    res_shrunken = res_shrunken
+  ))
 }
 
 #' Export Significant Results
@@ -435,42 +663,59 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
 #' @param lfc_cutoff Absolute log2 fold-change threshold for the `*_lfc` columns of the count table (default 1)
 #' @return List of processed dataframes (including `deg_counts`, NULL unless `padj_cutoffs` is given)
 #' @export
-export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_dir,
-                                       level, base, gene_map, padj_cutoff,
-                                       padj_cutoffs = NULL, lfc_cutoff = 1,
-                                       test_type = "Wald") {
+export_significant_results <- function(
+  res_shrunken,
+  res_unshrunken,
+  dds,
+  out_dir,
+  level,
+  base,
+  gene_map,
+  padj_cutoff,
+  padj_cutoffs = NULL,
+  lfc_cutoff = 1,
+  test_type = "Wald"
+) {
   fc_dir <- file.path(out_dir, "DE_raw_results")
-  if (!dir.exists(fc_dir)) dir.create(fc_dir, recursive = TRUE)
+  if (!dir.exists(fc_dir)) {
+    dir.create(fc_dir, recursive = TRUE)
+  }
 
   res_tbl <- as.data.frame(res_shrunken)
-gene_map <- .standardize_gene_map(gene_map)
+  gene_map <- .standardize_gene_map(gene_map)
 
-if (!"ensembl" %in% colnames(res_tbl)) {
-  res_tbl$ensembl <- strip_ensembl_version(rownames(res_tbl))
-} else {
-  res_tbl$ensembl <- strip_ensembl_version(as.character(res_tbl$ensembl))
-}
+  if (!"ensembl" %in% colnames(res_tbl)) {
+    res_tbl$ensembl <- strip_ensembl_version(rownames(res_tbl))
+  } else {
+    res_tbl$ensembl <- strip_ensembl_version(as.character(res_tbl$ensembl))
+  }
 
-res_tbl <- res_tbl[, setdiff(colnames(res_tbl), c("symbol", "entrezid")), drop = FALSE]
+  res_tbl <- res_tbl[,
+    setdiff(colnames(res_tbl), c("symbol", "entrezid")),
+    drop = FALSE
+  ]
 
-gene_map_merge <- gene_map[
-  ,
-  intersect(c("ensembl", "symbol", "entrezid"), colnames(gene_map)),
-  drop = FALSE
-]
+  gene_map_merge <- gene_map[,
+    intersect(c("ensembl", "symbol", "entrezid"), colnames(gene_map)),
+    drop = FALSE
+  ]
 
-res_tbl <- merge(
-  res_tbl,
-  gene_map_merge,
-  by = "ensembl",
-  all.x = TRUE
-)
+  res_tbl <- merge(
+    res_tbl,
+    gene_map_merge,
+    by = "ensembl",
+    all.x = TRUE
+  )
 
   if (any(is.na(res_tbl$entrezid) | res_tbl$entrezid == "")) {
     message("  Recovering missing Entrez IDs from gene_map...")
-    
-    gene_map_clean <- gene_map[!is.na(gene_map$entrezid) & gene_map$entrezid != "", ]
-    gene_map_clean$ensembl_clean <- strip_ensembl_version(gene_map_clean$ensembl)
+
+    gene_map_clean <- gene_map[
+      !is.na(gene_map$entrezid) & gene_map$entrezid != "",
+    ]
+    gene_map_clean$ensembl_clean <- strip_ensembl_version(
+      gene_map_clean$ensembl
+    )
 
     missing_idx <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
     if (any(missing_idx)) {
@@ -484,7 +729,6 @@ res_tbl <- merge(
         }
       }
     }
-    
 
     missing_idx <- is.na(res_tbl$entrezid) | res_tbl$entrezid == ""
     if (any(missing_idx)) {
@@ -515,59 +759,117 @@ res_tbl <- merge(
         }
       }
     }
-    
+
     recovered <- sum(!is.na(res_tbl$entrezid) & res_tbl$entrezid != "")
     total <- nrow(res_tbl)
     message("    Recovered ", recovered, "/", total, " Entrez IDs")
   }
 
-  res_tbl$gene <- ifelse(is.na(res_tbl$symbol) | res_tbl$symbol == "", res_tbl$ensembl, res_tbl$symbol)
+  res_tbl$gene <- ifelse(
+    is.na(res_tbl$symbol) | res_tbl$symbol == "",
+    res_tbl$ensembl,
+    res_tbl$symbol
+  )
 
   counts_df <- as.data.frame(DESeq2::counts(dds, normalized = TRUE))
   counts_df$ensembl <- strip_ensembl_version(rownames(counts_df))
   counts_df <- merge(counts_df, gene_map, by = "ensembl", all.x = TRUE)
-  counts_df$gene <- ifelse(is.na(counts_df$symbol) | counts_df$symbol == "", counts_df$ensembl, counts_df$symbol)
-  
+  counts_df$gene <- ifelse(
+    is.na(counts_df$symbol) | counts_df$symbol == "",
+    counts_df$ensembl,
+    counts_df$symbol
+  )
+
   tryCatch(
-    utils::write.table(counts_df, file.path(fc_dir, paste0("DESeq_Normalized_Counts_", level, "_vs_", base, ".txt")),
-                       sep = "\t", quote = FALSE, row.names = FALSE),
-    error = function(e) warning("Could not write normalized counts: ", e$message)
+    utils::write.table(
+      counts_df,
+      file.path(
+        fc_dir,
+        paste0("DESeq_Normalized_Counts_", level, "_vs_", base, ".txt")
+      ),
+      sep = "\t",
+      quote = FALSE,
+      row.names = FALSE
+    ),
+    error = function(e) {
+      warning("Could not write normalized counts: ", e$message)
+    }
   )
 
   raw_counts <- as.data.frame(DESeq2::counts(dds, normalized = FALSE))
   raw_counts$ensembl <- strip_ensembl_version(rownames(raw_counts))
   raw_counts <- merge(raw_counts, gene_map, by = "ensembl", all.x = TRUE)
-  raw_counts$gene <- ifelse(is.na(raw_counts$symbol) | raw_counts$symbol == "", raw_counts$ensembl, raw_counts$symbol)
-  
+  raw_counts$gene <- ifelse(
+    is.na(raw_counts$symbol) | raw_counts$symbol == "",
+    raw_counts$ensembl,
+    raw_counts$symbol
+  )
+
   tryCatch(
-    utils::write.table(raw_counts, file.path(fc_dir, paste0("DESeq_Raw_Counts_", level, "_vs_", base, ".txt")),
-                       sep = "\t", quote = FALSE, row.names = FALSE),
+    utils::write.table(
+      raw_counts,
+      file.path(
+        fc_dir,
+        paste0("DESeq_Raw_Counts_", level, "_vs_", base, ".txt")
+      ),
+      sep = "\t",
+      quote = FALSE,
+      row.names = FALSE
+    ),
     error = function(e) warning("Could not write raw counts: ", e$message)
   )
 
   desired_cols <- c(
-    "gene", "ensembl", "entrezid", "baseMean", "log2FoldChange",
-    "lfcSE", "pvalue", "padj", "stat", "contrast_log2FoldChange",
-    "contrast_pvalue", "contrast_padj", "contrast_stat", "test_type"
+    "gene",
+    "ensembl",
+    "entrezid",
+    "baseMean",
+    "log2FoldChange",
+    "lfcSE",
+    "pvalue",
+    "padj",
+    "stat",
+    "contrast_log2FoldChange",
+    "contrast_pvalue",
+    "contrast_padj",
+    "contrast_stat",
+    "test_type"
   )
   res_cols <- intersect(desired_cols, colnames(res_tbl))
   res_tbl <- res_tbl[, res_cols, drop = FALSE]
 
   sig_res <- res_tbl[!is.na(res_tbl$padj) & res_tbl$padj < padj_cutoff, ]
 
-  utils::write.table(res_tbl, file.path(fc_dir, paste0("DEgenes_raw_", level, "_vs_", base, ".txt")),
-                     sep = "\t", quote = FALSE, row.names = FALSE)
+  utils::write.table(
+    res_tbl,
+    file.path(fc_dir, paste0("DEgenes_raw_", level, "_vs_", base, ".txt")),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
 
   write_filtered <- function(df, tag) {
-    prefix <- file.path(fc_dir, paste0("DEgenes_", tag, "_", level, "_vs_", base))
-    utils::write.table(df,                                   paste0(prefix, ".txt"),      sep = "\t", quote = FALSE, row.names = FALSE)
+    prefix <- file.path(
+      fc_dir,
+      paste0("DEgenes_", tag, "_", level, "_vs_", base)
+    )
+    utils::write.table(
+      df,
+      paste0(prefix, ".txt"),
+      sep = "\t",
+      quote = FALSE,
+      row.names = FALSE
+    )
   }
 
   tag_for <- function(p) paste0("pval_", gsub("\\.", "_", as.character(p)))
 
   # One DEG list per adjusted p-value cutoff -- the pipeline's own cutoff plus
   # any extra `padj_cutoffs` -- most significant genes first.
-  all_cutoffs <- sort(unique(c(padj_cutoff, .validate_deg_cutoffs(padj_cutoffs))))
+  all_cutoffs <- sort(unique(c(
+    padj_cutoff,
+    .validate_deg_cutoffs(padj_cutoffs)
+  )))
 
   for (p in all_cutoffs) {
     sig_p <- res_tbl[!is.na(res_tbl$padj) & res_tbl$padj < p, , drop = FALSE]
@@ -577,18 +879,42 @@ res_tbl <- merge(
   deg_counts <- NULL
 
   if (length(padj_cutoffs) > 0) {
-    deg_counts  <- .deg_count_table(
-      res_tbl, all_cutoffs, lfc_cutoff, test_type = test_type
+    deg_counts <- .deg_count_table(
+      res_tbl,
+      all_cutoffs,
+      lfc_cutoff,
+      test_type = test_type
     )
-    counts_file <- file.path(fc_dir, paste0("DEG_counts_", level, "_vs_", base, ".txt"))
+    counts_file <- file.path(
+      fc_dir,
+      paste0("DEG_counts_", level, "_vs_", base, ".txt")
+    )
 
-    utils::write.table(deg_counts, counts_file, sep = "\t", quote = FALSE, row.names = FALSE)
+    utils::write.table(
+      deg_counts,
+      counts_file,
+      sep = "\t",
+      quote = FALSE,
+      row.names = FALSE
+    )
 
-    message("   -> DEG counts at padj < ", paste(all_cutoffs, collapse = ", "),
-            " saved to: ", counts_file)
-    message(paste(utils::capture.output(print(deg_counts, row.names = FALSE)), collapse = "\n"))
+    message(
+      "   -> DEG counts at padj < ",
+      paste(all_cutoffs, collapse = ", "),
+      " saved to: ",
+      counts_file
+    )
+    message(paste(
+      utils::capture.output(print(deg_counts, row.names = FALSE)),
+      collapse = "\n"
+    ))
   }
 
-  return(list(res_tbl = res_tbl, sig_res = sig_res, normalized_counts = counts_df,
-              raw_counts = raw_counts, deg_counts = deg_counts))
+  return(list(
+    res_tbl = res_tbl,
+    sig_res = sig_res,
+    normalized_counts = counts_df,
+    raw_counts = raw_counts,
+    deg_counts = deg_counts
+  ))
 }

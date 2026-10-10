@@ -53,3 +53,22 @@ test_that("matrix sample matching rejects an empty intersection", {
     "No matching sample names"
   )
 })
+
+test_that("raw count matrices reject missing, fractional, and negative values", {
+  expect_identical(
+    .validate_raw_count_matrix(matrix(c(0, 1, 12), nrow = 1)),
+    matrix(as.integer(c(0, 1, 12)), nrow = 1)
+  )
+  expect_error(
+    .validate_raw_count_matrix(matrix(c(1, NA_real_))),
+    "missing or non-finite"
+  )
+  expect_error(
+    .validate_raw_count_matrix(matrix(c(1, 1.5))),
+    "fractional"
+  )
+  expect_error(
+    .validate_raw_count_matrix(matrix(c(1, -1))),
+    "negative"
+  )
+})
