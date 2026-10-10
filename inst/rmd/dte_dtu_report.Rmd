@@ -20,6 +20,12 @@ params:
   has_switch: FALSE
   plot_dir: "plots"
   switch_plot_top_n: 10
+  table_n: 1000
+  padj_cutoff: 0.05
+  dge_test: "Wald"
+  design: "~ condition"
+  reduced: "not applicable"
+  methods_file: ""
 ---
 
 ```{r setup, include=FALSE}
@@ -38,7 +44,7 @@ suppressPackageStartupMessages({
 }
 
 .md_path <- function(x) {
-  gsub(" ", "%20", x, fixed = TRUE)
+  utils::URLencode(gsub("\\\\", "/", x), reserved = TRUE)
 }
 
 .read_csv_safe <- function(path) {
@@ -164,6 +170,20 @@ suppressPackageStartupMessages({
 - **Date:** `r Sys.time()`
 - **Top N shown:** `r params$top_n`
 - **Genes of interest:** `r if (length(params$genes_of_interest) > 0) paste(params$genes_of_interest, collapse = ", ") else "None requested"`
+- **Configured adjusted-p cutoff:** `r params$padj_cutoff`
+- **Gene-level test:** `r params$dge_test`
+
+```{r methods_info, results='asis'}
+cat("\n## Model and inferential scope\n\n")
+cat("Gene-level design: `", params$design, "`. Reduced design: `", params$reduced, "`.\n\n", sep = "")
+if (file.exists(params$methods_file)) {
+  cat("Isoform methods and interpretation notes are recorded in `analysis_methods.txt`.\n")
+}
+if (identical(params$dge_test, "LRT")) {
+  cat("\nThe LRT adjusted p-values are omnibus full-versus-reduced tests, not pairwise contrast-specific significance. Directional fold changes are shown as separate effect estimates.\n")
+}
+cat("\nThe tables below display up to ", params$table_n, " rows for browser responsiveness; complete results are available in the accompanying CSV files.\n", sep = "")
+```
 
 ```{r skipped_plots_section, results='asis'}
 skip_path <- file.path(dirname(params$plot_dir), "skipped_plots.csv")
@@ -201,7 +221,7 @@ if (!is.null(skip_df) && nrow(skip_df) > 0) {
 .fig("DTE_top_barplot.pdf", "Top differentially expressed transcripts")
 ```
 
-## Interactive Table (top 1000 by adjusted p-value)
+## Interactive Table (top rows by adjusted p-value)
 
 ```{r dte_table}
 dte_data <- .read_csv_safe(params$dte_csv)
@@ -213,7 +233,7 @@ if (is.null(dte_data)) {
     dte_data <- dte_data[order(dte_data$padj, na.last = TRUE), ]
   }
 
-  dte_data <- utils::head(dte_data, 1000)
+  dte_data <- utils::head(dte_data, params$table_n)
 
   DT::datatable(
     dte_data,
@@ -255,7 +275,7 @@ if (is.null(dtu_data)) {
   }
 
   DT::datatable(
-    dtu_data,
+    utils::head(dtu_data, params$table_n),
     filter = "top",
     options = list(
       scrollX = TRUE,
@@ -265,11 +285,11 @@ if (is.null(dtu_data)) {
 }
 ```
 
-## Cross-engine Concordance
+## Cross-engine Gene Overlap
 
 ```{r engine_concordance, results='asis'}
 if (.plot_exists("Engine_concordance.pdf")) {
-  cat("\nSignificant gene concordance across DTE/DTU/DEXSeq engines:\n\n")
+  cat("\nGene overlap across engines (significance criteria and inferential units differ):\n\n")
   .fig("Engine_concordance.pdf", "Cross-engine concordance")
 }
 ```

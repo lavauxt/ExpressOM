@@ -589,17 +589,39 @@ run_functional_analysis <- function(res_tbl, sig_res, edb, out_dir,
       if (!"stat" %in% colnames(res_entrez)) {
         stop("Column 'stat' not found in results table. Verify that you injected res_unshrunken$stat back into your results.")
       }
+      if (toupper(test_type) == "LRT" &&
+          !"contrast_stat" %in% colnames(res_entrez)) {
+        stop("LRT GSEA requires a separate contrast-specific statistic; the omnibus LRT statistic is unsigned.", call. = FALSE)
+      }
       
       if (toupper(test_type) == "LRT") {
-        message("   -> [MANAGEMENT] LRT design detected. Transforming Chi-Square metrics into directional stats via sign(log2FoldChange).")
-        metric_vals <- sign(res_entrez$log2FoldChange) * res_entrez$stat
+        if ("contrast_stat" %in% colnames(res_entrez)) {
+          message("   -> LRT detected: ranking by separate contrast-specific Wald statistics.")
+          metric_vals <- res_entrez$contrast_stat
+        } else {
+          stop("LRT enrichment ranking requires contrast-specific statistics; omnibus LRT statistics are not signed.", call. = FALSE)
+        }
       } else {
         message("   -> Wald design detected. Using native directional Wald z-scores.")
         metric_vals <- res_entrez$stat
       }
       
     } else if (gsea_metric == "signed_pval") {
-      safe_pvals  <- ifelse(res_entrez$pvalue == 0, .Machine$double.xmin, res_entrez$pvalue)
+      pvalue_col <- if (toupper(test_type) == "LRT" &&
+                        "contrast_pvalue" %in% colnames(res_entrez)) {
+        "contrast_pvalue"
+      } else {
+        "pvalue"
+      }
+      if (toupper(test_type) == "LRT" &&
+          !"contrast_pvalue" %in% colnames(res_entrez)) {
+        stop("LRT signed-p-value ranking requires contrast-specific p-values.", call. = FALSE)
+      }
+      safe_pvals <- ifelse(
+        res_entrez[[pvalue_col]] == 0,
+        .Machine$double.xmin,
+        res_entrez[[pvalue_col]]
+      )
       metric_vals <- sign(res_entrez$log2FoldChange) * -log10(safe_pvals)
     } else {
       metric_vals <- res_entrez$log2FoldChange
@@ -858,7 +880,10 @@ run_fgsea_analysis <- function(res_tbl,
   message("-> Preparing ranked gene list for FGSEA (metric: ", gsea_metric, ")...")
 
   res2 <- res_tbl |>
-    dplyr::select(gene, log2FoldChange, dplyr::any_of(c("stat", "pvalue"))) |>
+    dplyr::select(
+      gene, log2FoldChange,
+      dplyr::any_of(c("stat", "pvalue", "contrast_stat", "contrast_pvalue"))
+    ) |>
     dplyr::filter(!is.na(gene), gene != "", !is.na(log2FoldChange)) |>
     dplyr::distinct()
 
@@ -878,8 +903,11 @@ run_fgsea_analysis <- function(res_tbl,
       dplyr::ungroup()
 
     if (toupper(test_type) == "LRT") {
-      message("   -> LRT design detected. Transforming Chi-Square metrics into directional stats via sign(log2FoldChange).")
-      metric_vals <- sign(res2$log2FoldChange) * res2$stat
+      if (!"contrast_stat" %in% colnames(res2)) {
+        stop("LRT enrichment ranking requires contrast-specific statistics; omnibus LRT statistics are not signed.", call. = FALSE)
+      }
+      message("   -> LRT detected: ranking by separate contrast-specific Wald statistics.")
+      metric_vals <- res2$contrast_stat
     } else {
       metric_vals <- res2$stat
     }
@@ -888,12 +916,22 @@ run_fgsea_analysis <- function(res_tbl,
     if (!"pvalue" %in% colnames(res2)) {
       stop("Column 'pvalue' not found in results table. Cannot use gsea_metric = \"signed_pval\".")
     }
+    if (toupper(test_type) == "LRT" &&
+        !"contrast_pvalue" %in% colnames(res2)) {
+      stop("LRT signed-p-value ranking requires contrast-specific p-values.", call. = FALSE)
+    }
     res2 <- res2 |>
       dplyr::group_by(gene) |>
       dplyr::slice_min(pvalue, n = 1, with_ties = FALSE) |>
       dplyr::ungroup()
 
-    safe_pvals  <- ifelse(res2$pvalue == 0, .Machine$double.xmin, res2$pvalue)
+    pvalue_col <- if (toupper(test_type) == "LRT" &&
+                      "contrast_pvalue" %in% colnames(res2)) {
+      "contrast_pvalue"
+    } else {
+      "pvalue"
+    }
+    safe_pvals <- ifelse(res2[[pvalue_col]] == 0, .Machine$double.xmin, res2[[pvalue_col]])
     metric_vals <- sign(res2$log2FoldChange) * -log10(safe_pvals)
 
   } else {

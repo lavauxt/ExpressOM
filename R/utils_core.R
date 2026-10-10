@@ -88,9 +88,101 @@
   matched
 }
 
+.validate_nbest <- function(nbest, cap = 1000L) {
+  if (!is.numeric(nbest) || length(nbest) != 1L || is.na(nbest) ||
+      !is.finite(nbest) || nbest < 1 || nbest != floor(nbest)) {
+    stop("`nBest` must be a single positive integer.", call. = FALSE)
+  }
+  min(nbest, cap)
+}
+
+.local_markdown_path <- function(path) {
+  path <- gsub("\\\\", "/", path)
+  path <- gsub("%", "%25", path, fixed = TRUE)
+  path <- gsub(" ", "%20", path, fixed = TRUE)
+  path <- gsub("(", "%28", path, fixed = TRUE)
+  path <- gsub(")", "%29", path, fixed = TRUE)
+  path <- gsub("#", "%23", path, fixed = TRUE)
+  path <- gsub("?", "%3F", path, fixed = TRUE)
+  path
+}
+
+.validate_isoform_design <- function(design, condition, metadata) {
+  design <- if (inherits(design, "formula")) design else stats::as.formula(design)
+  if (length(design) != 2L) {
+    stop("Isoform design must be a one-sided additive formula, e.g. ~ batch + condition.",
+         call. = FALSE)
+  }
+  labels <- attr(stats::terms(design), "term.labels")
+  if (any(grepl(":|\\*|\\^|/", labels))) {
+    stop("Isoform design currently supports additive main effects only; interactions are not supported.",
+         call. = FALSE)
+  }
+  variables <- all.vars(design)
+  missing <- setdiff(variables, colnames(metadata))
+  if (length(missing)) {
+    stop("Isoform design variable(s) missing from sample metadata: ",
+         paste(missing, collapse = ", "), call. = FALSE)
+  }
+  if (!condition %in% variables) {
+    stop("Isoform design must include the comparison condition column '",
+         condition, "'.", call. = FALSE)
+  }
+  for (variable in variables) {
+    if (is.character(metadata[[variable]])) metadata[[variable]] <- factor(metadata[[variable]])
+  }
+  list(formula = design, metadata = metadata, variables = variables)
+}
+
+.set_contrast_reference <- function(metadata, condition, base, level) {
+  values <- as.character(metadata[[condition]])
+  if (!all(c(base, level) %in% values)) {
+    stop("Both `base` and `level` must be observed in metadata column '",
+         condition, "'.", call. = FALSE)
+  }
+  observed <- unique(values)
+  metadata[[condition]] <- factor(values, levels = c(base, setdiff(observed, base)))
+  metadata
+}
+
+.design_contrast_coef <- function(design, metadata, condition, level, base) {
+  terms <- stats::terms(design)
+  if (any(grepl(":|\\*|\\^|/", attr(terms, "term.labels")))) {
+    stop("DRIMSeq covariate designs currently require additive main effects.",
+         call. = FALSE)
+  }
+  metadata <- .set_contrast_reference(metadata, condition, base, level)
+  mm <- stats::model.matrix(design, data = metadata)
+  expected <- paste0(condition, level)
+  if (!expected %in% colnames(mm)) {
+    stop("Could not resolve contrast coefficient '", expected,
+         "' from design matrix columns: ", paste(colnames(mm), collapse = ", "),
+         call. = FALSE)
+  }
+  expected
+}
+
+.dexseq_usage_designs <- function(design, condition) {
+  labels <- attr(stats::terms(design), "term.labels")
+  covariates <- setdiff(labels, condition)
+  feature_terms <- paste0("exon:`", c(covariates, condition), "`")
+  reduced_terms <- if (length(covariates)) {
+    paste0("exon:`", covariates, "`")
+  } else {
+    character(0)
+  }
+  list(
+    full = stats::as.formula(paste("~ sample + exon +", paste(feature_terms, collapse = " + "))),
+    reduced = stats::as.formula(paste("~ sample + exon", if (length(reduced_terms)) paste("+", paste(reduced_terms, collapse = " + ")) else ""))
+  )
+}
+
 .de_direction_colors <- function() c(up = "red2", down = "royalblue", ns = "grey70")
 
-.de_direction_label <- function(log2_fold_change, significant) {
+.de_direction_label <- function(log2_fold_change, significant,
+                               test_type = "Wald") {
+  if (length(test_type) == 1L) test_type <- rep(test_type, length(log2_fold_change))
+  significant[!is.na(test_type) & test_type == "LRT"] <- FALSE
   significant <- !is.na(significant) & significant
   direction <- rep("Not significant", length(log2_fold_change))
   direction[significant & !is.na(log2_fold_change) & log2_fold_change > 0] <- "Upregulated"

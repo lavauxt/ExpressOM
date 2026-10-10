@@ -26,7 +26,8 @@
 #' @param lfc_cutoff Absolute log2 fold-change threshold for the `*_lfc` columns
 #' @return data.frame
 #' @keywords internal
-.deg_count_table <- function(res_tbl, padj_cutoffs, lfc_cutoff = 1) {
+.deg_count_table <- function(res_tbl, padj_cutoffs, lfc_cutoff = 1,
+                             test_type = "Wald") {
   padj <- res_tbl$padj
   lfc  <- res_tbl$log2FoldChange
 
@@ -39,12 +40,13 @@
       padj_cutoff   = p,
       n_tested      = sum(!is.na(padj)),
       n_sig         = sum(sig),
-      n_up          = sum(sig_dir & lfc > 0),
-      n_down        = sum(sig_dir & lfc < 0),
+      n_up          = if (test_type == "LRT") NA_integer_ else sum(sig_dir & lfc > 0),
+      n_down        = if (test_type == "LRT") NA_integer_ else sum(sig_dir & lfc < 0),
       log2FC_cutoff = lfc_cutoff,
       n_sig_lfc     = sum(sig_lfc),
-      n_up_lfc      = sum(sig_lfc & lfc > 0),
-      n_down_lfc    = sum(sig_lfc & lfc < 0),
+      n_up_lfc      = if (test_type == "LRT") NA_integer_ else sum(sig_lfc & lfc > 0),
+      n_down_lfc    = if (test_type == "LRT") NA_integer_ else sum(sig_lfc & lfc < 0),
+      test_type     = test_type,
       stringsAsFactors = FALSE
     )
   })
@@ -65,6 +67,7 @@
                            n_de_genes_up, n_de_genes_down,
                            filter_criterion = "rowSums(counts) >= 1",
                            lfc_cutoff = 1,
+                           test_type = "Wald",
                            main_condition = NULL) {
   if (is.null(main_condition)) {
     main_condition <- tail(all.vars(as.formula(model)), 1)
@@ -89,8 +92,12 @@
     cat(paste("Filter criterion:", filter_criterion, "\n"), file = con)
     cat(paste("Genes before filter:", n_genes_input, "\n"), file = con)
     cat(paste("Genes after filter:", n_genes_after_filter, "\n"), file = con)
-    cat(paste0("DE genes up (log2FC>", lfc_cutoff, "): ", n_de_genes_up, "\n"), file = con)
-    cat(paste0("DE genes down (log2FC<-", lfc_cutoff, "): ", n_de_genes_down, "\n"), file = con)
+    if (test_type == "LRT") {
+      cat("Directional DE gene counts: not reported for omnibus LRT p-values.\n", file = con)
+    } else {
+      cat(paste0("DE genes up (log2FC>", lfc_cutoff, "): ", n_de_genes_up, "\n"), file = con)
+      cat(paste0("DE genes down (log2FC<-", lfc_cutoff, "): ", n_de_genes_down, "\n"), file = con)
+    }
     return()
   }
 
@@ -111,6 +118,10 @@
     de_genes_down      = n_de_genes_down,
     de_genes_total     = n_de_genes_up + n_de_genes_down
   )
+  if (test_type == "LRT") {
+    params$directional_de_genes <- "not reported: LRT p-values are omnibus"
+    params$de_genes_total <- NA_integer_
+  }
   log_dir  <- file.path(out_dir, "Log", "DGE")
   if (!dir.exists(log_dir)) dir.create(log_dir, recursive = TRUE)
   log_file <- file.path(log_dir, paste0("DGE_params_", comp_name, ".json"))
@@ -345,6 +356,9 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
   meta_for_cond <- as.data.frame(SummarizedExperiment::colData(dds))
   main_condition <- .resolve_main_condition(as.formula(model), meta_for_cond, level, base)
 
+  test <- match.arg(test, c("Wald", "LRT"))
+  comparison <- c(main_condition, level, base)
+
   if (test == "LRT") {
     if (is.null(reduced)) stop("You must provide a reduced model for LRT.")
     if (shrink_method != "ashr") {
@@ -358,18 +372,36 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
 
   if (test == "LRT") {
     res_unshrunken <- DESeq2::results(dds, alpha = padj_cutoff)
-    res_shrunken   <- suppressMessages(DESeq2::lfcShrink(dds, res = res_unshrunken, type = "ashr"))
+    res_contrast <- DESeq2::results(
+      dds, contrast = comparison, alpha = padj_cutoff
+    )
+    res_shrunken <- suppressMessages(
+      DESeq2::lfcShrink(dds, contrast = comparison, type = "ashr")
+    )
+    res_shrunken$contrast_pvalue <- res_contrast$pvalue
+    res_shrunken$contrast_padj <- res_contrast$padj
+    res_shrunken$contrast_stat <- res_contrast$stat
+    res_shrunken$contrast_log2FoldChange <- res_shrunken$log2FoldChange
+    res_shrunken$pvalue <- res_unshrunken$pvalue
+    res_shrunken$padj <- res_unshrunken$padj
     res_shrunken$stat <- res_unshrunken$stat
   } else {
-    comparison     <- c(main_condition, level, base)
     res_unshrunken <- DESeq2::results(dds, contrast = comparison, alpha = padj_cutoff)
     res_shrunken   <- DESeq2::lfcShrink(dds, contrast = comparison, type = shrink_method)
     res_shrunken$stat <- res_unshrunken$stat
   }
+  res_shrunken$test_type <- test
 
   res_df      <- as.data.frame(res_shrunken)
-  sig_up      <- sum(res_df$padj < padj_cutoff & res_df$log2FoldChange > lfc_cutoff,  na.rm = TRUE)
-  sig_down    <- sum(res_df$padj < padj_cutoff & res_df$log2FoldChange < -lfc_cutoff, na.rm = TRUE)
+  direction_padj <- if (test == "LRT") res_df$contrast_padj else res_df$padj
+  sig_up <- if (test == "LRT") NA_integer_ else sum(
+    direction_padj < padj_cutoff & res_df$log2FoldChange > lfc_cutoff,
+    na.rm = TRUE
+  )
+  sig_down <- if (test == "LRT") NA_integer_ else sum(
+    direction_padj < padj_cutoff & res_df$log2FoldChange < -lfc_cutoff,
+    na.rm = TRUE
+  )
   n_genes_after_filter <- nrow(dds)
 
   comp_name <- paste0(level, "_vs_", base)
@@ -380,6 +412,7 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
   .write_dge_log(out_dir, comp_name, model, test, reduced, level, base,
                  shrink_method, padj_cutoff, n_genes_input, n_genes_after_filter,
                  sig_up, sig_down, lfc_cutoff = lfc_cutoff,
+                 test_type = test,
                  main_condition = main_condition)
 
   return(list(dds = dds, res_unshrunken = res_unshrunken, res_shrunken = res_shrunken))
@@ -404,7 +437,8 @@ run_deseq2_analysis <- function(dds, model, level, base, shrink_method, out_dir,
 #' @export
 export_significant_results <- function(res_shrunken, res_unshrunken, dds, out_dir,
                                        level, base, gene_map, padj_cutoff,
-                                       padj_cutoffs = NULL, lfc_cutoff = 1) {
+                                       padj_cutoffs = NULL, lfc_cutoff = 1,
+                                       test_type = "Wald") {
   fc_dir <- file.path(out_dir, "DE_raw_results")
   if (!dir.exists(fc_dir)) dir.create(fc_dir, recursive = TRUE)
 
@@ -511,7 +545,11 @@ res_tbl <- merge(
     error = function(e) warning("Could not write raw counts: ", e$message)
   )
 
-  desired_cols <- c("gene", "ensembl", "entrezid", "baseMean", "log2FoldChange", "lfcSE", "pvalue", "padj", "stat")
+  desired_cols <- c(
+    "gene", "ensembl", "entrezid", "baseMean", "log2FoldChange",
+    "lfcSE", "pvalue", "padj", "stat", "contrast_log2FoldChange",
+    "contrast_pvalue", "contrast_padj", "contrast_stat", "test_type"
+  )
   res_cols <- intersect(desired_cols, colnames(res_tbl))
   res_tbl <- res_tbl[, res_cols, drop = FALSE]
 
@@ -539,7 +577,9 @@ res_tbl <- merge(
   deg_counts <- NULL
 
   if (length(padj_cutoffs) > 0) {
-    deg_counts  <- .deg_count_table(res_tbl, all_cutoffs, lfc_cutoff)
+    deg_counts  <- .deg_count_table(
+      res_tbl, all_cutoffs, lfc_cutoff, test_type = test_type
+    )
     counts_file <- file.path(fc_dir, paste0("DEG_counts_", level, "_vs_", base, ".txt"))
 
     utils::write.table(deg_counts, counts_file, sep = "\t", quote = FALSE, row.names = FALSE)

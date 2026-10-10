@@ -18,13 +18,22 @@ generate_dte_dtu_report <- function(dte_results,
                                     switch_plot_top_n = 10,
                                     plot_sashimi = TRUE,
                                     plot_exon_usage = TRUE,
-                                    plot_topology = TRUE) {
+                                    plot_topology = TRUE,
+                                    padj_cutoff = 0.05,
+                                    design = NULL,
+                                    dge_test = "Wald",
+                                    reduced = NULL) {
 
   if (!requireNamespace("ggplot2", quietly = TRUE)) stop("ggplot2 is required for plotting")
   if (!requireNamespace("DT", quietly = TRUE)) stop("DT is required for interactive tables")
   if (!requireNamespace("rmarkdown", quietly = TRUE)) stop("rmarkdown is required to generate the report")
   if (!requireNamespace("dplyr", quietly = TRUE)) stop("dplyr is required for data manipulation")
   if (!requireNamespace("tidyr", quietly = TRUE)) stop("tidyr is required for data reshaping")
+  if (!is.numeric(padj_cutoff) || length(padj_cutoff) != 1L ||
+      is.na(padj_cutoff) || !is.finite(padj_cutoff) ||
+      padj_cutoff <= 0 || padj_cutoff > 1) {
+    stop("`padj_cutoff` must be a finite number in (0, 1].", call. = FALSE)
+  }
 
   report_dir <- file.path(out_dir, "IsoformSwitch", "DTU_DTE_report")
   if (!dir.exists(report_dir)) dir.create(report_dir, recursive = TRUE)
@@ -53,7 +62,8 @@ generate_dte_dtu_report <- function(dte_results,
 
   dte$direction_label <- .de_direction_label(
     dte$log2FoldChange,
-    dte$signif & is.finite(dte$log2FoldChange)
+    dte$signif & is.finite(dte$log2FoldChange),
+    test_type = if ("test_type" %in% colnames(dte)) dte$test_type else "Wald"
   )
 
   dtu <- dtu_results$dtu_results
@@ -108,7 +118,7 @@ generate_dte_dtu_report <- function(dte_results,
     ggplot2::geom_point(alpha = 0.6, size = 1.5) +
     ggplot2::scale_color_manual(values = .de_direction_scale(), drop = FALSE) +
     ggplot2::geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
-    ggplot2::geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+    ggplot2::geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed") +
     ggplot2::labs(
       title = paste("DTE Volcano plot:", level, "vs", base),
       x = "log2 Fold Change",
@@ -205,7 +215,7 @@ generate_dte_dtu_report <- function(dte_results,
   .safe_ggsave(filename = file.path(plot_dir, "DTU_pvalue_hist.pdf"), plot = p_hist, width = 6, height = 4)
 
   dtu_label_col <- if ("feature_id" %in% colnames(dtu)) "feature_id" else "gene_id"
-  dtu_sig <- dtu[!is.na(dtu$adj_pvalue) & dtu$adj_pvalue < 0.05, ]
+  dtu_sig <- dtu[!is.na(dtu$adj_pvalue) & dtu$adj_pvalue < padj_cutoff, ]
 
   if (nrow(dtu_sig) > 0) {
     dtu_ordered <- dtu_sig[order(dtu_sig$adj_pvalue), ]
@@ -238,20 +248,23 @@ generate_dte_dtu_report <- function(dte_results,
       height = max(6, top_n * 0.3)
     )
   } else {
-    message("No significant DTU transcripts found (adj_pvalue < 0.05); skipping DTU top barplot.")
+    message("No significant DTU transcripts found (adj_pvalue < ", padj_cutoff, "); skipping DTU top barplot.")
   }
 
   safe_run(
     {
       sig_sets <- list(
-        DTE = unique(dte$gene_id[!is.na(dte$gene_id) & dte$signif]),
-        DTU = unique(dtu$gene_id[!is.na(dtu$gene_id) & !is.na(dtu$adj_pvalue) & dtu$adj_pvalue < 0.05])
+        DTE = unique(dte$gene_id[
+          !is.na(dte$gene_id) & dte$signif & !is.na(dte$padj) &
+            dte$padj < padj_cutoff
+        ]),
+        DTU = unique(dtu$gene_id[!is.na(dtu$gene_id) & !is.na(dtu$adj_pvalue) & dtu$adj_pvalue < padj_cutoff])
       )
 
       if (has_dexseq && "gene_qvalue" %in% colnames(dexseq_results$results_df)) {
         dex <- dexseq_results$results_df
         sig_sets$DEXSeq <- unique(
-          dex$gene_id[!is.na(dex$gene_id) & !is.na(dex$gene_qvalue) & dex$gene_qvalue < 0.05]
+          dex$gene_id[!is.na(dex$gene_id) & !is.na(dex$gene_qvalue) & dex$gene_qvalue < padj_cutoff]
         )
       }
 
@@ -285,7 +298,7 @@ generate_dte_dtu_report <- function(dte_results,
           ggplot2::geom_col(fill = "darkslateblue") +
           ggplot2::geom_text(ggplot2::aes(label = n_genes), vjust = -0.4, size = 3.5) +
           ggplot2::labs(
-            title = "Significant gene concordance across engines",
+            title = "Gene overlap across engines (engine-specific significance criteria)",
             subtitle = paste(
               sprintf("%s: %d genes", names(sig_sets), lengths(sig_sets)),
               collapse = "   |   "
@@ -304,7 +317,7 @@ generate_dte_dtu_report <- function(dte_results,
         )
 
         message(
-          "   -> Engine concordance (significant genes): ",
+        "   -> Gene overlap (engine-specific significance criteria): ",
           paste(sprintf("%s=%d", names(sig_sets), lengths(sig_sets)), collapse = ", ")
         )
       } else {
@@ -398,11 +411,11 @@ generate_dte_dtu_report <- function(dte_results,
           ggplot2::aes(x = dIF, y = -log10(isoform_switch_q_value))
         ) +
           ggplot2::geom_point(
-            ggplot2::aes(color = abs(dIF) > 0.1 & isoform_switch_q_value < 0.05),
+            ggplot2::aes(color = abs(dIF) > 0.1 & isoform_switch_q_value < padj_cutoff),
             size = 1,
             alpha = 0.6
           ) +
-          ggplot2::geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+          ggplot2::geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed") +
           ggplot2::geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed") +
           ggplot2::scale_color_manual(
             "Significant\nIsoform Switch",
@@ -425,7 +438,7 @@ generate_dte_dtu_report <- function(dte_results,
 
           feat_sig <- feat_sw_plot[
             !is.na(feat_sw_plot$isoform_switch_q_value) &
-              feat_sw_plot$isoform_switch_q_value < 0.05 &
+              feat_sw_plot$isoform_switch_q_value < padj_cutoff &
               abs(feat_sw_plot$dIF) > 0.1,
           ]
 
@@ -675,7 +688,8 @@ generate_dte_dtu_report <- function(dte_results,
           dexseq_results$dxr_list,
           gene_id = gene_ens[1],
           plot_dir = plot_dir,
-          gene_symbol = gene_sym
+          gene_symbol = gene_sym,
+          condition = condition
         ),
         label = paste0("DEXSeq plot for ", gene_sym)
       )
@@ -726,6 +740,18 @@ generate_dte_dtu_report <- function(dte_results,
   } else {
     NULL
   }
+
+  methods_path <- file.path(report_dir, "analysis_methods.txt")
+  writeLines(c(
+    paste0("DGE test: ", dge_test),
+    paste0("DGE full design: ", if (is.null(design)) "not provided" else paste(deparse(as.formula(design)), collapse = "")),
+    paste0("DGE reduced design: ", if (is.null(reduced)) "not applicable" else paste(deparse(as.formula(reduced)), collapse = "")),
+    paste0("Isoform adjusted-p cutoff: ", padj_cutoff),
+    "DTE adjusted p-values are transcript-level DESeq2 Wald results; genes may have multiple tested transcripts.",
+    "DRIMSeq adjusted p-values are transcript-feature-level BH results; they are not gene-level FDR.",
+    "DEXSeq input rows are transcript features in this workflow; results should not be interpreted as canonical exon-bin tests.",
+    "Chunked DTU fitting estimates model parameters separately by gene chunk; results can depend on chunking."
+  ), methods_path)
 
   plot_pdfs <- list.files(
     plot_dir,
@@ -883,6 +909,8 @@ generate_dte_dtu_report <- function(dte_results,
         "  has_switch: no",
         "  plot_dir: ''",
         "  switch_plot_top_n: 10",
+        "  table_n: 1000",
+        "  padj_cutoff: 0.05",
         "---",
         "",
         "```{r setup, include=FALSE}",
@@ -893,7 +921,7 @@ generate_dte_dtu_report <- function(dte_results,
         "",
         "```{r}",
         "if (nzchar(params$dte_csv) && file.exists(params$dte_csv)) {",
-        "  DT::datatable(utils::read.csv(params$dte_csv), filter = 'top')",
+        "  DT::datatable(utils::head(utils::read.csv(params$dte_csv), params$table_n), filter = 'top')",
         "} else {",
         "  knitr::asis_output('DTE result file not found.')",
         "}",
@@ -903,7 +931,7 @@ generate_dte_dtu_report <- function(dte_results,
         "",
         "```{r}",
         "if (nzchar(params$dtu_csv) && file.exists(params$dtu_csv)) {",
-        "  DT::datatable(utils::read.csv(params$dtu_csv), filter = 'top')",
+        "  DT::datatable(utils::head(utils::read.csv(params$dtu_csv), params$table_n), filter = 'top')",
         "} else {",
         "  knitr::asis_output('DTU result file not found.')",
         "}",
@@ -941,7 +969,13 @@ generate_dte_dtu_report <- function(dte_results,
       has_dexseq = has_dexseq,
       has_switch = has_switch,
       plot_dir = normalizePath(plot_dir, winslash = "/"),
-      switch_plot_top_n = switch_plot_top_n
+      switch_plot_top_n = switch_plot_top_n,
+      table_n = 1000L,
+      padj_cutoff = padj_cutoff,
+      dge_test = dge_test,
+      design = if (is.null(design)) "not provided" else paste(deparse(as.formula(design)), collapse = ""),
+      reduced = if (is.null(reduced)) "not applicable" else paste(deparse(as.formula(reduced)), collapse = ""),
+      methods_file = normalizePath(methods_path, winslash = "/")
     )
   )
 

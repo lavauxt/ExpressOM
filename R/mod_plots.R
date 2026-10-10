@@ -256,9 +256,14 @@
     !is.na(plot_df$baseMean) & plot_df$baseMean > 0 &
       is.finite(plot_df$log2FoldChange),
   ]
+  significance_padj <- if ("contrast_padj" %in% colnames(plot_df)) {
+    plot_df$contrast_padj
+  } else {
+    plot_df$padj
+  }
   plot_df$direction <- .de_direction_label(
     plot_df$log2FoldChange,
-    !is.na(plot_df$padj) & plot_df$padj < padj_cutoff &
+    !is.na(significance_padj) & significance_padj < padj_cutoff &
       abs(plot_df$log2FoldChange) > lfc_cutoff
   )
   ggplot2::ggplot(
@@ -968,8 +973,20 @@ plot_volcano <- function(res_tbl, padj_cutoff, highlight_genes = NULL, title = "
   cols    <- .volcano_colors(colors)
   res_tbl <- as.data.frame(res_tbl)
 
-  sig <- !is.na(res_tbl$padj) & !is.na(res_tbl$log2FoldChange) &
-    res_tbl$padj < padj_cutoff & abs(res_tbl$log2FoldChange) > lfc_cutoff
+  test_type <- if ("test_type" %in% colnames(res_tbl)) {
+    unique(stats::na.omit(as.character(res_tbl$test_type)))[1]
+  } else {
+    "Wald"
+  }
+  contrast_padj <- if (identical(test_type, "LRT") &&
+                       "contrast_padj" %in% colnames(res_tbl)) {
+    res_tbl$contrast_padj
+  } else {
+    res_tbl$padj
+  }
+
+  sig <- !is.na(contrast_padj) & !is.na(res_tbl$log2FoldChange) &
+    contrast_padj < padj_cutoff & abs(res_tbl$log2FoldChange) > lfc_cutoff
   is_up   <- sig & res_tbl$log2FoldChange > 0
   is_down <- sig & res_tbl$log2FoldChange < 0
   n_up    <- sum(is_up)
@@ -981,14 +998,24 @@ plot_volcano <- function(res_tbl, padj_cutoff, highlight_genes = NULL, title = "
   names(key_col) <- ifelse(is_up, "Upregulated",
                            ifelse(is_down, "Downregulated", "Not significant"))
 
-  caption <- paste0("Upregulated: ", n_up, "  |  Downregulated: ", n_down,
-                    "   (padj < ", format(padj_cutoff), ", |log2FC| > ", format(lfc_cutoff), ")")
+  caption <- paste0(
+    if (identical(test_type, "LRT")) "Contrast-specific Wald padj; " else "",
+    "Upregulated: ", n_up, "  |  Downregulated: ", n_down,
+    "   (padj < ", format(padj_cutoff), ", |log2FC| > ", format(lfc_cutoff), ")"
+  )
+
+  plot_y <- if (identical(test_type, "LRT") &&
+                "contrast_padj" %in% colnames(res_tbl)) {
+    "contrast_padj"
+  } else {
+    "padj"
+  }
 
   EnhancedVolcano::EnhancedVolcano(
     res_tbl, lab = res_tbl$gene,
     selectLab      = highlight_genes,
     drawConnectors = !is.null(highlight_genes),
-    x = "log2FoldChange", y = "padj",
+    x = "log2FoldChange", y = plot_y,
     title     = title,
     caption   = caption,
     pCutoff   = padj_cutoff, FCcutoff = lfc_cutoff, pointSize = 2.0, labSize = 4.0,

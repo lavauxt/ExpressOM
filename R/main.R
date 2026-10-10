@@ -150,6 +150,8 @@ expressom <- function(count_type        = "salmon",
 
   execution_order <- match.arg(execution_order)
   isoform_test_engine <- match.arg(isoform_test_engine)
+  requested_nbest <- nBest
+  regionreport_nbest <- if (isTRUE(run_dge)) .validate_nbest(nBest) else NULL
 
   # Validate the plot / summary options up front, before any heavy computation
   sample_labels    <- .read_sample_labels(sample_labels)
@@ -386,7 +388,8 @@ expressom <- function(count_type        = "salmon",
         gene_map       = tx_data$gene_map,
         padj_cutoff    = padj_cutoff,
         padj_cutoffs   = deg_padj_cutoffs,
-        lfc_cutoff     = deg_lfc_cutoff
+        lfc_cutoff     = deg_lfc_cutoff,
+        test_type      = test
       )
 
       message("Converting identifiers for RegionReport...")
@@ -548,12 +551,13 @@ custom_script <- tryCatch(
     NULL
   }
 )
+if (!is.null(custom_script)) {
+  on.exit(unlink(custom_script), add = TRUE)
+}
 
 if (requireNamespace("regionReport", quietly = TRUE)) {
 
-  regionreport_nbest <- min(as.integer(nBest), 1000L)
-
-  if (as.integer(nBest) > 1000L) {
+  if (requested_nbest > 1000L) {
     message(
       "   -> nBest = ", nBest,
       " is too large for RegionReport HTML output. ",
@@ -622,10 +626,6 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
       message("RegionReport generation failed: ", conditionMessage(e))
     }
   )
-
-  if (!is.null(custom_script)) {
-    unlink(custom_script)
-  }
 
 } else {
   message("Skipping DESeq2Report: 'regionReport' package is not installed.")
@@ -863,7 +863,8 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
           level,
           base,
           padj_cutoff,
-          bpparam = bpparam
+          bpparam = bpparam,
+          design = model
         )
 
         .iso_ckpt_save(dte_res, "dte_results.rds")
@@ -879,7 +880,8 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
           main_condition,
           level,
           base,
-          bpparam = bpparam
+          bpparam = bpparam,
+          design = model
         )
 
         .iso_ckpt_save(dtu_res, "dtu_results.rds")
@@ -897,7 +899,8 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
               main_condition,
               level,
               base,
-              bpparam = bpparam
+              bpparam = bpparam,
+              design = model
             ),
             label = "DEXSeq DTU"
           )
@@ -1013,7 +1016,11 @@ if (requireNamespace("regionReport", quietly = TRUE)) {
           switch_list       = switch_res,
           dexseq_results    = dexseq_res,
           switch_plot_top_n = isoform_plot_top_n,
-          plot_topology     = plot_topology
+          plot_topology     = plot_topology,
+          padj_cutoff       = padj_cutoff,
+          design            = model,
+          dge_test          = test,
+          reduced           = reduced
         )
       }
 

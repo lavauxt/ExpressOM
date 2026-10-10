@@ -7,6 +7,7 @@
                                 condition,
                                 level,
                                 base,
+                                design = NULL,
                                 min_transcript_total,
                                 min_transcript_expr,
                                 min_samps_feature_expr,
@@ -22,7 +23,11 @@
     isoform_obj$counts
   }
 
-  sample_data <- isoform_obj$meta
+  design <- design %||% stats::reformulate(condition)
+  design_info <- .validate_isoform_design(
+    design, condition, isoform_obj$meta
+  )
+  sample_data <- design_info$metadata
 
   keep_samples <- sample_data[[condition]] %in% c(base, level)
 
@@ -32,6 +37,10 @@
 
   sample_data <- sample_data[keep_samples, , drop = FALSE]
   counts <- counts[, rownames(sample_data), drop = FALSE]
+
+  sample_data <- .set_contrast_reference(
+    sample_data, condition, base, level
+  )
 
   sample_data$condition <- factor(
     sample_data[[condition]],
@@ -174,6 +183,7 @@
     gene_id_map = gene_id_map,
     tx_ids_original = tx_ids_original,
     sample_data = sample_data,
+    design = design_info$formula,
     min_samps_gene_expr = min_samps_gene_expr,
     min_samps_feature_expr = min_samps_feature_expr
   )
@@ -192,7 +202,8 @@ run_dtu <- function(isoform_obj,
                     chunk_size = 5000,
                     max_transcripts = 300,
                     min_transcript_total = 10,
-                    bpparam = NULL) {
+                    bpparam = NULL,
+                    design = NULL) {
 
   if (!requireNamespace("DRIMSeq", quietly = TRUE)) {
     stop("DRIMSeq is required for DTU analysis.")
@@ -206,6 +217,7 @@ run_dtu <- function(isoform_obj,
     condition,
     level,
     base,
+    design = design,
     min_transcript_total = min_transcript_total,
     min_transcript_expr = min_transcript_expr,
     min_samps_feature_expr = min_samps_feature_expr,
@@ -288,13 +300,22 @@ run_dtu <- function(isoform_obj,
       next
     }
 
-    design <- model.matrix(~ condition, data = samples_d)
+    design_info <- .validate_isoform_design(
+      design %||% stats::reformulate(condition), condition, samples_d
+    )
+    model_matrix <- stats::model.matrix(
+      design_info$formula,
+      data = design_info$metadata
+    )
+    coef_name <- .design_contrast_coef(
+      design_info$formula, design_info$metadata, condition, level, base
+    )
 
     res <- tryCatch(
       {
-        d <- DRIMSeq::dmPrecision(d, design = design, BPPARAM = bp_param)
-        d <- DRIMSeq::dmFit(d, design = design, BPPARAM = bp_param)
-        d <- DRIMSeq::dmTest(d, coef = paste0("condition", level), BPPARAM = bp_param)
+        d <- DRIMSeq::dmPrecision(d, design = model_matrix, BPPARAM = bp_param)
+        d <- DRIMSeq::dmFit(d, design = model_matrix, BPPARAM = bp_param)
+        d <- DRIMSeq::dmTest(d, coef = coef_name, BPPARAM = bp_param)
         DRIMSeq::results(d, level = "feature")
       },
       error = function(e) {
@@ -321,6 +342,8 @@ run_dtu <- function(isoform_obj,
   dtu_results <- do.call(rbind, all_results)
   rm(all_results)
   gc()
+
+  dtu_results$test_unit <- "transcript-feature-level; gene-level FDR is not provided"
 
   pcol <- intersect(c("pvalue", "p_value"), colnames(dtu_results))[1]
 
@@ -357,7 +380,8 @@ run_dexseq_dtu <- function(isoform_obj,
                            max_transcripts = 300,
                            min_transcript_total = 10,
                            keep_dxr = TRUE,
-                           bpparam = NULL) {
+                           bpparam = NULL,
+                           design = NULL) {
 
   if (!requireNamespace("DEXSeq", quietly = TRUE)) {
     stop("DEXSeq is required for run_dexseq_dtu(). Install with BiocManager::install('DEXSeq').")
@@ -371,6 +395,7 @@ run_dexseq_dtu <- function(isoform_obj,
     condition,
     level,
     base,
+    design = design,
     min_transcript_total = min_transcript_total,
     min_transcript_expr = min_transcript_expr,
     min_samps_feature_expr = min_samps_feature_expr,
@@ -394,9 +419,9 @@ run_dexseq_dtu <- function(isoform_obj,
   unique_genes <- unique(gene_id_map)
   gene_chunks <- split(unique_genes, ceiling(seq_along(unique_genes) / chunk_size))
 
-  sample_meta <- data.frame(
-    condition = sample_data[colnames(counts), "condition"],
-    row.names = colnames(counts)
+  sample_meta <- sample_data[colnames(counts), , drop = FALSE]
+  dex_designs <- .dexseq_usage_designs(
+    prep$design, condition
   )
 
   all_results <- list()
@@ -417,7 +442,7 @@ run_dexseq_dtu <- function(isoform_obj,
         DEXSeq::DEXSeqDataSet(
           countData = curr_counts,
           sampleData = sample_meta,
-          design = ~sample + exon + condition:exon,
+          design = dex_designs$full,
           featureID = curr_tx_ids,
           groupID = curr_gene_ids
         )
@@ -434,8 +459,15 @@ run_dexseq_dtu <- function(isoform_obj,
       {
         dxd <- DEXSeq::estimateSizeFactors(dxd)
         dxd <- DEXSeq::estimateDispersions(dxd, quiet = TRUE, BPPARAM = bp_param)
-        dxd <- DEXSeq::testForDEU(dxd, BPPARAM = bp_param)
-        dxd <- DEXSeq::estimateExonFoldChanges(dxd, fitExpToVar = "condition", BPPARAM = bp_param)
+        dxd <- DEXSeq::testForDEU(
+          dxd,
+          fullModel = dex_designs$full,
+          reducedModel = dex_designs$reduced,
+          BPPARAM = bp_param
+        )
+        dxd <- DEXSeq::estimateExonFoldChanges(
+          dxd, fitExpToVar = condition, BPPARAM = bp_param
+        )
         DEXSeq::DEXSeqResults(dxd, independentFiltering = FALSE)
       },
       error = function(e) {
@@ -477,6 +509,8 @@ run_dexseq_dtu <- function(isoform_obj,
   rm(all_results)
   gc()
 
+  results_df$test_unit <- "transcript-feature rows; DEXSeq feature-level results"
+
   pval_by_gene <- split(results_df$pvalue, results_df$groupID)
 
   gene_pvals <- vapply(pval_by_gene, function(p) {
@@ -512,7 +546,8 @@ run_dexseq_dtu <- function(isoform_obj,
 
 #' DEXSeq-style transcript usage plot for a single gene
 #' @export
-plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL, splicing = FALSE) {
+plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL,
+                             splicing = FALSE, condition = "condition") {
   if (!requireNamespace("DEXSeq", quietly = TRUE)) {
     message("DEXSeq is required for plot_dexseq_gene(). Skipping.")
     return(invisible(NULL))
@@ -539,7 +574,7 @@ plot_dexseq_gene <- function(dxr_list, gene_id, plot_dir, gene_symbol = NULL, sp
         DEXSeq::plotDEXSeq(
           dxr,
           geneID = gene_id,
-          fitExpToVar = "condition",
+          fitExpToVar = condition,
           expression = !splicing,
           splicing = splicing,
           legend = TRUE,

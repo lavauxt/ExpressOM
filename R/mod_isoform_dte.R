@@ -2,23 +2,34 @@
 #
 
 #' Run DTE using DESeq2
+#' @param design Optional one-sided additive design formula. Defaults to
+#'   `~ condition`; include the `condition` column and any adjustment covariates.
 #' @export
-run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05, bpparam = NULL) {
+run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05,
+                    bpparam = NULL, design = NULL) {
   if (!requireNamespace("DESeq2", quietly = TRUE)) {
     stop("DESeq2 is required for DTE analysis. Please install it.")
   }
 
+  design <- design %||% stats::reformulate(condition)
+  design_info <- .validate_isoform_design(
+    design, condition, isoform_obj$meta
+  )
+  meta <- .set_contrast_reference(
+    design_info$metadata, condition, base, level
+  )
+
   if (isoform_obj$type == "tximport") {
     dds <- DESeq2::DESeqDataSetFromTximport(
       isoform_obj$txi,
-      colData = isoform_obj$meta,
-      design = as.formula(paste0("~ ", condition))
+      colData = meta,
+      design = design_info$formula
     )
   } else {
     dds <- DESeq2::DESeqDataSetFromMatrix(
       countData = round(isoform_obj$counts),
-      colData = isoform_obj$meta,
-      design = as.formula(paste0("~ ", condition))
+      colData = meta,
+      design = design_info$formula
     )
   }
 
@@ -30,7 +41,11 @@ run_dte <- function(isoform_obj, condition, level, base, padj_cutoff = 0.05, bpp
   bp_param <- if (is.null(bpparam)) BiocParallel::SerialParam() else bpparam
 
   dds <- DESeq2::DESeq(dds, test = "Wald", parallel = TRUE, BPPARAM = bp_param)
-  res <- DESeq2::results(dds, contrast = c(condition, level, base))
+  res <- DESeq2::results(
+    dds,
+    contrast = c(condition, level, base),
+    alpha = padj_cutoff
+  )
   res_df <- as.data.frame(res)
 
   res_df$transcript_id <- rownames(res_df)

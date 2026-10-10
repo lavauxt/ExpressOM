@@ -30,15 +30,16 @@ This version:
   }
 
   ext <- tolower(tools::file_ext(path))
+  link_path <- utils::URLencode(gsub("\\\\", "/", path), reserved = TRUE)
 
   if (ext %in% c("png", "jpg", "jpeg", "gif", "svg")) {
-    cat(sprintf("\n![%s](%s)\n\n", caption, path))
+    cat(sprintf("\n![%s](%s)\n\n", caption, link_path))
   } else {
     cat(
       sprintf(
         "\n[Download PDF: %s](%s)\n\n",
         if (nzchar(caption)) caption else basename(path),
-        path
+        link_path
       )
     )
   }
