@@ -1134,8 +1134,16 @@ install_isoform_databases <- function(
 }
 
 #' Load previously saved isoform analysis step checkpoints
+#' @param signature Optional expected checkpoint signature. Signed files that
+#'   do not match are ignored.
+#' @param require_signature If TRUE, ignore unsigned legacy files and require
+#'   an exact signature match.
 #' @export
-load_isoform_results <- function(save_dir) {
+load_isoform_results <- function(
+  save_dir,
+  signature = NULL,
+  require_signature = FALSE
+) {
   slots <- list(
     list(
       slot = "isoform_import",
@@ -1182,11 +1190,19 @@ load_isoform_results <- function(save_dir) {
     if (file.exists(p)) {
       message("Loaded ", s$label, " from ", p)
       saved <- readRDS(p)
-      if (
-        is.list(saved) &&
-          all(c("signature", "object") %in% names(saved))
-      ) {
-        saved$object
+      if (is.list(saved) && all(c("signature", "object") %in% names(saved))) {
+        if (
+          (!is.null(signature) && !identical(saved$signature, signature)) ||
+            (isTRUE(require_signature) && is.null(signature))
+        ) {
+          message("Ignoring incompatible resume checkpoint: ", s$file)
+          NULL
+        } else {
+          saved$object
+        }
+      } else if (isTRUE(require_signature)) {
+        message("Ignoring unsigned legacy resume file: ", s$file)
+        NULL
       } else {
         saved
       }

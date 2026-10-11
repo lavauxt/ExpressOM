@@ -339,7 +339,7 @@ generate_dte_dtu_report <- function(dte_results,
         next
       }
 
-      tx_ids <- tx2gene$tx_id[tx2gene$gene_id == gene_ens]
+      tx_ids <- .gene_transcript_ids(isoform_obj$gene_map, tx2gene, gene_sym)
       if (length(tx_ids) == 0) next
 
       tx_counts <- counts[rownames(counts) %in% tx_ids, , drop = FALSE]

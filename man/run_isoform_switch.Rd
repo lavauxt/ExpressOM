@@ -29,6 +29,11 @@ run_isoform_switch(
   plot_topology = TRUE
 )
 }
+\arguments{
+\item{custom_transcript_id_map}{A data frame or path to a TSV/CSV with
+`count_id` and `fasta_id` columns. Count IDs map to FASTA identifiers and
+must correspond to transcript IDs in the imported annotation.}
+}
 \description{
 Run IsoformSwitchAnalyzeR analysis
 }

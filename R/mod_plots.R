@@ -525,10 +525,6 @@ generate_bulk_visualizations <- function(dds, edb, res_shrunken, res_unshrunken,
                                        volcano_colors = NULL, lfc_cutoff = 1) {
   plot_dir <- file.path(out_dir, "Plots")
   if (!dir.exists(plot_dir)) dir.create(plot_dir, recursive = TRUE)
-  org_info <- get_organism_info(edb)
-  org_obj <- .load_org_db(org_info$org_db)
-
-
   if (!is.null(main_condition) && main_condition %in% colnames(SummarizedExperiment::colData(dds))) {
     vsd <- tryCatch(DESeq2::vst(dds, blind = TRUE),
                     error = function(e) DESeq2::varianceStabilizingTransformation(dds, blind = TRUE))
@@ -784,7 +780,7 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
 plot_comparison_pca <- function(vsd, condition_col, level, base, batch = NULL,
                                 plot_dir, ntop = 500,
                                 pca_colors = NULL, sample_labels = NULL) {
-  coldata <- as.data.frame(SummarizedExperiment::colData(vsd))
+  coldata <- as.data.frame(SummarizedExperiment::colData(vsd), optional = TRUE)
 
   if (is.null(condition_col) || !condition_col %in% colnames(coldata)) {
     message("   -> Skipping comparison-only PCA: '", condition_col, "' not found in colData.")

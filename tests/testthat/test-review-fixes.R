@@ -60,6 +60,195 @@ test_that("resume loader unwraps signed checkpoints and keeps legacy files", {
   expect_null(loaded$dtu_results)
 })
 
+test_that("resume loader can require a matching signature", {
+  save_dir <- withr::local_tempdir()
+  .checkpoint_save(
+    list(value = "matching"),
+    file.path(save_dir, "dte_results.rds"),
+    "current"
+  )
+  saveRDS(
+    list(value = "legacy"),
+    file.path(save_dir, "dtu_results.rds")
+  )
+
+  matching <- load_isoform_results(
+    save_dir,
+    signature = "current",
+    require_signature = TRUE
+  )
+  expect_identical(matching$dte_results, list(value = "matching"))
+  expect_null(matching$dtu_results)
+
+  stale <- expect_warning(
+    load_isoform_results(
+      save_dir,
+      signature = "stale",
+      require_signature = TRUE
+    ),
+    "No saved RDS checkpoint files found"
+  )
+  expect_null(stale$dte_results)
+})
+
+test_that("resume loader preserves legacy behavior unless signatures are required", {
+  save_dir <- withr::local_tempdir()
+  saveRDS(list(value = "legacy"), file.path(save_dir, "dte_results.rds"))
+
+  loaded <- load_isoform_results(save_dir)
+  expect_identical(loaded$dte_results, list(value = "legacy"))
+})
+
+test_that("gene symbols resolve all mapped transcripts without recycling", {
+  gene_map <- data.frame(
+    ensembl = c("gene1", "gene2", "gene3"),
+    symbol = c("DUP", "DUP", "OTHER")
+  )
+  tx2gene <- data.frame(
+    tx_id = paste0("tx", 1:4),
+    gene_id = c("gene1", "gene2", "gene3", "gene3")
+  )
+
+  expect_identical(
+    .gene_transcript_ids(gene_map, tx2gene, "DUP"),
+    c("tx1", "tx2")
+  )
+})
+
+test_that("custom switch count IDs map to matching FASTA IDs", {
+  custom_map <- data.frame(
+    count_id = c("ENST0001.1", "ENST0002.1"),
+    fasta_id = c("fa_tx1", "fa_tx2")
+  )
+
+  expect_identical(
+    .remap_switch_tx2gene(c("ENST0001.1", "ENST0003.1"), custom_map),
+    c("fa_tx1", "ENST0003")
+  )
+  expect_identical(
+    .remap_switch_tx2gene(c("fa_tx1", "fa_tx2"), custom_map),
+    c("fa_tx1", "fa_tx2")
+  )
+})
+
+test_that("feature overlap validation rejects mismatched matrix namespaces", {
+  tx2gene <- data.frame(tx_id = c("tx1", "tx2"), gene_id = c("g1", "g1"))
+  expect_error(
+    .validate_feature_overlap(c("gene1", "gene2", "tx1"), tx2gene, "matrix"),
+    "matrix feature IDs match transcript IDs"
+  )
+  expect_invisible(.validate_feature_overlap(c("tx1", "tx2"), tx2gene, "matrix"))
+})
+
+test_that("empty matrix imports bypass feature-overlap proportion checks", {
+  tx2gene <- data.frame(tx_id = "tx1", gene_id = "g1")
+  expect_invisible(.validate_feature_overlap(character(), tx2gene, "matrix"))
+})
+
+test_that("overlap validation ignores missing IDs in its mapped count", {
+  tx2gene <- data.frame(tx_id = "tx1", gene_id = "g1")
+  expect_error(
+    .validate_feature_overlap(c(NA_character_, "unmatched"), tx2gene, "matrix"),
+    "Only 0 / 2"
+  )
+})
+
+test_that("rank vectors exclude non-finite metrics and invalid identifiers", {
+  expect_identical(
+    .finite_ranked_vector(c(2, NA, Inf, -1), c("a", "b", "c", "d")),
+    c(a = 2, d = -1)
+  )
+})
+
+test_that("main contrast resolution uses filtered metadata", {
+  meta <- data.frame(
+    Sample = paste0("s", 1:4),
+    condition = c("A", "A", "B", "B"),
+    batch = c("A", "B", "A", "A")
+  )
+  filtered <- .apply_sample_filters(
+    meta,
+    "Sample",
+    subset_sample = "Sample != 's2'"
+  )
+
+  expect_identical(
+    .resolve_main_condition(
+      stats::as.formula("~ condition + batch"),
+      filtered,
+      level = "B",
+      base = "A"
+    ),
+    "condition"
+  )
+})
+
+test_that("MSigDB arguments support old and new collection formals", {
+  old_api <- .msigdbr_collection_args(
+    c("species", "category", "subcategory"),
+    "Homo sapiens",
+    "C5",
+    "GO:BP"
+  )
+  new_api <- .msigdbr_collection_args(
+    c("species", "collection", "subcollection", "db_species"),
+    "Homo sapiens",
+    "C5",
+    "GO:BP"
+  )
+
+  expect_identical(old_api$category, "C5")
+  expect_identical(old_api$subcategory, "GO:BP")
+  expect_identical(new_api$collection, "C5")
+  expect_identical(new_api$subcollection, "GO:BP")
+  expect_identical(new_api$db_species, "HS")
+  expect_identical(
+    .msigdbr_collection_args(
+      c("species", "collection", "db_species"),
+      "Mus musculus",
+      "M2"
+    )$db_species,
+    "MM"
+  )
+  expect_identical(
+    .finite_ranked_vector(numeric(), character()),
+    stats::setNames(numeric(), character())
+  )
+})
+
+test_that("PCA comparison keeps non-syntactic metadata names", {
+  skip_if_not_installed("SummarizedExperiment")
+  skip_if_not_installed("ggplot2")
+
+  counts <- matrix(
+    c(2, 4, 6, 8, 3, 5, 7, 9, 4, 6, 8, 10),
+    nrow = 3,
+    dimnames = list(paste0("g", 1:3), paste0("s", 1:4))
+  )
+  col_data <- S4Vectors::DataFrame(
+    condition = factor(c("A", "A", "B", "B")),
+    check.names = FALSE
+  )
+  names(col_data) <- "cell type"
+  rownames(col_data) <- colnames(counts)
+  vsd <- SummarizedExperiment::SummarizedExperiment(
+    assays = list(counts = counts),
+    colData = col_data
+  )
+  out_dir <- withr::local_tempdir()
+
+  expect_no_error(
+    plot_comparison_pca(
+      vsd,
+      condition_col = "cell type",
+      level = "B",
+      base = "A",
+      plot_dir = out_dir,
+      ntop = NULL
+    )
+  )
+})
+
 test_that("isoform switch covariates are explicitly reported", {
   expect_warning(
     .warn_isoform_switch_covariates("~ batch + condition", "condition"),

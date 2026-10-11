@@ -1010,6 +1010,9 @@ run_functional_analysis <- function(
           call. = FALSE
         )
       }
+      valid_rank <- is.finite(rank_entrez$log2FoldChange) &
+        is.finite(rank_entrez[[pvalue_col]])
+      rank_entrez <- rank_entrez[valid_rank, , drop = FALSE]
       safe_pvals <- ifelse(
         rank_entrez[[pvalue_col]] == 0,
         .Machine$double.xmin,
@@ -1018,13 +1021,26 @@ run_functional_analysis <- function(
       metric_vals <- sign(rank_entrez$log2FoldChange) * -log10(safe_pvals)
     } else {
       metric_vals <- rank_entrez$log2FoldChange
+      keep_rank <- is.finite(metric_vals)
+      rank_entrez <- rank_entrez[keep_rank, , drop = FALSE]
+      metric_vals <- metric_vals[keep_rank]
     }
-    set.seed(123456)
-    metric_vals <- metric_vals + runif(nrow(rank_entrez), -1e-9, 1e-9)
-    gsea_list <- sort(
-      purrr::set_names(metric_vals, as.character(rank_entrez$entrezid)),
-      decreasing = TRUE
+    gsea_list <- .finite_ranked_vector(
+      metric_vals,
+      rank_entrez$entrezid
     )
+    if (length(gsea_list)) {
+      set.seed(7319)
+      if (length(gsea_list) > 1L) {
+        gsea_list <- sort(
+          gsea_list + stats::runif(length(gsea_list), -1e-9, 1e-9),
+          decreasing = TRUE
+        )
+      }
+    } else {
+      message("   -> No finite ranked genes remain; skipping GSEA-family analysis.")
+      run_gsea <- FALSE
+    }
   } else {
     message(
       "   -> Skipping GSEA-family ranking (run_gsea = FALSE): no valid signed statistic for this result type (e.g. DTU)."
@@ -1442,18 +1458,20 @@ run_fgsea_analysis <- function(
     # extreme |stat| (mirrors the OE_foldchanges convention used elsewhere
     # in this file), so the log2FoldChange used for the LRT sign transform
     # below always comes from the same row as the stat it signs.
+    rank_col <- if (toupper(test_type) == "LRT") "contrast_stat" else "stat"
+    if (toupper(test_type) == "LRT" && !rank_col %in% colnames(res2)) {
+      stop(
+        "LRT enrichment ranking requires contrast-specific statistics; omnibus LRT statistics are not signed.",
+        call. = FALSE
+      )
+    }
     res2 <- res2 |>
+      dplyr::filter(is.finite(.data[[rank_col]])) |>
       dplyr::group_by(gene) |>
-      dplyr::slice_max(abs(stat), n = 1, with_ties = FALSE) |>
+      dplyr::slice_max(abs(.data[[rank_col]]), n = 1, with_ties = FALSE) |>
       dplyr::ungroup()
 
     if (toupper(test_type) == "LRT") {
-      if (!"contrast_stat" %in% colnames(res2)) {
-        stop(
-          "LRT enrichment ranking requires contrast-specific statistics; omnibus LRT statistics are not signed.",
-          call. = FALSE
-        )
-      }
       message(
         "   -> LRT detected: ranking by separate contrast-specific Wald statistics."
       )
@@ -1476,11 +1494,6 @@ run_fgsea_analysis <- function(
         call. = FALSE
       )
     }
-    res2 <- res2 |>
-      dplyr::group_by(gene) |>
-      dplyr::slice_min(pvalue, n = 1, with_ties = FALSE) |>
-      dplyr::ungroup()
-
     pvalue_col <- if (
       toupper(test_type) == "LRT" &&
         "contrast_pvalue" %in% colnames(res2)
@@ -1489,6 +1502,15 @@ run_fgsea_analysis <- function(
     } else {
       "pvalue"
     }
+    res2 <- res2 |>
+      dplyr::filter(
+        is.finite(log2FoldChange),
+        is.finite(.data[[pvalue_col]])
+      )
+    res2 <- res2 |>
+      dplyr::group_by(gene) |>
+      dplyr::slice_min(.data[[pvalue_col]], n = 1, with_ties = FALSE) |>
+      dplyr::ungroup()
     safe_pvals <- ifelse(
       res2[[pvalue_col]] == 0,
       .Machine$double.xmin,
@@ -1499,6 +1521,7 @@ run_fgsea_analysis <- function(
     # Unchanged from the original implementation: mean log2FoldChange
     # across duplicate gene symbols.
     res2 <- res2 |>
+      dplyr::filter(is.finite(log2FoldChange)) |>
       dplyr::group_by(gene) |>
       dplyr::summarize(
         log2FoldChange = mean(log2FoldChange, na.rm = TRUE),
@@ -1507,15 +1530,17 @@ run_fgsea_analysis <- function(
     metric_vals <- res2$log2FoldChange
   }
 
-  ranks <- purrr::set_names(metric_vals, as.character(res2$gene))
+  ranks <- .finite_ranked_vector(metric_vals, res2$gene)
 
   if (length(ranks) == 0) {
     message("-> Skipping FGSEA: no valid ranked genes available.")
     return(invisible(NULL))
   }
 
-  set.seed(123456)
-  ranks <- ranks + stats::runif(length(ranks), min = -1e-6, max = 1e-6)
+  set.seed(7319)
+  if (length(ranks) > 1L) {
+    ranks <- ranks + stats::runif(length(ranks), min = -1e-6, max = 1e-6)
+  }
   ranks <- sort(ranks, decreasing = TRUE)
 
   for (gmt_item in gmt_list) {
@@ -1591,37 +1616,7 @@ run_fgsea_analysis <- function(
 
       .msigdbr_fetch <- function(species, cat, subcat = NULL) {
         fmls <- names(formals(msigdbr::msigdbr))
-
-        args <- list(species = species)
-
-        if ("collection" %in% fmls) {
-          args$collection <- cat
-        } else {
-          args$category <- cat
-        }
-
-        if (!is.null(subcat)) {
-          if ("subcollection" %in% fmls) {
-            args$subcollection <- subcat
-          } else {
-            args$subcategory <- subcat
-          }
-        }
-
-        # Mouse-native collections (MH/M1/M2/M3/M5/M7/M8) live in msigdbr's
-        # "MM" database division. msigdbr defaults db_species to "HS", under
-        # which those collection codes don't exist and the call errors out
-        # (e.g. collection = "M2" against the default "HS" division) --
-        # this is what was actually causing FGSEA to fail outright on mouse
-        # runs rather than just falling back to Hallmark. The collection
-        # code itself tells us which division it belongs to regardless of
-        # the requested output species (e.g. cat = "C4" for a mouse run
-        # correctly still queries "HS", since C4 has no native mouse
-        # collection -- see .resolve_msigdbr_collection()).
-        if ("db_species" %in% fmls) {
-          args$db_species <- if (grepl("^M[H0-9]", cat)) "MM" else "HS"
-        }
-
+        args <- .msigdbr_collection_args(fmls, species, cat, subcat)
         do.call(msigdbr::msigdbr, args) |>
           dplyr::select(gs_name, gene_symbol)
       }
@@ -2092,16 +2087,12 @@ run_local_enrichment <- function(
 
   .fetch <- function(subcat) {
     fmls <- names(formals(msigdbr::msigdbr))
-    args <- list(species = organism, collection = collection)
-    if (!is.null(subcat)) {
-      args$subcategory <- subcat
-    }
-    # Same db_species requirement as .msigdbr_fetch() in run_fgsea_analysis()
-    # -- mouse-native collections (M1/M2/M3/M5/M7/M8/MH) only exist under
-    # msigdbr's "MM" database division, not the default "HS".
-    if ("db_species" %in% fmls) {
-      args$db_species <- if (grepl("^M[H0-9]", collection)) "MM" else "HS"
-    }
+    args <- .msigdbr_collection_args(
+      fmls,
+      organism,
+      collection,
+      subcat
+    )
     do.call(msigdbr::msigdbr, args)
   }
 

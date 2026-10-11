@@ -4,7 +4,14 @@
 \alias{load_isoform_results}
 \title{Load previously saved isoform analysis step checkpoints}
 \usage{
-load_isoform_results(save_dir)
+load_isoform_results(save_dir, signature = NULL, require_signature = FALSE)
+}
+\arguments{
+\item{signature}{Optional expected checkpoint signature. Signed files that
+do not match are ignored.}
+
+\item{require_signature}{If TRUE, ignore unsigned legacy files and require
+an exact signature match.}
 }
 \description{
 Load previously saved isoform analysis step checkpoints

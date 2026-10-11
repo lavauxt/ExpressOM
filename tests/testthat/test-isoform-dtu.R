@@ -35,3 +35,11 @@ test_that("DTU p-values are normalized for reports from either DRIMSeq spelling"
   expect_identical(from_p_value$pvalue, c(0.01, 0.2))
   expect_error(.normalize_dtu_pvalues(data.frame(other = 1)), "No p-value column")
 })
+
+test_that("failed DTU chunks prevent partial results from being returned", {
+  expect_error(
+    .stop_on_failed_chunks(c(2L, 4L), "DTU"),
+    "DTU failed for chunk\\(s\\) 2, 4.*No partial results"
+  )
+  expect_invisible(.stop_on_failed_chunks(integer(), "DTU"))
+})

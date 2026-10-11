@@ -185,6 +185,14 @@ import_transcript_counts <- function(
     )
 
     rownames(txi$counts) <- clean_transcript_id(rownames(txi$counts))
+    if (anyDuplicated(rownames(txi$counts))) {
+      stop(
+        "Imported feature IDs are duplicated after transcript-ID normalization. ",
+        "Check the quantification IDs for version/header variants that collapse ",
+        "to the same transcript ID.",
+        call. = FALSE
+      )
+    }
 
     # Sanity check: rownames(txi$counts) should be transcript IDs that
     # overlap tx2gene$tx_id (already version-stripped above). If a
@@ -195,29 +203,11 @@ import_transcript_counts <- function(
     # silently (DTE) or with a hard-to-read error much later in the
     # pipeline (DTU/switch analysis). Catch it here, once, with a message
     # that points straight at the cause.
-    n_total_tx <- length(rownames(txi$counts))
-    n_mapped_tx <- sum(rownames(txi$counts) %in% tx2gene$tx_id)
-
-    if (n_total_tx > 0 && n_mapped_tx / n_total_tx < 0.5) {
-      stop(
-        "Only ",
-        n_mapped_tx,
-        " / ",
-        n_total_tx,
-        " imported feature IDs match transcript IDs in tx2gene. This usually means ",
-        "count_type = '",
-        count_type,
-        "' resolved to a gene-level quantification file ",
-        "instead of an isoform-level one (RSEM in particular has separate ",
-        "genes.results / isoforms.results outputs -- import_transcript_counts() needs ",
-        "the isoform-level file), or data_dir/count_type point at the wrong files.\n",
-        "Example imported feature IDs:\n  ",
-        paste(utils::head(rownames(txi$counts), 5), collapse = "\n  "),
-        "\n\nExample tx2gene tx_id values:\n  ",
-        paste(utils::head(tx2gene$tx_id, 5), collapse = "\n  "),
-        call. = FALSE
-      )
-    }
+    .validate_feature_overlap(
+      rownames(txi$counts),
+      tx2gene,
+      paste0("imported '", count_type, "'")
+    )
 
     meta <- sample_df[colnames(txi$counts), , drop = FALSE]
 
@@ -246,6 +236,14 @@ import_transcript_counts <- function(
     count_mat <- .validate_raw_count_matrix(count_mat)
 
     rownames(count_mat) <- clean_transcript_id(rownames(count_mat))
+    if (anyDuplicated(rownames(count_mat))) {
+      stop(
+        "Matrix feature IDs are duplicated after transcript-ID normalization. ",
+        "Check for version or header variants that collapse to the same ID.",
+        call. = FALSE
+      )
+    }
+    .validate_feature_overlap(rownames(count_mat), tx2gene, "matrix")
     meta <- sample_df[valid_samples, , drop = FALSE]
 
     return(list(

@@ -790,6 +790,113 @@ clean_transcript_id <- function(x) {
   checkpoint$object
 }
 
+.msigdbr_collection_args <- function(
+  formal_names,
+  species,
+  collection,
+  subcategory = NULL
+) {
+  args <- list(species = species)
+  if ("collection" %in% formal_names) {
+    args$collection <- collection
+  } else {
+    args$category <- collection
+  }
+  if (!is.null(subcategory)) {
+    if ("subcollection" %in% formal_names) {
+      args$subcollection <- subcategory
+    } else {
+      args$subcategory <- subcategory
+    }
+  }
+  if ("db_species" %in% formal_names) {
+    args$db_species <- if (grepl("^M[H0-9]", collection)) "MM" else "HS"
+  }
+  args
+}
+
+.finite_ranked_vector <- function(values, ids) {
+  ids <- as.character(ids)
+  keep <- is.finite(values) & !is.na(ids) & nzchar(ids)
+  stats::setNames(as.numeric(values[keep]), ids[keep])
+}
+
+.stop_on_failed_chunks <- function(failed_chunks, engine) {
+  if (length(failed_chunks)) {
+    stop(
+      engine,
+      " failed for chunk(s) ",
+      paste(failed_chunks, collapse = ", "),
+      ". No partial results were returned; resolve the chunk errors and rerun.",
+      call. = FALSE
+    )
+  }
+  invisible(NULL)
+}
+
+.validate_feature_overlap <- function(feature_ids, tx2gene, label) {
+  n_total <- length(feature_ids)
+  n_mapped <- sum(!is.na(feature_ids) & feature_ids %in% tx2gene$tx_id)
+  if (n_total > 0L && n_mapped / n_total < 0.5) {
+    stop(
+      "Only ",
+      n_mapped,
+      " / ",
+      n_total,
+      " ",
+      label,
+      " feature IDs match transcript IDs in tx2gene. Check that the input ",
+      "contains transcript-level counts and uses IDs from the same annotation ",
+      "as tx2gene. Example input IDs: ",
+      paste(utils::head(feature_ids, 5), collapse = ", "),
+      "; example tx2gene IDs: ",
+      paste(utils::head(tx2gene$tx_id, 5), collapse = ", "),
+      call. = FALSE
+    )
+  }
+  invisible(n_mapped)
+}
+
+.gene_transcript_ids <- function(gene_map, tx2gene, symbol) {
+  gene_ids <- gene_map$ensembl[!is.na(gene_map$symbol) & gene_map$symbol == symbol]
+  tx2gene$tx_id[tx2gene$gene_id %in% gene_ids]
+}
+
+.remap_switch_tx2gene <- function(tx_ids, custom_map = NULL) {
+  tx_clean <- clean_transcript_id(tx_ids)
+  if (is.null(custom_map)) {
+    return(tx_clean)
+  }
+  count_ids <- clean_transcript_id(custom_map$count_id)
+  fasta_ids <- clean_transcript_id(custom_map$fasta_id)
+  valid <- !is.na(count_ids) &
+    nzchar(count_ids) &
+    !is.na(fasta_ids) &
+    nzchar(fasta_ids) &
+    count_ids %in% tx_clean
+  count_to_fasta <- stats::setNames(fasta_ids[valid], count_ids[valid])
+  mapped <- tx_clean %in% names(count_to_fasta)
+  tx_clean[mapped] <- unname(count_to_fasta[tx_clean[mapped]])
+  tx_clean
+}
+
+.remap_switch_count_ids <- function(count_ids, custom_map = NULL) {
+  count_clean <- clean_transcript_id(count_ids)
+  if (is.null(custom_map)) {
+    return(count_clean)
+  }
+  map_count_ids <- clean_transcript_id(custom_map$count_id)
+  map_fasta_ids <- clean_transcript_id(custom_map$fasta_id)
+  valid <- !is.na(map_count_ids) &
+    nzchar(map_count_ids) &
+    !is.na(map_fasta_ids) &
+    nzchar(map_fasta_ids)
+  fasta_to_count <- stats::setNames(map_count_ids[valid], map_fasta_ids[valid])
+  matched <- count_clean %in% names(fasta_to_count)
+  count_clean[matched] <- unname(fasta_to_count[count_clean[matched]])
+  count_clean
+}
+
 .warn_isoform_switch_covariates <- function(model, main_condition) {
   covariates <- setdiff(all.vars(stats::as.formula(model)), main_condition)
   if (length(covariates)) {

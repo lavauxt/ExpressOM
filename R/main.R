@@ -250,7 +250,19 @@ expressom <- function(
   # malformed file still surfaces later with a normal, clearer error from
   # import_counts() rather than here.
   sample_meta_for_cond <- tryCatch(
-    data.table::fread(sample_table, header = TRUE, data.table = FALSE),
+    {
+      meta <- data.table::fread(
+        sample_table,
+        header = TRUE,
+        data.table = FALSE
+      )
+      .apply_sample_filters(
+        meta,
+        .sample_id_column(meta),
+        remove_sample,
+        subset_sample
+      )
+    },
     error = function(e) NULL
   )
 
@@ -830,23 +842,6 @@ expressom <- function(
       dexseq_res <- NULL
       isoform_import <- NULL
 
-      if (!is.null(resume_isoform_from) && dir.exists(resume_isoform_from)) {
-        message("Resuming isoform analysis from: ", resume_isoform_from)
-
-        loaded <- load_isoform_results(resume_isoform_from)
-
-        isoform_import <- loaded$isoform_import
-        dte_res <- loaded$dte_results
-        dtu_res <- loaded$dtu_results
-        dexseq_res <- loaded$dexseq_results
-
-        if (!is.null(dte_res) && !is.null(dtu_res)) {
-          message("Loaded DTE and DTU results from resume directory.")
-        } else {
-          message("Resume directory incomplete. Will run missing steps.")
-        }
-      }
-
       if (is.null(isoform_fasta) || is.null(isoform_gff)) {
         message("   -> Auto-fetching Ensembl FASTA and GTF references...")
 
@@ -927,6 +922,26 @@ expressom <- function(
         run_spia = run_spia,
         isoform_test_engine = isoform_test_engine
       ))
+
+      if (!is.null(resume_isoform_from) && dir.exists(resume_isoform_from)) {
+        message("Resuming isoform analysis from: ", resume_isoform_from)
+        loaded <- load_isoform_results(
+          resume_isoform_from,
+          signature = iso_checkpoint_signature,
+          require_signature = TRUE
+        )
+
+        isoform_import <- loaded$isoform_import
+        dte_res <- loaded$dte_results
+        dtu_res <- loaded$dtu_results
+        dexseq_res <- loaded$dexseq_results
+
+        if (!is.null(dte_res) && !is.null(dtu_res)) {
+          message("Loaded compatible DTE and DTU results from resume directory.")
+        } else {
+          message("No compatible complete resume results found. Missing steps will run.")
+        }
+      }
 
       if (is.null(isoform_import) && .iso_ckpt_exists("isoform_import.rds")) {
         isoform_import <- .iso_ckpt_load("isoform_import.rds")

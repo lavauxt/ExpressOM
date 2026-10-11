@@ -2,6 +2,9 @@
 #
 
 #' Run IsoformSwitchAnalyzeR analysis
+#' @param custom_transcript_id_map A data frame or path to a TSV/CSV with
+#'   `count_id` and `fasta_id` columns. Count IDs map to FASTA identifiers, and
+#'   count IDs must correspond to transcript IDs in the imported annotation.
 #' @export
 run_isoform_switch <- function(
   dte_results = NULL,
@@ -272,21 +275,54 @@ run_isoform_switch <- function(
           paste(required_cols, collapse = ", ")
         )
       }
+      map_df$count_id <- as.character(map_df$count_id)
+      map_df$fasta_id <- as.character(map_df$fasta_id)
+      if (
+        anyNA(map_df$count_id) ||
+          anyNA(map_df$fasta_id) ||
+          any(!nzchar(trimws(map_df$count_id))) ||
+          any(!nzchar(trimws(map_df$fasta_id)))
+      ) {
+        stop(
+          "custom_transcript_id_map must not contain missing or empty IDs.",
+          call. = FALSE
+        )
+      }
+      clean_count_ids <- clean_transcript_id(map_df$count_id)
+      if (anyDuplicated(clean_count_ids)) {
+        stop(
+          "custom_transcript_id_map has count IDs that collide after ",
+          "transcript-ID normalization.",
+          call. = FALSE
+        )
+      }
+      clean_fasta_ids <- clean_transcript_id(map_df$fasta_id)
+      if (anyDuplicated(clean_fasta_ids)) {
+        stop(
+          "custom_transcript_id_map has FASTA IDs that collide after ",
+          "transcript-ID normalization.",
+          call. = FALSE
+        )
+      }
 
       old_rownames <- rownames(count_matrix)
-      new_rownames <- map_df$fasta_id[match(old_rownames, map_df$count_id)]
+      new_rownames <- clean_fasta_ids[match(
+        clean_transcript_id(old_rownames),
+        clean_count_ids
+      )]
+      mapped <- !is.na(new_rownames) & nzchar(new_rownames)
 
-      if (any(is.na(new_rownames))) {
+      if (any(!mapped)) {
         warning(
           "Some count IDs were not found in the mapping file; they will be kept unchanged."
         )
-        new_rownames[is.na(new_rownames)] <- old_rownames[is.na(new_rownames)]
+        new_rownames[!mapped] <- clean_transcript_id(old_rownames[!mapped])
       }
 
       rownames(count_matrix) <- new_rownames
       message(
         "  Remapped ",
-        sum(!is.na(new_rownames)),
+        sum(mapped),
         " transcript IDs using custom map."
       )
     }
@@ -329,6 +365,9 @@ run_isoform_switch <- function(
 
     tx2gene <- isoform_obj$tx2gene
     tx2gene$tx_clean <- clean_id(tx2gene$tx_id)
+    if (!is.null(custom_transcript_id_map)) {
+      tx2gene$tx_clean <- .remap_switch_tx2gene(tx2gene$tx_id, map_df)
+    }
 
     keep_tx <- rownames(count_matrix) %in% tx2gene$tx_clean
     count_matrix <- count_matrix[keep_tx, , drop = FALSE]
@@ -525,7 +564,9 @@ run_isoform_switch <- function(
       invisible(path_out)
     }
 
-    .rewrite_gtf_transcript_ids(gff_file, gff_file_clean, clean_id)
+    gtf_id_cleaner <- if (is.null(custom_transcript_id_map)) clean_id else
+      function(ids) .remap_switch_tx2gene(ids, map_df)
+    .rewrite_gtf_transcript_ids(gff_file, gff_file_clean, gtf_id_cleaner)
 
     importrdata_extra_args <- list(estimateDifferentialGeneRange = FALSE)
 

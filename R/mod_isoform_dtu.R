@@ -275,6 +275,7 @@ run_dtu <- function(
   )
 
   all_results <- list()
+  failed_chunks <- integer()
 
   rownames(sample_data) <- trimws(rownames(sample_data))
   colnames(counts) <- trimws(colnames(counts))
@@ -297,6 +298,7 @@ run_dtu <- function(
         i,
         ": No common samples between counts and metadata. Skipping."
       )
+      failed_chunks <- c(failed_chunks, i)
       next
     }
 
@@ -321,6 +323,7 @@ run_dtu <- function(
     )
 
     if (nrow(DRIMSeq::counts(d)) == 0) {
+      # Filtering legitimately removes genes; this is not an engine failure.
       gc()
       next
     }
@@ -329,7 +332,17 @@ run_dtu <- function(
     samples_d <- DRIMSeq::samples(d)
 
     if (!identical(rownames(samples_d), colnames(counts_d))) {
-      samples_d <- samples_d[colnames(counts_d), , drop = FALSE]
+      sample_idx <- match(colnames(counts_d), rownames(samples_d))
+      if (anyNA(sample_idx)) {
+        warning(
+          "Chunk ",
+          i,
+          ": count samples are missing from metadata. Skipping."
+        )
+        failed_chunks <- c(failed_chunks, i)
+        next
+      }
+      samples_d <- samples_d[sample_idx, , drop = FALSE]
     }
 
     if (nrow(samples_d) != ncol(counts_d)) {
@@ -342,6 +355,7 @@ run_dtu <- function(
         ncol(counts_d),
         "). Skipping."
       )
+      failed_chunks <- c(failed_chunks, i)
       next
     }
 
@@ -371,6 +385,7 @@ run_dtu <- function(
       },
       error = function(e) {
         message("Chunk ", i, " failed: ", e$message)
+        failed_chunks <<- c(failed_chunks, i)
         NULL
       }
     )
@@ -382,6 +397,8 @@ run_dtu <- function(
     rm(d, curr_counts, curr_df)
     gc()
   }
+
+  .stop_on_failed_chunks(failed_chunks, "DTU")
 
   if (length(all_results) == 0) {
     stop(
@@ -485,6 +502,7 @@ run_dexseq_dtu <- function(
 
   all_results <- list()
   dxr_list <- list()
+  failed_chunks <- integer()
 
   for (i in seq_along(gene_chunks)) {
     message("DEXSeq DTU: processing chunk ", i, " / ", length(gene_chunks))
@@ -544,6 +562,7 @@ run_dexseq_dtu <- function(
       },
       error = function(e) {
         message("  Chunk ", i, " DEXSeq testing failed: ", e$message)
+        failed_chunks <<- c(failed_chunks, i)
         NULL
       }
     )
@@ -569,11 +588,15 @@ run_dexseq_dtu <- function(
       all_results[[length(all_results) + 1]] <- res_df
 
       if (isTRUE(keep_dxr)) dxr_list[[length(dxr_list) + 1]] <- res
+    } else {
+      failed_chunks <- c(failed_chunks, i)
     }
 
     rm(dxd, curr_counts)
     gc()
   }
+
+  .stop_on_failed_chunks(failed_chunks, "DEXSeq DTU")
 
   if (length(all_results) == 0) {
     stop("No DEXSeq DTU results were produced.")
