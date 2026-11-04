@@ -267,6 +267,8 @@
   matched
 }
 
+# Legacy: only used by the removed RegionReport step; kept so existing callers
+# (and tests) of this helper keep working.
 .validate_nbest <- function(nbest, cap = 1000L) {
   if (
     !is.numeric(nbest) ||
@@ -1556,8 +1558,19 @@ download_ensembl_refs <- function(
 }
 
 #' ExpressOM Pre-Flight Environment Validation
+#'
+#' @param run_isoform Check the isoform-analysis packages.
+#' @param run_functional Check the functional-enrichment packages.
+#' @param run_report Check the packages needed by the unified interactive HTML
+#'   report ([build_expressom_report()]): plotly, DT, rmarkdown, htmlwidgets and
+#'   a Pandoc installation.
+#' @return `TRUE` (stops with an error if a core package is missing).
 #' @export
-validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
+validate_environment <- function(
+  run_isoform = TRUE,
+  run_functional = TRUE,
+  run_report = FALSE
+) {
   message("Checking ExpressOM environment readiness...")
 
   core_pkgs <- c("DESeq2", "tximport", "dplyr", "ggplot2", "pheatmap")
@@ -1604,12 +1617,34 @@ validate_environment <- function(run_isoform = TRUE, run_functional = TRUE) {
     }
   }
 
+  if (isTRUE(run_report)) {
+    rep_pkgs <- c("rmarkdown", "knitr", "plotly", "DT", "htmlwidgets", "htmltools")
+    missing_rep <- rep_pkgs[!sapply(rep_pkgs, requireNamespace, quietly = TRUE)]
+
+    if (length(missing_rep) > 0) {
+      warning(paste(
+        "The interactive HTML report is enabled, but packages are missing:",
+        paste(missing_rep, collapse = ", "),
+        "\nInstall with: install.packages(c(",
+        paste0("'", missing_rep, "'", collapse = ", "),
+        "))\nThe analysis still runs; build the report later with ",
+        "build_expressom_report(out_dir)."
+      ))
+    } else if (!isTRUE(rmarkdown::pandoc_available())) {
+      warning(
+        "Pandoc was not found, so the self-contained HTML report cannot be ",
+        "written (it is bundled with RStudio / Positron). The analysis still ",
+        "runs; build the report later with build_expressom_report(out_dir)."
+      )
+    }
+  }
+
   if (!requireNamespace("pdftools", quietly = TRUE)) {
     warning(
       "Package 'pdftools' is not installed. ",
-      "HTML reports (RegionReport, DTU/DTE report) will not be able to ",
-      "embed PDF plots as PNG, causing missing figures. ",
-      "Install with: install.packages('pdftools')"
+      "The interactive report will not be able to preview the PDF figures, ",
+      "and the isoform report cannot convert its PDF plots to PNG, causing ",
+      "missing figures. Install with: install.packages('pdftools')"
     )
   }
 

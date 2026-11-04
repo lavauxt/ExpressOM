@@ -1,7 +1,17 @@
 # mod_isoform_report.R -- DTE/DTU HTML report generation
 #
 
-#' Generate DTE/DTU HTML report
+#' Generate the DTE/DTU tables and plots (and, optionally, a stand-alone HTML report)
+#'
+#' Writes the annotated DTE / DTU / DEXSeq tables, the PDF + PNG plots, the plot
+#' manifest and the methods notes under `<out_dir>/IsoformSwitch/DTU_DTE_report/`.
+#' These files are what the isoform tab of the unified report
+#' ([build_expressom_report()]) displays. The legacy stand-alone
+#' `DTU_DTE_report.html` is only rendered when `render_html = TRUE`.
+#'
+#' @param render_html Logical: also render the legacy stand-alone
+#'   `DTU_DTE_report.html`. [expressom()] sets this to `FALSE` when the unified
+#'   report is enabled (`make_report = TRUE`).
 #' @export
 generate_dte_dtu_report <- function(dte_results,
                                     dtu_results,
@@ -22,11 +32,14 @@ generate_dte_dtu_report <- function(dte_results,
                                     padj_cutoff = 0.05,
                                     design = NULL,
                                     dge_test = "Wald",
-                                    reduced = NULL) {
+                                    reduced = NULL,
+                                    render_html = TRUE) {
 
   if (!requireNamespace("ggplot2", quietly = TRUE)) stop("ggplot2 is required for plotting")
-  if (!requireNamespace("DT", quietly = TRUE)) stop("DT is required for interactive tables")
-  if (!requireNamespace("rmarkdown", quietly = TRUE)) stop("rmarkdown is required to generate the report")
+  if (isTRUE(render_html)) {
+    if (!requireNamespace("DT", quietly = TRUE)) stop("DT is required for interactive tables")
+    if (!requireNamespace("rmarkdown", quietly = TRUE)) stop("rmarkdown is required to generate the report")
+  }
   if (!requireNamespace("dplyr", quietly = TRUE)) stop("dplyr is required for data manipulation")
   if (!requireNamespace("tidyr", quietly = TRUE)) stop("tidyr is required for data reshaping")
   if (!is.numeric(padj_cutoff) || length(padj_cutoff) != 1L ||
@@ -871,6 +884,14 @@ generate_dte_dtu_report <- function(dte_results,
       "   -> ", nrow(skip_summary),
       " plot(s) were intentionally skipped or removed. See skipped_plots.csv."
     )
+  }
+
+  if (!isTRUE(render_html)) {
+    message(
+      "DTE/DTU tables and plots written to: ", report_dir,
+      " (stand-alone HTML skipped; they are shown in the unified report)."
+    )
+    return(invisible(report_dir))
   }
 
   template_path <- tryCatch(

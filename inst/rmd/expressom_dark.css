@@ -1,0 +1,107 @@
+/* Dark theme of the ExpressOM report. The colours come from the --xp-* variables
+   defined in .xp_css() (R/mod_report_tabs.R); this file only restyles the
+   third-party widgets (Bootstrap 3, DataTables, selectize, noUiSlider). */
+html[data-theme='dark'] { color-scheme: dark; }
+html[data-theme='dark'] body { background: var(--xp-bg); color: var(--xp-fg); }
+html[data-theme='dark'] h1, html[data-theme='dark'] h2, html[data-theme='dark'] h3,
+html[data-theme='dark'] h4, html[data-theme='dark'] h5, html[data-theme='dark'] h6 { color: var(--xp-fg); }
+html[data-theme='dark'] a { color: var(--xp-accent); }
+html[data-theme='dark'] hr { border-color: var(--xp-border); }
+html[data-theme='dark'] code { background: var(--xp-card2); color: #ffb4c8; border-color: var(--xp-border); }
+html[data-theme='dark'] pre, html[data-theme='dark'] pre code { background: var(--xp-card); color: var(--xp-fg); border-color: var(--xp-border); }
+
+/* tabs */
+html[data-theme='dark'] .nav-pills > li > a { color: var(--xp-fg); }
+html[data-theme='dark'] .nav-pills > li > a:hover,
+html[data-theme='dark'] .nav-pills > li > a:focus { background: var(--xp-card2); color: var(--xp-fg); }
+html[data-theme='dark'] .nav-pills > li.active > a,
+html[data-theme='dark'] .nav-pills > li.active > a:hover,
+html[data-theme='dark'] .nav-pills > li.active > a:focus { background: #1d6fd1; color: #fff; }
+
+/* Bootstrap tables, forms, wells */
+html[data-theme='dark'] .table > thead > tr > th,
+html[data-theme='dark'] .table > tbody > tr > td,
+html[data-theme='dark'] .table > tbody > tr > th { border-color: var(--xp-border); }
+html[data-theme='dark'] .well { background: var(--xp-card); border-color: var(--xp-border); }
+html[data-theme='dark'] .form-control,
+html[data-theme='dark'] input[type='search'], html[data-theme='dark'] input[type='text'],
+html[data-theme='dark'] select {
+  background-color: var(--xp-card); color: var(--xp-fg); border: 1px solid var(--xp-border);
+}
+html[data-theme='dark'] ::placeholder { color: var(--xp-faint); opacity: 1; }
+
+/* DataTables (DT) */
+html[data-theme='dark'] table.dataTable { color: var(--xp-fg); background: transparent; }
+html[data-theme='dark'] table.dataTable thead th,
+html[data-theme='dark'] table.dataTable thead td { border-bottom: 1px solid var(--xp-border); }
+html[data-theme='dark'] table.dataTable tfoot th, html[data-theme='dark'] table.dataTable tfoot td { border-top: 1px solid var(--xp-border); }
+html[data-theme='dark'] table.dataTable.no-footer { border-bottom: 1px solid var(--xp-border); }
+html[data-theme='dark'] table.dataTable tbody tr,
+html[data-theme='dark'] table.dataTable.stripe tbody tr.odd,
+html[data-theme='dark'] table.dataTable.stripe tbody tr.even,
+html[data-theme='dark'] table.dataTable.display tbody tr.odd,
+html[data-theme='dark'] table.dataTable.display tbody tr.even { background-color: transparent; }
+html[data-theme='dark'] table.dataTable.stripe tbody tr.odd,
+html[data-theme='dark'] table.dataTable.display tbody tr.odd { background-color: rgba(255, 255, 255, .04); }
+html[data-theme='dark'] table.dataTable.hover tbody tr:hover,
+html[data-theme='dark'] table.dataTable.display tbody tr:hover { background-color: rgba(77, 163, 255, .14); }
+html[data-theme='dark'] table.dataTable.order-column tbody tr > .sorting_1,
+html[data-theme='dark'] table.dataTable.order-column tbody tr > .sorting_2,
+html[data-theme='dark'] table.dataTable.order-column tbody tr > .sorting_3,
+html[data-theme='dark'] table.dataTable.display tbody tr > .sorting_1,
+html[data-theme='dark'] table.dataTable.display tbody tr > .sorting_2,
+html[data-theme='dark'] table.dataTable.display tbody tr > .sorting_3 { background-color: rgba(255, 255, 255, .03); }
+html[data-theme='dark'] table.dataTable tbody tr.selected { background-color: rgba(77, 163, 255, .28); }
+html[data-theme='dark'] .dataTables_wrapper,
+html[data-theme='dark'] .dataTables_wrapper .dataTables_length,
+html[data-theme='dark'] .dataTables_wrapper .dataTables_filter,
+html[data-theme='dark'] .dataTables_wrapper .dataTables_info,
+html[data-theme='dark'] .dataTables_wrapper .dataTables_processing,
+html[data-theme='dark'] .dataTables_wrapper .dataTables_paginate { color: var(--xp-muted); }
+html[data-theme='dark'] .dataTables_wrapper .dataTables_paginate .paginate_button { color: var(--xp-fg) !important; }
+html[data-theme='dark'] .dataTables_wrapper .dataTables_paginate .paginate_button.current,
+html[data-theme='dark'] .dataTables_wrapper .dataTables_paginate .paginate_button.current:hover {
+  color: #fff !important; background: #1d6fd1; border: 1px solid #1d6fd1;
+}
+html[data-theme='dark'] .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+  color: #fff !important; background: var(--xp-card2); border: 1px solid var(--xp-border);
+}
+html[data-theme='dark'] .dataTables_wrapper .dataTables_paginate .paginate_button.disabled,
+html[data-theme='dark'] .dataTables_wrapper .dataTables_paginate .paginate_button.disabled:hover {
+  color: var(--xp-missing) !important; background: transparent; border: 1px solid transparent;
+}
+html[data-theme='dark'] .dataTables_scrollBody, html[data-theme='dark'] .dataTables_scrollHead { background: transparent; }
+html[data-theme='dark'] .dataTables_wrapper .dataTables_scroll div.dataTables_scrollBody { border-bottom: 1px solid var(--xp-border); }
+html[data-theme='dark'] .dt-buttons .dt-button, html[data-theme='dark'] .dt-button {
+  background: var(--xp-card2); color: var(--xp-fg); border: 1px solid var(--xp-border);
+}
+html[data-theme='dark'] .dt-button:hover { background: #2a3a4d !important; color: #fff; }
+html[data-theme='dark'] caption { color: var(--xp-muted); }
+html[data-theme='dark'] .dataTables_wrapper .dataTables_filter input,
+html[data-theme='dark'] .dataTables_wrapper .dataTables_length select { background-color: var(--xp-card); color: var(--xp-fg); border: 1px solid var(--xp-border); }
+html[data-theme='dark'] .dataTables_scrollHeadInner th input,
+html[data-theme='dark'] thead .form-group input { background-color: var(--xp-card); color: var(--xp-fg); }
+
+/* DT column filters: selectize and the numeric range slider */
+html[data-theme='dark'] .selectize-input,
+html[data-theme='dark'] .selectize-input.full { background: var(--xp-card); color: var(--xp-fg); border-color: var(--xp-border); box-shadow: none; }
+html[data-theme='dark'] .selectize-input input { color: var(--xp-fg); }
+html[data-theme='dark'] .selectize-dropdown { background: var(--xp-card2); color: var(--xp-fg); border-color: var(--xp-border); }
+html[data-theme='dark'] .selectize-dropdown .active { background: #1d6fd1; color: #fff; }
+html[data-theme='dark'] .selectize-control.multi .selectize-input > div { background: var(--xp-card2); color: var(--xp-fg); }
+html[data-theme='dark'] .noUi-target { background: var(--xp-card2); border-color: var(--xp-border); box-shadow: none; }
+html[data-theme='dark'] .noUi-connect { background: #1d6fd1; }
+html[data-theme='dark'] .noUi-handle { background: var(--xp-card); border-color: var(--xp-border); box-shadow: none; }
+html[data-theme='dark'] .noUi-tooltip { background: var(--xp-card2); color: var(--xp-fg); border-color: var(--xp-border); }
+html[data-theme='dark'] .irs-line { background: var(--xp-card2); border-color: var(--xp-border); }
+html[data-theme='dark'] .irs-bar { background: #1d6fd1; border-color: #1d6fd1; }
+html[data-theme='dark'] .irs-min, html[data-theme='dark'] .irs-max { background: var(--xp-card2); color: var(--xp-muted); }
+html[data-theme='dark'] .irs-grid-text { color: var(--xp-muted); }
+
+/* plotly: the modebar and tooltips that plotly.js draws in HTML */
+html[data-theme='dark'] .modebar-btn path { fill: var(--xp-muted) !important; }
+html[data-theme='dark'] .modebar-btn:hover path, html[data-theme='dark'] .modebar-btn.active path { fill: var(--xp-fg) !important; }
+html[data-theme='dark'] .modebar { background: transparent !important; }
+
+/* static figures are plots on a white background: keep them on a white card */
+html[data-theme='dark'] .xp-gallery img { border-color: var(--xp-border); }

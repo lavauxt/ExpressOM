@@ -16,6 +16,13 @@
 
 It effortlessly handles counts import, exploratory data analysis (EDA), differential expression analysis, comprehensive visualizations, and functional enrichment (GO, Reactome, Disease Ontology, KEGG, Transcription Factors, SPIA, and GSEA). Species currently supported: **Human** and **Mouse**.
 
+Besides the analysis itself, ExpressOM gives you:
+
+* **one interactive HTML report** per run (plotly figures and searchable tables in tabs) -- [see below](#interactive-html-report);
+* **a Shiny app** to change parameters and relaunch the analysis on the fly, and browse the results -- [see below](#shiny-app);
+* **an incremental `targets` pipeline** that only re-runs the stages affected by a change -- [see below](#incremental-runs-with-targets);
+* **a `testthat` suite** that runs without real data -- [see below](#tests).
+
 ---
 
 ## Installation
@@ -29,6 +36,17 @@ if (!requireNamespace("devtools", quietly = TRUE)) install.packages("devtools")
 # Install directly from GitHub
 devtools::install_github("lavauxt/ExpressOM")
 ```
+
+The analysis itself only needs the core packages listed in `DESCRIPTION`. The interactive report, the Shiny app and the incremental pipeline use a few extra (optional) packages, which `validate_environment()` checks before a run:
+
+```R
+install.packages(c(
+  "rmarkdown", "knitr", "htmltools", "htmlwidgets", "plotly", "DT", "pdftools",  # HTML report
+  "shiny", "targets", "callr", "tidyselect"                                      # app + targets pipeline
+))
+```
+
+The report also needs [pandoc](https://pandoc.org/) (bundled with RStudio / Positron).
 
 ### 1. Generate and Install the Custom Ensembl Database
 `ExpressOM` relies on a custom-built Ensembl database package to annotate transcripts and map identifiers securely. You must build and install it locally before processing your data.
@@ -170,6 +188,158 @@ results/
             ├── GSEA_Table_c2.cp.kegg.v2023.1.Hs.symbols.html
             └── GSEA_plot_...pdf
 ```
+## Interactive HTML Report
+
+Every run of `expressom()` (alias `run_bulk_pipeline()`) ends with **one self-contained, dynamic HTML file** that gathers all the results of the run in tabs:
+
+```txt
+results/Report/ExpressOM_report_<level>_vs_<base>.html
+```
+
+Open it in any browser, no R needed: figures are interactive `plotly` widgets (zoom, hover, toggle groups, export to PNG) and tables are searchable/sortable `DT` tables with CSV/Excel buttons. A **light / dark switch** in the header re-themes the page, the plotly figures and the tables; see [Dark mode](#dark-mode). The report is **discovery based**: it reads whatever is on disk in `out_dir`, and a tab simply does not appear when the stage behind it was not run (no isoform analysis → no *Isoforms* tab, no FGSEA → no FGSEA sub-tab...).
+
+| Tab | Content |
+|---|---|
+| **Overview** | Summary boxes (comparison, genes tested, up/down-regulated genes, samples, number of enrichment tables, significant DTE/DTU) and a checklist of which results were found |
+| **Samples & QC** | One sub-tab per PCA (global, batch-corrected, comparison-only, transcript-level): interactive PC1/PC2 and PC1/PC3 plots, scree plot and the sample-scores table |
+| **Differential expression** | *Volcano* (your volcano colours, cut-offs and highlighted genes), *MA plot*, *Top genes heatmap*, full *Results table*, *DEG lists* per cut-off |
+| **Functional analysis** | By source (gene level, DTE, DTU), method (ORA, GSEA, SPIA, transcription factors) and gene-set collection (including every FGSEA `.gmt`): top-term plot + full table |
+| **Isoforms** | DTE, DTU, DEXSeq, variable transcripts, switch plots and the methods used |
+| **Figures** | The PDF/PNG figures found under `out_dir`, one sub-tab per output folder: PDFs are converted to PNG and embedded (click to enlarge; needs `pdftools`; up to `max_static_figures` per folder), plus a table listing every file |
+| **Run info** | Parameters of the run, logs (`Log/`) and the list of files produced |
+
+```R
+# on by default; the report is rebuilt at the end of every run
+expressom(..., make_report = TRUE,
+          report_settings = list(
+            title         = "Treated vs control",
+            heatmap_genes = 75,           # genes on the top-genes heatmap
+            top_terms     = 30,           # terms per enrichment plot
+            max_points    = 20000,        # points kept per scatter (large volcano plots are thinned)
+            highlight_genes = c("TP53", "MYC"),
+            theme         = "auto"        # "auto" (follow the system), "light" or "dark"
+          ))
+
+# rebuild it later, from the files on disk, without re-running any analysis
+build_expressom_report("./results", settings = expressom_report_settings(title = "My study"))
+
+# use the same data in your own R code
+res <- load_expressom_results("./results")
+res
+```
+
+`report_settings` accepts the arguments of `expressom_report_settings()` (`title`, `max_points`, `heatmap_genes`, `top_terms`, `table_rows`, `static_figures`, `max_static_figures`, `static_dpi`, `highlight_genes`, `padj_cutoff`, `lfc_cutoff`, `theme`). If one tab fails to render, the rest of the report is still built and the failed tab shows the error message.
+
+#### Dark mode
+
+The button at the top right of the report switches between light and dark. The report opens in the mode of the viewer's operating system (`prefers-color-scheme`) until the button is used; the choice is then remembered in that browser. To make a report open in a given mode whatever the system says, build it with `theme = "dark"` (or `"light"`) in `report_settings`; the viewer's own choice still wins. Everything follows the switch: page, tabs, DataTables (filters, buttons, pagination), and the plotly figures (background, text, grid, reference lines, highlighted genes), which are re-themed in place without re-drawing. The embedded static figures (PDFs converted to PNG) are plots on a white background, so they stay on a white card in dark mode. Printing always uses the light theme.
+
+> **Replaces `RegionReport`.** The previous `RegionReport/` HTML was a separate static document, centred on the differential-expression results. It was dropped in favour of the report above (the `regionReport`, `pcaExplorer` and `mockery` suggestions are gone). The argument `nBest`, which only controlled it, is now deprecated and ignored. The legacy stand-alone `IsoformSwitch/DTU_DTE_report/DTU_DTE_report.html` is only rendered when you run with `make_report = FALSE` (or call `generate_dte_dtu_report(render_html = TRUE)`); the tables and plots it was built from are always written, and the *Isoforms* tab shows them.
+
+The report needs `rmarkdown`, `knitr`, `htmltools`, `htmlwidgets`, `plotly` and `DT`, and [pandoc](https://pandoc.org/) (bundled with RStudio/Positron). `validate_environment()` warns about them before the run starts, and a run without them still completes (only the report is skipped).
+
+---
+
+## Shiny App
+
+The app lets you **change parameters and relaunch the analysis on the fly**, follow the run, and explore the results, all from one window.
+
+```R
+ExpressOM::run_expressom_app()                       # blank form, pick an output directory
+ExpressOM::run_expressom_app("./results")            # reopen an existing run (parameters are read back from it)
+ExpressOM::run_expressom_app(
+  "./results",
+  params = list(data_dir = "./raw_data", sample_table = "./samples.csv",
+                count_type = "salmon", level = "Treated", base = "Control")
+)
+```
+
+| Tab | What it does |
+|---|---|
+| **Pipeline** | One row per stage (*current / stale / running / errored / never run*). The **Run pipeline** button turns red when something is out of date and green when everything is current. *Run selected* builds the stages you tick (and what they depend on); *Force re-run* ignores the cache. The live log is tailed below. |
+| **Results** | The same tabs as the HTML report, rendered live in Shiny. Cut-offs and gene counts can be changed for display only, without touching the files on disk. |
+| **Report** | Shows the latest HTML report in the app and lets you download it. |
+
+The sidebar holds the parameters (input, design, cut-offs and figures, functional analysis, isoforms, report). Everything else accepted by `expressom()` can be set as JSON in the "other parameters" box; it is checked against the function's argument names before a run starts.
+
+![Pipeline tab](assets/screenshots/app_pipeline.png)
+![Results tab](assets/screenshots/app_results.png)
+![Report tab](assets/screenshots/app_report.png)
+
+*Screenshots come from a synthetic example run with mocked analysis stages: they show the layout, not real results.*
+
+Runs happen in a background R process (`callr`), so the app stays responsive and a crashed analysis cannot take the app down. Behind the scenes the app uses the `targets` pipeline described below, so **changing a colour or a cut-off only re-runs the stages that read it**. Pass `runner = function(params, dir, stages, force) {...}` to `expressom_app()` to plug in another way of executing the pipeline (this is how the tests exercise the app without running any analysis).
+
+Required packages: `shiny`, `targets`, `callr`, `plotly`, `DT`, `htmltools`, `htmlwidgets`, `rmarkdown`, `knitr`.
+
+---
+
+## Incremental Runs with `targets`
+
+`expressom()` always runs every stage in sequence. For iterative work (tuning cut-offs, colours, gene sets, adding the isoform analysis later) the same stages are available as a [`targets`](https://docs.ropensci.org/targets/) pipeline that **only re-runs what a change actually affects**. The Shiny app is built on it, and you can also use it from a script:
+
+```R
+library(ExpressOM)
+
+p <- expressom_params(
+  data_dir = "./raw_data", out_dir = "./results",
+  sample_table = "./samples.csv", count_type = "salmon",
+  ensembl_package_name = "EnsDb.Hsapiens.v107",
+  level = "Treated", base = "Control"
+)                                      # every other argument keeps the default of expressom()
+
+run_expressom_targets(p)               # first run: everything
+expressom_stage_status(p, expressom_targets_dir("./results"))   # current / stale / ... per stage
+
+p$deg_lfc_cutoff <- 1.5                # tweak and re-run: only the stages that read it are rebuilt
+p$volcano_colors <- c(up = "darkorange", down = "navy", ns = "grey80")
+run_expressom_targets(p)
+
+run_expressom_targets(p, stages = "dge")              # build up to the stage(s) given, plus what they depend on
+expressom_targets_invalidate(expressom_targets_dir("./results"), "functional")  # force one stage to run again
+```
+
+Everything the pipeline needs is stored in `<out_dir>/.expressom_targets/` (the `targets` store, a `params.rds` copy of the parameters and a one-line `_targets.R`; to drive it with `targets` directly use `targets::tar_make(script = ".expressom_targets/_targets.R", store = ".expressom_targets/store")` from `out_dir`). `expressom_params_from_run("./results")` rebuilds the parameters of a finished run from `Log/expressom_run.json`.
+
+### Stages and dependencies
+
+```mermaid
+flowchart LR
+  setup --> import --> eda --> report
+  import --> dge --> dge_plots --> report
+  dge --> functional --> report
+  dge --> fgsea --> report
+  setup --> isoform --> report
+```
+
+`rdata` (the `.RData` snapshot) follows `import`, `dge`, `functional` and `isoform`. `expressom_pipeline_stages()` lists the stages and their upstream stages.
+
+### What re-runs when you change a parameter
+
+Each stage receives **only the parameters it uses**, and `targets` compares those values, so editing a parameter invalidates the stages that read it and the stages downstream of them, nothing else. The count files themselves are fingerprinted (path, size, md5), so editing a counts file invalidates the import even though its path did not change, while merely touching it does not.
+
+| You change... | Stages that re-run |
+|---|---|
+| Report only: `report_settings` | `report` |
+| Figures only: `volcano_colors`, `highlight_genes`, `zscore_genes`, `gene_sets_zscore` | `dge_plots` → `report` |
+| Sample labels / PCA: `sample_labels`, `pca_colors`, `pca_ntop`, `batch_col` | `eda`, `dge_plots`, `isoform` → `report` |
+| Grouping of the EDA plots: `group_col` | `eda` → `report` |
+| Functional analysis: `go_pvalue_cutoff`, `go_qvalue_cutoff`, `ora_*`, `gsea_metric`, `run_spia` | `functional` (and `isoform`, which reuses them; `gsea_metric` also `fgsea`) → `report` |
+| Number of genes shown: `top_genes` | `dge_plots`, `functional`, `isoform` → `report` |
+| Gene sets: `gmt_file` | `fgsea`, `isoform` → `report` |
+| Isoforms: `run_isoform`, `run_dexseq`, `isoform_*`, `run_predictors`, `predictor_cpu`, `use_wsl`... | `isoform` → `report` |
+| DGE: `padj_cutoff`, `deg_lfc_cutoff`, `deg_padj_cutoffs`, `shrink_method`, `test`, `reduced`, `model`, `replicate_col`, `level`, `base` | `dge` and everything downstream (functional, FGSEA, figures, report; `eda` too for `level`/`base`/`replicate_col`; `isoform` for the ones it shares) |
+| Input: `data_dir`, `sample_table`, `count_type`, `matrix_file`, `subset_sample`, `remove_sample`, `custom_tx2gene`, `custom_gene_map`, `ensembl_package_name` | `import` and everything downstream |
+
+A few details worth knowing:
+
+* The isoform stage is the most expensive one and also reads the PCA and cut-off parameters (it draws its own PCAs and enrichment). The report depends on it, so a full run brings it up to date as well; while you iterate on gene-level figures, build only the stages you need (`stages = c("dge_plots", "functional", "fgsea")`) and run everything once you are happy with the parameters.
+* A stage that fails does not stop independent stages (`error = "continue"` on the report and `.RData` leaves); `run_expressom_targets()` warns with the list of failed stages, and the app shows them in the table and as a notification.
+* `stages =` means "build up to these stages and their dependencies"; the report is only built when you ask for it (or run everything).
+* The stage code is the same code `expressom()` runs: `expressom()` calls the stage functions one after the other, the pipeline calls them as targets.
+
+---
+
 ## Pipeline Outputs
 
 The `run_bulk_pipeline` function generates a heavily organized output structure in your designated `out_dir`:
@@ -179,10 +349,12 @@ The `run_bulk_pipeline` function generates a heavily organized output structure 
 * **`ORA/` & `GSEA/`**: Extensive targets and plots for GO mapping, Reactome, Disease Ontology, and KEGG generic pathways (Dotplots, Ridgeplots, Pathway Graphs).
 * **`SPIA/`**: Signaling Pathway Impact Analysis graphs and Evidence CSVs.
 * **`Transcription_Factors/`**: Output mapping active transcription factor perturbations based on dynamically mapped Enrichr libraries.
-* **`RegionReport/`**: Auto-generated interactive `RegionReport` HTML documents. Figures in this report (and in the isoform `DTU_DTE_report/report.html`) are converted from PDF to PNG and embedded directly in the HTML; install the `pdftools` package if you want them to appear inline (otherwise the underlying `.pdf` plot files are still written to `Plots/`, just linked instead of embedded).
+* **`Report/`**: the unified interactive report `ExpressOM_report_<level>_vs_<base>.html` (see [Interactive HTML Report](#interactive-html-report)). Static figures in it are converted from PDF to PNG and embedded; install `pdftools` if you want them inline (the underlying `.pdf` files are always written to `Plots/`).
+* **`.expressom_targets/`**: only when you use the `targets` pipeline or the Shiny app: the pipeline store, the stored parameters and the last run log (see [Incremental Runs with `targets`](#incremental-runs-with-targets)). Safe to delete; the next run simply starts from scratch.
 * **`Save_rdata/`**: The complete populated R environment serialized as an `.RData` file.
 * **`Log/`**: A single, unified log tree for the whole run — always check here first if something looks like it didn't run:
   * `Log/SessionInfo.txt`, `Log/Warnings.txt` — captured at the very end of the run, regardless of what was enabled.
+  * `Log/expressom_run.json` — snapshot of the parameters, cut-offs and colours of the run. The report and the Shiny app read it so they reproduce exactly what the run used (`expressom_params_from_run()` turns it back into a parameter list).
   * `Log/DGE/DGE_params_<comparison>.json` — one file per DGE comparison (design formula, contrast, filters, up/down counts).
   * `Log/Isoform/wsl_debug.json` — output of `debug_wsl()`: which predictor tools were found, whether the Pfam database is present *and* `hmmpress`-indexed, whether the `isoform_tools` conda env exists, etc.
   * `Log/Isoform/wsl_commands.log` — a timestamped audit trail of every command run inside WSL/bash, with exit codes and captured output. First place to look if a predictor "silently" didn't produce results.
@@ -479,8 +651,9 @@ else in the run.
 Beyond DTE/DTU tables and the transcript-proportion barplots, the isoform
 pipeline can generate a richer set of graphics for interpreting *how* a
 gene's isoform usage differs between conditions. These are produced
-automatically as part of the DTE/DTU HTML report whenever `run_isoform = TRUE`,
-and are also available as standalone functions for ad-hoc use.
+automatically whenever `run_isoform = TRUE` (the files are written to
+`IsoformSwitch/DTU_DTE_report/plots/` and shown in the *Isoforms* tab of the
+interactive report), and are also available as standalone functions for ad-hoc use.
 
 | Plot | Function | What it shows |
 |------|----------|----------------|
@@ -552,7 +725,7 @@ run_bulk_pipeline(
 results/
 └── IsoformSwitch/
     ├── DTU_DTE_report/
-    │   ├── report.html                       # now includes DEXSeq / Switch Overview / gene sections
+    │   ├── DTU_DTE_report.html               # legacy stand-alone report, only with make_report = FALSE
     │   ├── DTE_results_annotated.csv
     │   ├── DTU_results_annotated.csv
     │   ├── DEXSeq_results_annotated.csv       # only if run_dexseq = TRUE
@@ -591,6 +764,37 @@ results/
 land here) each hold that tool's own log, while `predictor_status.log` and
 `wsl_commands.log` stay at the top of `Log/Isoform/` since they're a
 cross-tool summary/live feed, not any one tool's log.
+
+## Tests
+
+The package ships a `testthat` suite (`tests/testthat/`) that runs without any real RNA-seq data, annotation package or heavy dependency:
+
+```R
+devtools::test()                                  # from a source checkout
+# or, with the package installed
+testthat::test_package("ExpressOM")
+```
+
+| File | Covers |
+|---|---|
+| `test-report-data.R` | `load_expressom_results()` on a synthetic run directory (discovery, missing stages, JSON snapshot, named colour vectors) |
+| `test-report-plots.R` | plotly builders (volcano, MA, PCA, heatmap, enrichment) and their edge cases |
+| `test-report-tabs.R` | the tab tree shared by the HTML report and the app (`expressom_report_tabs()`), error isolation per tab |
+| `test-report-build.R` | end-to-end `build_expressom_report()`: self-contained HTML, tab titles, graceful degradation (skipped without `pandoc`/report packages) |
+| `test-stages.R` | refactored stage functions; checks by code walking that each stage only reads the parameters of its group |
+| `test-targets-params.R` | `expressom_params()`, defaults, path normalisation, run snapshots, parameter hashing per stage |
+| `test-targets-run.R` | mock-stage pipeline runs in-process: selective invalidation, file fingerprints, `stages=`, status (current/stale/errored), failure reporting |
+| `test-app.R` | Shiny modules with `shiny::testServer()` (parameter widgets, validation, pipeline module, results viewer) |
+
+Tests that need optional packages (`plotly`, `DT`, `shiny`, `targets`, `callr`, `pandoc`...) skip cleanly when they are missing. The statistical stages themselves (DESeq2, clusterProfiler, IsoformSwitchAnalyzeR...) are not re-run by the tests; the pipeline tests replace them with mock stages that record how often they are called.
+
+---
+
+## Acknowledgements
+
+The report and app design borrows ideas from other open-source projects (no code is copied from them): the result-contract / "discover what is on disk" approach of [alevinQC](https://github.com/csoneson/alevinQC), the tabbed exploration and on-the-fly re-analysis of [SCHNAPPs](https://github.com/C3BI-pasteur-fr/UTechSCB-SCHNAPPs), the browsable single-file viewers of [ShinyCell2](https://github.com/the-ouyang-lab/ShinyCell2) and [FuSViz](https://github.com/senzhaocode/FuSViz), and the one-command statistics report of [scRNAstat](https://github.com/cran/scRNAstat).
+
+---
 
 ## License
 

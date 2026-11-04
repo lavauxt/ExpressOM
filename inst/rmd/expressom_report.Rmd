@@ -1,0 +1,33 @@
+---
+pagetitle: "ExpressOM report"
+output:
+  html_document:
+    self_contained: true
+    theme: cosmo
+    toc: false
+    mathjax: null
+    highlight: null
+params:
+  results_rds: ""
+  settings_rds: ""
+---
+
+```{r setup, include=FALSE}
+# Every analysis result is read from disk by load_expressom_results(); this
+# template only lays the tab tree out. Tab builders live in
+# R/mod_report_tabs.R so the Shiny app shows exactly the same content.
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+res      <- readRDS(params$results_rds)
+settings <- readRDS(params$settings_rds)
+tabs     <- expressom_report_tabs(res, settings)
+```
+
+```{r header}
+.xp_header_html(res, settings)
+```
+
+# Results {.tabset .tabset-pills .xp-top}
+
+```{r tabs, results='asis'}
+cat(.xp_emit_tabs(tabs, level = 2L), sep = "\n")
+```

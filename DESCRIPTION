@@ -1,7 +1,7 @@
 Package: ExpressOM
 Type: Package
 Title: Expression Overview and Mapping
-Version: 0.1.2
+Version: 0.2.0
 Author: TL
 Maintainer: TL <lavauxt@gmail.com>
 Description: A fully modularized R package for bulk RNA-seq analysis, wrapping
@@ -10,7 +10,10 @@ Description: A fully modularized R package for bulk RNA-seq analysis, wrapping
     with DTE/DTU (DRIMSeq and complementary DEXSeq engines) and
     IsoformSwitchAnalyzeR, including enhanced graphic interpretation via
     isoform switch summary plots, sashimi-style junction usage diagrams, and
-    exon-bin usage comparison plots.
+    exon-bin usage comparison plots. Every result of a run is regrouped in one
+    self-contained interactive HTML report (plotly figures and searchable
+    tables in tabs); the whole analysis can be run as a cached 'targets'
+    pipeline and re-launched stage by stage from a 'shiny' application.
 License: GPL-3
 Encoding: UTF-8
 LazyData: true
@@ -58,6 +61,7 @@ Suggests:
     DRIMSeq,
     DT,
     DEXSeq,
+    callr,
     GenomicRanges,
     S4Vectors,
     IsoformSwitchAnalyzeR (>= 2.6.0),
@@ -66,12 +70,14 @@ Suggests:
     limma,
     org.Hs.eg.db,
     org.Mm.eg.db,
-    pcaExplorer,
     pdftools,
-    regionReport,
+    plotly,
     rmarkdown,
+    shiny,
+    targets (>= 1.4.0),
     testthat (>= 3.0.0),
-    mockery,
+    tidyselect,
+    htmltools,
     BSgenome.Hsapiens.UCSC.hg38,
     xfun
 VignetteBuilder: knitr
