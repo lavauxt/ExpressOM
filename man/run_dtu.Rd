@@ -16,7 +16,8 @@ run_dtu(
   chunk_size = 5000,
   max_transcripts = 300,
   min_transcript_total = 10,
-  bpparam = NULL
+  bpparam = NULL,
+  design = NULL
 )
 }
 \description{

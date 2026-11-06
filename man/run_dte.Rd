@@ -10,8 +10,13 @@ run_dte(
   level,
   base,
   padj_cutoff = 0.05,
-  bpparam = NULL
+  bpparam = NULL,
+  design = NULL
 )
+}
+\arguments{
+\item{design}{Optional one-sided additive design formula. Defaults to
+`~ condition`; include the `condition` column and any adjustment covariates.}
 }
 \description{
 Run DTE using DESeq2

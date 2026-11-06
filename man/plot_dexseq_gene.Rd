@@ -9,7 +9,8 @@ plot_dexseq_gene(
   gene_id,
   plot_dir,
   gene_symbol = NULL,
-  splicing = FALSE
+  splicing = FALSE,
+  condition = "condition"
 )
 }
 \description{

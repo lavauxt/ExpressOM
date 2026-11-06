@@ -20,6 +20,7 @@
   n_de_genes_down,
   filter_criterion = "rowSums(counts) >= 1",
   lfc_cutoff = 1,
+  test_type = "Wald",
   main_condition = NULL
 )
 }

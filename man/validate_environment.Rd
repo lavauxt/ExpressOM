@@ -4,7 +4,23 @@
 \alias{validate_environment}
 \title{ExpressOM Pre-Flight Environment Validation}
 \usage{
-validate_environment(run_isoform = TRUE, run_functional = TRUE)
+validate_environment(
+  run_isoform = TRUE,
+  run_functional = TRUE,
+  run_report = FALSE
+)
+}
+\arguments{
+\item{run_isoform}{Check the isoform-analysis packages.}
+
+\item{run_functional}{Check the functional-enrichment packages.}
+
+\item{run_report}{Check the packages needed by the unified interactive HTML
+report ([build_expressom_report()]): plotly, DT, rmarkdown, htmlwidgets and
+a Pandoc installation.}
+}
+\value{
+`TRUE` (stops with an error if a core package is missing).
 }
 \description{
 ExpressOM Pre-Flight Environment Validation

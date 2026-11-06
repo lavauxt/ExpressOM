@@ -4,7 +4,7 @@
 \alias{.deg_count_table}
 \title{Count differentially expressed genes at several adjusted p-value cutoffs}
 \usage{
-.deg_count_table(res_tbl, padj_cutoffs, lfc_cutoff = 1)
+.deg_count_table(res_tbl, padj_cutoffs, lfc_cutoff = 1, test_type = "Wald")
 }
 \arguments{
 \item{res_tbl}{Results table with `padj` and `log2FoldChange` columns}

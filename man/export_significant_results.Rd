@@ -14,7 +14,8 @@ export_significant_results(
   gene_map,
   padj_cutoff,
   padj_cutoffs = NULL,
-  lfc_cutoff = 1
+  lfc_cutoff = 1,
+  test_type = "Wald"
 )
 }
 \arguments{

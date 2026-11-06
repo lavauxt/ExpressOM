@@ -17,7 +17,8 @@ run_dexseq_dtu(
   max_transcripts = 300,
   min_transcript_total = 10,
   keep_dxr = TRUE,
-  bpparam = NULL
+  bpparam = NULL,
+  design = NULL
 )
 }
 \description{

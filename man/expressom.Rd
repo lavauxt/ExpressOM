@@ -36,7 +36,7 @@ expressom(
   subset_sample = NULL,
   remove_sample = NULL,
   gsea_metric = "stat",
-  nBest = 20000,
+  nBest = NULL,
   zscore_genes = NULL,
   gene_sets_zscore = NULL,
   run_dge = TRUE,
@@ -65,7 +65,9 @@ expressom(
   pca_colors = c(level = "red2", base = "royalblue"),
   volcano_colors = c(up = "red2", down = "royalblue", ns = "grey"),
   deg_padj_cutoffs = c(0.01, 0.05),
-  deg_lfc_cutoff = 1
+  deg_lfc_cutoff = 1,
+  make_report = TRUE,
+  report_settings = NULL
 )
 
 run_bulk_pipeline(
@@ -99,7 +101,7 @@ run_bulk_pipeline(
   subset_sample = NULL,
   remove_sample = NULL,
   gsea_metric = "stat",
-  nBest = 20000,
+  nBest = NULL,
   zscore_genes = NULL,
   gene_sets_zscore = NULL,
   run_dge = TRUE,
@@ -128,7 +130,9 @@ run_bulk_pipeline(
   pca_colors = c(level = "red2", base = "royalblue"),
   volcano_colors = c(up = "red2", down = "royalblue", ns = "grey"),
   deg_padj_cutoffs = c(0.01, 0.05),
-  deg_lfc_cutoff = 1
+  deg_lfc_cutoff = 1,
+  make_report = TRUE,
+  report_settings = NULL
 )
 }
 \arguments{
@@ -195,7 +199,8 @@ uniformly to GO/Reactome/DO ORA input. `NULL` (default) applies none.}
 
 \item{gsea_metric}{Metric to rank genes for GSEA ("stat", "signed_pval", or "log2FoldChange")}
 
-\item{nBest}{Number of top genes to include in RegionReport}
+\item{nBest}{Deprecated and ignored. It only controlled the RegionReport
+report, which was replaced by the unified interactive report.}
 
 \item{zscore_genes}{Optional character vector of gene names for targeted Z-score expression plotting}
 
@@ -271,6 +276,17 @@ Default `c(0.01, 0.05)`; `NULL` writes only the list for `padj_cutoff`.}
 
 \item{deg_lfc_cutoff}{Absolute log2 fold-change threshold used by the volcano plot (lines,
 colouring and the up/down counts in its caption) and by the DEG count table. Default 1.}
+
+\item{make_report}{Logical: build the unified interactive HTML report in
+`<out_dir>/Report/` once the analyses are done (default `TRUE`). It needs
+plotly, DT, rmarkdown and Pandoc; if they are missing the analysis still
+completes and a warning explains how to build the report later with
+[build_expressom_report()]. When `FALSE`, the legacy stand-alone
+`DTU_DTE_report.html` of the isoform module is rendered instead.}
+
+\item{report_settings}{Optional named list overriding defaults of
+[expressom_report_settings()] (e.g. `list(title = "My study",
+highlight_genes = c("TP53", "MYC"))`).}
 }
 \value{
 NULL invisibly
@@ -278,5 +294,11 @@ NULL invisibly
 \description{
 Executes the complete bulk RNA-seq pipeline including data import, exploratory
 data analysis, differential expression (DESeq2), functional analysis, and
-optional isoform-level analysis (DTE, DTU, IsoformSwitchAnalyzeR).
+optional isoform-level analysis (DTE, DTU, IsoformSwitchAnalyzeR). When it is
+done it builds ONE interactive HTML report (plotly figures and searchable
+tables in tabs) that regroups every result; see [build_expressom_report()].
+
+The pipeline is made of stages that are also driven by `targets`
+([run_expressom_targets()]) and by the Shiny app ([run_expressom_app()]),
+which re-run only the stages affected by a parameter change.
 }

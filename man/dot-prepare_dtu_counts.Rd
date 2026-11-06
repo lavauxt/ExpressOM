@@ -9,6 +9,7 @@
   condition,
   level,
   base,
+  design = NULL,
   min_transcript_total,
   min_transcript_expr,
   min_samps_feature_expr,

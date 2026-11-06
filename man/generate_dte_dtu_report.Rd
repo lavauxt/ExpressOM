@@ -2,7 +2,7 @@
 % Please edit documentation in R/mod_isoform_report.R
 \name{generate_dte_dtu_report}
 \alias{generate_dte_dtu_report}
-\title{Generate DTE/DTU HTML report}
+\title{Generate the DTE/DTU tables and plots (and, optionally, a stand-alone HTML report)}
 \usage{
 generate_dte_dtu_report(
   dte_results,
@@ -20,9 +20,23 @@ generate_dte_dtu_report(
   switch_plot_top_n = 10,
   plot_sashimi = TRUE,
   plot_exon_usage = TRUE,
-  plot_topology = TRUE
+  plot_topology = TRUE,
+  padj_cutoff = 0.05,
+  design = NULL,
+  dge_test = "Wald",
+  reduced = NULL,
+  render_html = TRUE
 )
 }
+\arguments{
+\item{render_html}{Logical: also render the legacy stand-alone
+`DTU_DTE_report.html`. [expressom()] sets this to `FALSE` when the unified
+report is enabled (`make_report = TRUE`).}
+}
 \description{
-Generate DTE/DTU HTML report
+Writes the annotated DTE / DTU / DEXSeq tables, the PDF + PNG plots, the plot
+manifest and the methods notes under `<out_dir>/IsoformSwitch/DTU_DTE_report/`.
+These files are what the isoform tab of the unified report
+([build_expressom_report()]) displays. The legacy stand-alone
+`DTU_DTE_report.html` is only rendered when `render_html = TRUE`.
 }

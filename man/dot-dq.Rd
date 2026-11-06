@@ -2,13 +2,11 @@
 % Please edit documentation in R/utils_wsl_core.R
 \name{.dq}
 \alias{.dq}
-\title{Double-quote a shell argument while preserving `$VAR`-style expansion}
+\title{Quote a literal shell argument, preventing variable and command expansion}
 \usage{
 .dq(x)
 }
 \description{
-Unlike shQuote(x, type = "sh"), which single-quotes and freezes `$HOME`,
-this wraps x in double quotes and escapes only characters special inside
-double quotes, so `$HOME/path` still expands in the generated shell script.
+Quote a literal shell argument, preventing variable and command expansion
 }
 \keyword{internal}
