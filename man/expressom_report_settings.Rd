@@ -6,49 +6,67 @@
 \usage{
 expressom_report_settings(
   title = "ExpressOM report",
-  max_points = 5000L,
-  heatmap_genes = 30L,
-  top_terms = 20L,
-  table_rows = 2000L,
+  max_points = 2000L,
+  heatmap_genes = 20L,
+  top_terms = 15L,
+  table_rows = .Machine$integer.max,
   static_figures = TRUE,
-  max_static_figures = 12L,
-  static_dpi = 72,
+  max_static_figures = .Machine$integer.max,
+  static_dpi = 60,
+  max_isoform_plots = .Machine$integer.max,
+  plotly_enrichment_max = .Machine$integer.max,
+  merge_enrichment_threshold = 3L,
+  plotly_pca_max = .Machine$integer.max,
   highlight_genes = NULL,
   padj_cutoff = NULL,
   lfc_cutoff = NULL,
-  theme = c("auto", "light", "dark")
+  theme = c("auto", "light", "dark"),
+  self_contained = TRUE
 )
 }
 \arguments{
 \item{title}{Report title.}
 
-\item{max_points}{Maximum number of points drawn in the volcano / MA plots.}
+\item{max_points}{Points drawn in the volcano / MA plots.}
 
-\item{heatmap_genes}{Number of genes in the expression heatmap.}
+\item{heatmap_genes}{Genes in the expression heatmap.}
 
-\item{top_terms}{Number of terms drawn in each enrichment plot.}
+\item{top_terms}{Terms drawn in each enrichment plot.}
 
-\item{table_rows}{Maximum number of rows shown in each interactive table.}
+\item{table_rows}{Rows shown in each interactive table.}
 
 \item{static_figures}{Embed the PDF figures of the run (needs `pdftools`).}
 
-\item{max_static_figures}{Maximum number of embedded static figures.}
+\item{max_static_figures}{Maximum number of embedded static figures per group.}
 
 \item{static_dpi}{Resolution of the embedded static figures.}
 
-\item{highlight_genes}{Optional genes to mark on the volcano plot.}
+\item{max_isoform_plots}{Maximum number of isoform-gallery PNGs.}
 
-\item{padj_cutoff, lfc_cutoff}{Override the cut-offs recorded in the run
-(`NULL` = use the run's own values).}
+\item{plotly_enrichment_max}{Number of enrichment files that get an
+interactive plotly widget (the rest show the table only).}
 
-\item{theme}{Colour theme the report opens with: `"auto"` (default, follows
-the viewer's operating system), `"light"` or `"dark"`. The button in the
-report header switches between light and dark and remembers the choice in
-the viewer's browser, which takes precedence over this setting.}
+\item{merge_enrichment_threshold}{Merge the tables of a method into a single
+interactive table when it has more than this many collections.}
+
+\item{plotly_pca_max}{Number of PCA entries rendered as widgets (the extra
+ones are shown as tables only).}
+
+\item{highlight_genes}{Genes to mark on the volcano plot.}
+
+\item{padj_cutoff, lfc_cutoff}{Override the run's cut-offs.}
+
+\item{theme}{"auto", "light" or "dark".}
+
+\item{self_contained}{`TRUE` (default) renders with `rmarkdown` + pandoc
+for a single self-contained HTML file (every plotly / DT asset and every
+static figure inlined). `FALSE` falls back to `htmltools` and produces a
+folder with `lib/` and `figures/` next to the HTML (legacy).}
 }
 \value{
 A named list.
 }
 \description{
-Settings of the interactive report
+Defaults aim for a complete report: every figure, table and enrichment
+plot is included. Lower any value to trade size/speed for content.
 }

@@ -1,45 +1,53 @@
 # mod_report_tabs.R -- the tab tree shown by the unified HTML report and by
 # the Shiny app ("same UI, precomputed backend").
-#
-# expressom_report_tabs() turns an `expressom_results` object into a nested
-# list of nodes:
-#   * a node with `children` is a tab (or tab group);
-#   * a leaf has a `content` function that returns htmltools tags / widgets.
-# Leaves are lazy: nothing is computed until a tab is rendered, which keeps the
-# Shiny app responsive and makes the tree cheap to build.
 
 #' Settings of the interactive report
 #'
+#' Defaults aim for a complete report: every figure, table and enrichment
+#' plot is included. Lower any value to trade size/speed for content.
+#'
 #' @param title Report title.
-#' @param max_points Maximum number of points drawn in the volcano / MA plots.
-#' @param heatmap_genes Number of genes in the expression heatmap.
-#' @param top_terms Number of terms drawn in each enrichment plot.
-#' @param table_rows Maximum number of rows shown in each interactive table.
+#' @param max_points Points drawn in the volcano / MA plots.
+#' @param heatmap_genes Genes in the expression heatmap.
+#' @param top_terms Terms drawn in each enrichment plot.
+#' @param table_rows Rows shown in each interactive table.
 #' @param static_figures Embed the PDF figures of the run (needs `pdftools`).
-#' @param max_static_figures Maximum number of embedded static figures.
+#' @param max_static_figures Maximum number of embedded static figures per group.
 #' @param static_dpi Resolution of the embedded static figures.
-#' @param highlight_genes Optional genes to mark on the volcano plot.
-#' @param padj_cutoff,lfc_cutoff Override the cut-offs recorded in the run
-#'   (`NULL` = use the run's own values).
-#' @param theme Colour theme the report opens with: `"auto"` (default, follows
-#'   the viewer's operating system), `"light"` or `"dark"`. The button in the
-#'   report header switches between light and dark and remembers the choice in
-#'   the viewer's browser, which takes precedence over this setting.
+#' @param max_isoform_plots Maximum number of isoform-gallery PNGs.
+#' @param plotly_enrichment_max Number of enrichment files that get an
+#'   interactive plotly widget (the rest show the table only).
+#' @param merge_enrichment_threshold Merge the tables of a method into a single
+#'   interactive table when it has more than this many collections.
+#' @param plotly_pca_max Number of PCA entries rendered as widgets (the extra
+#'   ones are shown as tables only).
+#' @param highlight_genes Genes to mark on the volcano plot.
+#' @param padj_cutoff,lfc_cutoff Override the run's cut-offs.
+#' @param theme "auto", "light" or "dark".
+#' @param self_contained `TRUE` (default) renders with `rmarkdown` + pandoc
+#'   for a single self-contained HTML file (every plotly / DT asset and every
+#'   static figure inlined). `FALSE` falls back to `htmltools` and produces a
+#'   folder with `lib/` and `figures/` next to the HTML (legacy).
 #' @return A named list.
 #' @export
 expressom_report_settings <- function(
   title = "ExpressOM report",
-  max_points = 5000L,       
-  heatmap_genes = 30L,      
-  top_terms = 20L,
-  table_rows = 2000L,        
+  max_points = 2000L,
+  heatmap_genes = 20L,
+  top_terms = 15L,
+  table_rows = .Machine$integer.max,
   static_figures = TRUE,
-  max_static_figures = 12L, 
-  static_dpi = 72,          
+  max_static_figures = .Machine$integer.max,
+  static_dpi = 60,
+  max_isoform_plots = .Machine$integer.max,
+  plotly_enrichment_max = .Machine$integer.max,
+  merge_enrichment_threshold = 3L,
+  plotly_pca_max = .Machine$integer.max,
   highlight_genes = NULL,
   padj_cutoff = NULL,
   lfc_cutoff = NULL,
-  theme = c("auto", "light", "dark")
+  theme = c("auto", "light", "dark"),
+  self_contained = TRUE
 ) {
   theme <- match.arg(theme)
   list(
@@ -51,10 +59,15 @@ expressom_report_settings <- function(
     static_figures = static_figures,
     max_static_figures = max_static_figures,
     static_dpi = static_dpi,
+    max_isoform_plots = max_isoform_plots,
+    plotly_enrichment_max = plotly_enrichment_max,
+    merge_enrichment_threshold = merge_enrichment_threshold,
+    plotly_pca_max = plotly_pca_max,
     highlight_genes = highlight_genes,
     padj_cutoff = padj_cutoff,
     lfc_cutoff = lfc_cutoff,
-    theme = theme
+    theme = theme,
+    self_contained = self_contained
   )
 }
 
@@ -63,19 +76,15 @@ expressom_report_settings <- function(
 .xp_node <- function(title, ..., content = NULL) {
   kids <- list(...)
   kids <- kids[!vapply(kids, is.null, logical(1))]
-  if (is.null(content) && length(kids) == 0L) {
-    return(NULL)
-  }
+  if (is.null(content) && length(kids) == 0L) return(NULL)
   list(title = title, children = kids, content = content)
 }
 
 .xp_is_leaf <- function(node) is.function(node$content)
 
-# ---- html building blocks ---------------------------------------------------------
+# ---- html building blocks ----------------------------------------------------
 
-.xp_note <- function(...) {
-  htmltools::tags$p(class = "xp-note", ...)
-}
+.xp_note <- function(...) htmltools::tags$p(class = "xp-note", ...)
 
 .xp_box <- function(label, value, sub = NULL) {
   tg <- htmltools::tags
@@ -88,9 +97,7 @@ expressom_report_settings <- function(
 }
 
 .xp_fmt <- function(x) {
-  if (length(x) == 0L || is.na(x)) {
-    return("n/a")
-  }
+  if (length(x) == 0L || is.na(x)) return("n/a")
   format(x, big.mark = ",", scientific = FALSE, trim = TRUE)
 }
 
@@ -104,85 +111,87 @@ expressom_report_settings <- function(
   )
 }
 
-.xp_img_uri <- function(path) {
+# Returns either a data-URI string (figures_dir = NULL) or a list with a `src`
+# pointing to "figures/<basename>" (figures_dir set, external mode).
+.xp_img_uri <- function(path, figures_dir = NULL) {
+  if (!is.null(figures_dir)) {
+    dest <- file.path(figures_dir, basename(path))
+    if (!file.exists(dest)) file.copy(path, dest, overwrite = TRUE)
+    return(list(src = paste0("figures/", basename(path))))
+  }
   tryCatch(knitr::image_uri(path), error = function(e) NULL)
 }
 
-.xp_pdf_uri <- function(pdf, dpi = 100) {
-  if (!requireNamespace("pdftools", quietly = TRUE)) {
-    return(NULL)
-  }
-  # pdftools treats a single `filenames` value as an sprintf() template filled
-  # with the page number and the format; give it exactly those two slots
+# Same contract as .xp_img_uri.
+.xp_pdf_uri <- function(pdf, dpi = 100, figures_dir = NULL) {
+  if (!requireNamespace("pdftools", quietly = TRUE)) return(NULL)
   stem <- tempfile("xp_pdf_")
   tmp <- sprintf("%s_%d.%s", stem, 1L, "png")
   on.exit(unlink(tmp), add = TRUE)
-  ok <- tryCatch(
-    {
-      pdftools::pdf_convert(
-        pdf, format = "png", pages = 1L, dpi = dpi,
-        filenames = paste0(gsub("%", "%%", stem, fixed = TRUE), "_%d.%s"),
-        verbose = FALSE
-      )
-      TRUE
-    },
-    error = function(e) FALSE
-  )
-  if (!ok || !file.exists(tmp)) {
-    return(NULL)
+  ok <- tryCatch({
+    pdftools::pdf_convert(
+      pdf, format = "png", pages = 1L, dpi = dpi,
+      filenames = paste0(gsub("%", "%%", stem, fixed = TRUE), "_%d.%s"),
+      verbose = FALSE
+    )
+    TRUE
+  }, error = function(e) FALSE)
+  if (!ok || !file.exists(tmp)) return(NULL)
+  if (!is.null(figures_dir)) {
+    dest <- file.path(figures_dir, basename(sub("\\.pdf$", ".png", pdf)))
+    file.copy(tmp, dest, overwrite = TRUE)
+    return(list(src = paste0("figures/", basename(dest))))
   }
   .xp_img_uri(tmp)
 }
 
-# Click-to-zoom image gallery. `uris` are data URIs, `captions` their labels.
+# `uris` may contain data-URI strings, list(src = ...), or NULL entries.
 .xp_gallery <- function(uris, captions) {
   tg <- htmltools::tags
-  tg$div(
-    class = "xp-gallery",
-    lapply(seq_along(uris), function(i) {
-      tg$figure(
-        tg$img(
-          src = uris[[i]], alt = captions[[i]], loading = "lazy",
-          title = "Click to enlarge",
-          onclick = "this.classList.toggle('xp-zoom')"
-        ),
-        tg$figcaption(captions[[i]])
-      )
-    })
-  )
+  figures <- lapply(seq_along(uris), function(i) {
+    u <- uris[[i]]
+    if (is.null(u)) return(NULL)
+    src <- if (is.list(u) && !is.null(u$src)) u$src else u
+    tg$figure(
+      tg$img(
+        src = src, alt = captions[[i]], loading = "lazy",
+        title = "Click to enlarge",
+        onclick = "this.classList.toggle('xp-zoom')"
+      ),
+      tg$figcaption(captions[[i]])
+    )
+  })
+  figures <- figures[!vapply(figures, is.null, logical(1))]
+  tg$div(class = "xp-gallery", figures)
 }
 
-.xp_two_col <- function(...) {
-  htmltools::tags$div(class = "xp-grid", ...)
-}
+.xp_two_col <- function(...) htmltools::tags$div(class = "xp-grid", ...)
 
 .xp_cutoffs <- function(res, st) {
   list(
     padj = st$padj_cutoff %||% res$config$padj_cutoff %||% 0.05,
-    lfc = st$lfc_cutoff %||% res$config$lfc_cutoff %||% 1
+    lfc  = st$lfc_cutoff  %||% res$config$lfc_cutoff  %||% 1
   )
 }
 
-# ---- summaries -----------------------------------------------------------------------
+# ---- summaries ---------------------------------------------------------------
 
 .xp_dge_summary <- function(res, st) {
   tbl <- res$dge$results
-  if (is.null(tbl)) {
-    return(NULL)
-  }
+  if (is.null(tbl)) return(NULL)
   co <- .xp_cutoffs(res, st)
   padj <- .rep_num(tbl$padj)
-  lfc <- .rep_num(tbl$log2FoldChange)
-  sig <- !is.na(padj) & padj < co$padj
+  lfc  <- .rep_num(tbl$log2FoldChange)
+  sig  <- !is.na(padj) & padj < co$padj
   is_lrt <- identical(res$config$test, "LRT")
   list(
     n_tested = sum(!is.na(padj)),
-    n_sig = sum(sig),
-    n_up = if (is_lrt) NA_integer_ else sum(sig & !is.na(lfc) & lfc > co$lfc),
-    n_down = if (is_lrt) NA_integer_ else sum(sig & !is.na(lfc) & lfc < -co$lfc),
-    is_lrt = is_lrt,
-    padj = co$padj,
-    lfc = co$lfc
+    n_sig    = sum(sig),
+    n_up     = if (is_lrt) NA_integer_ else sum(sig & !is.na(lfc) & lfc >  co$lfc),
+    n_down   = if (is_lrt) NA_integer_ else sum(sig & !is.na(lfc) & lfc < -co$lfc),
+    is_lrt   = is_lrt,
+    padj     = co$padj,
+    lfc      = co$lfc
   )
 }
 
@@ -204,7 +213,7 @@ expressom_report_settings <- function(
   cfg <- res$config
   rows <- list(
     c("Comparison", if (is.na(res$comparison)) "none" else res$comparison),
-    c("Contrast", if (!is.null(cfg$level)) paste(cfg$level, "vs", cfg$base) else "n/a"),
+    c("Contrast",   if (!is.null(cfg$level)) paste(cfg$level, "vs", cfg$base) else "n/a"),
     c("Design formula", cfg$model %||% "n/a"),
     c("Contrast factor", cfg$main_condition %||% "n/a"),
     c("Test", cfg$test %||% "n/a"),
@@ -220,12 +229,12 @@ expressom_report_settings <- function(
   )
   data.frame(
     Parameter = vapply(rows, function(r) r[[1L]], character(1)),
-    Value = vapply(rows, function(r) as.character(r[[2L]]), character(1)),
+    Value     = vapply(rows, function(r) as.character(r[[2L]]), character(1)),
     stringsAsFactors = FALSE
   )
 }
 
-# ---- leaves ----------------------------------------------------------------------------
+# ---- leaves ------------------------------------------------------------------
 
 .xp_leaf_overview <- function(res, st) {
   function() {
@@ -236,22 +245,19 @@ expressom_report_settings <- function(
 
     s <- .xp_dge_summary(res, st)
     if (!is.null(s)) {
-      add("Comparison", paste(cfg$level %||% "?", "vs", cfg$base %||% "?"), paste(cfg$test, "test"))
+      add("Comparison", paste(cfg$level %||% "?", "vs", cfg$base %||% "?"),
+          paste(cfg$test, "test"))
       add("Genes tested", .xp_fmt(s$n_tested), "after independent filtering")
       if (s$is_lrt) {
         add("Significant genes", .xp_fmt(s$n_sig), paste0("LRT, padj < ", s$padj))
       } else {
-        add("Upregulated", .xp_fmt(s$n_up), paste0("padj < ", s$padj, ", log2FC > ", s$lfc))
+        add("Upregulated",   .xp_fmt(s$n_up),   paste0("padj < ", s$padj, ", log2FC > ", s$lfc))
         add("Downregulated", .xp_fmt(s$n_down), paste0("padj < ", s$padj, ", log2FC < -", s$lfc))
       }
     }
-    if (length(res$pca)) {
-      add("Samples", .xp_fmt(nrow(res$pca[[1L]]$scores)), "in the PCA")
-    }
+    if (length(res$pca)) add("Samples", .xp_fmt(nrow(res$pca[[1L]]$scores)), "in the PCA")
     inv <- res$functional$inventory
-    if (nrow(inv)) {
-      add("Enrichment tables", .xp_fmt(nrow(inv)), paste(unique(inv$source), collapse = " / "))
-    }
+    if (nrow(inv)) add("Enrichment tables", .xp_fmt(nrow(inv)), paste(unique(inv$source), collapse = " / "))
     iso <- res$isoform
     if (!is.null(iso$dte)) {
       p <- .rep_num(iso$dte$padj)
@@ -268,7 +274,7 @@ expressom_report_settings <- function(
     avail <- function(ok, label, detail = NULL) {
       tg$li(
         class = if (ok) "xp-ok" else "xp-missing",
-        tg$span(class = "xp-tick", if (ok) "✓" else "–"),
+        tg$span(class = "xp-tick", if (ok) "\u2713" else "\u2013"),
         label,
         if (!is.null(detail)) tg$span(class = "xp-detail", detail)
       )
@@ -279,11 +285,15 @@ expressom_report_settings <- function(
       tg$h4("Contents of this report"),
       tg$ul(
         class = "xp-avail",
-        avail(!is.null(res$dge), "Differential expression", if (!is.null(res$dge)) paste(.xp_fmt(nrow(res$dge$results)), "genes")),
-        avail(length(res$pca) > 0L, "PCA / sample QC", if (length(res$pca)) paste(length(res$pca), "plot(s)")),
-        avail(nrow(inv) > 0L, "Functional enrichment (ORA / GSEA / FGSEA / SPIA / TF)", if (nrow(inv)) paste(nrow(inv), "table(s)")),
+        avail(!is.null(res$dge), "Differential expression",
+              if (!is.null(res$dge)) paste(.xp_fmt(nrow(res$dge$results)), "genes")),
+        avail(length(res$pca) > 0L, "PCA / sample QC",
+              if (length(res$pca)) paste(length(res$pca), "plot(s)")),
+        avail(nrow(inv) > 0L, "Functional enrichment (ORA / GSEA / FGSEA / SPIA / TF)",
+              if (nrow(inv)) paste(nrow(inv), "table(s)")),
         avail(!is.null(iso), "Isoform analysis (DTE / DTU / switches)"),
-        avail(nrow(res$figures) > 0L, "Static figures", if (nrow(res$figures)) paste(nrow(res$figures), "file(s)"))
+        avail(nrow(res$figures) > 0L, "Static figures",
+              if (nrow(res$figures)) paste(nrow(res$figures), "file(s)"))
       )
     )
 
@@ -297,10 +307,7 @@ expressom_report_settings <- function(
       ))
     }
     if (length(res$notes)) {
-      tg_out <- c(tg_out, list(
-        tg$h4("Notes"),
-        tg$ul(lapply(res$notes, tg$li))
-      ))
+      tg_out <- c(tg_out, list(tg$h4("Notes"), tg$ul(lapply(res$notes, tg$li))))
     }
     htmltools::tagList(tg_out)
   }
@@ -315,28 +322,20 @@ expressom_report_settings <- function(
     if (!is.na(gcol)) {
       gcols <- character(0)
       if (!is.null(cfg$level)) gcols[as.character(cfg$level)] <- unname(cfg$pca_colors[["level"]])
-      if (!is.null(cfg$base)) gcols[as.character(cfg$base)] <- unname(cfg$pca_colors[["base"]])
+      if (!is.null(cfg$base))  gcols[as.character(cfg$base)]  <- unname(cfg$pca_colors[["base"]])
     }
     pcs <- entry$pcs
     plots <- list(
       iplot_pca(entry$scores, entry$variance, pcs[[1L]], pcs[[2L]], gcol, gcols,
                 title = paste(pcs[[1L]], "vs", pcs[[2L]]))
     )
-    if (length(pcs) >= 3L) {
-      plots <- c(plots, list(
-        iplot_pca(entry$scores, entry$variance, pcs[[1L]], pcs[[3L]], gcol, gcols,
-                  title = paste(pcs[[1L]], "vs", pcs[[3L]]))
-      ))
-    }
     if (!is.null(entry$variance)) {
       plots <- c(plots, list(iplot_scree(entry$variance)))
     }
-    show_cols <- setdiff(colnames(entry$scores), character(0))
     htmltools::tagList(
       do.call(.xp_two_col, plots),
       tg$h4("Sample scores"),
-      itable(entry$scores[, show_cols, drop = FALSE], page_length = 10L,
-             filename = entry$name)
+      itable(entry$scores, page_length = 10L, filename = entry$name)
     )
   }
 }
@@ -348,9 +347,7 @@ expressom_report_settings <- function(
       res$dge$results, padj_cutoff = co$padj, lfc_cutoff = co$lfc,
       colors = res$config$volcano_colors, test_type = res$config$test,
       max_points = st$max_points, highlight = st$highlight_genes,
-      title = paste0(
-        "Volcano plot: ", res$config$level %||% "", " vs ", res$config$base %||% ""
-      )
+      title = paste0("Volcano plot: ", res$config$level %||% "", " vs ", res$config$base %||% "")
     )
   }
 }
@@ -381,14 +378,11 @@ expressom_report_settings <- function(
     tbl <- res$dge$results
     tbl <- tbl[order(tbl$padj, na.last = TRUE), , drop = FALSE]
     htmltools::tagList(
-      .xp_note(
-        "Genes are sorted by adjusted p-value. Use the column filters to select ",
-        "genes of interest; the buttons export what is currently displayed."
-      ),
-      itable(
-        tbl, page_length = 15L, max_rows = st$table_rows,
-        filename = paste0("DEgenes_", res$comparison)
-      )
+      .xp_note("Genes are sorted by adjusted p-value. Use the column filters to ",
+               "select genes of interest; the buttons export what is currently ",
+               "displayed."),
+      itable(tbl, page_length = 15L, max_rows = st$table_rows,
+             filename = paste0("DEgenes_", res$comparison))
     )
   }
 }
@@ -397,9 +391,7 @@ expressom_report_settings <- function(
   function() {
     tg <- htmltools::tags
     f <- res$dge$sig_lists
-    if (!length(f)) {
-      return(.xp_note("No per-cut-off DEG lists were found."))
-    }
+    if (!length(f)) return(.xp_note("No per-cut-off DEG lists were found."))
     tg$div(
       .xp_note("DEG lists written by the pipeline (in `DE_raw_results/`):"),
       tg$ul(lapply(f, function(x) tg$li(tg$code(x))))
@@ -407,7 +399,7 @@ expressom_report_settings <- function(
   }
 }
 
-.xp_leaf_enrichment <- function(res, st, path, kind) {
+.xp_leaf_enrichment <- function(res, st, path, kind, show_plot = TRUE) {
   function() {
     tb <- res$functional$tables[[path]]
     co <- .xp_cutoffs(res, st)
@@ -422,16 +414,41 @@ expressom_report_settings <- function(
         ),
         htmltools::tags$code(path)
       ),
-      if (!is.null(std)) {
+      if (isTRUE(show_plot) && !is.null(std)) {
         iplot_enrichment(
           std, top_n = st$top_terms, padj_cutoff = co$padj,
           colors = res$config$volcano_colors,
-          title = paste0("Top terms – ", basename(path))
+          title = paste0("Top terms \u2013 ", basename(path))
         )
-      } else {
+      } else if (is.null(std)) {
         .xp_note("This table has no recognised term / adjusted p-value columns; showing the raw table only.")
+      } else {
+        .xp_note("Interactive plot omitted here to keep the report light \u2014 see the table below.")
       },
-      itable(tb, page_length = 10L, max_rows = st$table_rows, filename = sub("\\.[^.]+$", "", basename(path)))
+      itable(tb, page_length = 10L, max_rows = st$table_rows,
+             filename = sub("\\.[^.]+$", "", basename(path)))
+    )
+  }
+}
+
+# Merge every collection of a method into one table. `paths`/`collections`
+# are parallel vectors; a `collection` column is added.
+.xp_leaf_enrichment_merged <- function(res, st, paths, collections, kind) {
+  function() {
+    merged <- do.call(rbind, lapply(seq_along(paths), function(i) {
+      tb <- res$functional$tables[[paths[[i]]]]
+      if (is.null(tb) || !nrow(tb)) return(NULL)
+      tb$collection <- collections[[i]]
+      tb
+    }))
+    if (is.null(merged) || !nrow(merged)) {
+      return(.xp_note("No rows to show across this method."))
+    }
+    htmltools::tagList(
+      .xp_note(sprintf("%s rows across %d collections. Filter by 'collection'.",
+                       .xp_fmt(nrow(merged)), length(paths))),
+      itable(merged, page_length = 15L, max_rows = st$table_rows,
+             filename = paste0("merged_", kind))
     )
   }
 }
@@ -444,13 +461,13 @@ expressom_report_settings <- function(
     htmltools::tagList(
       iplot_volcano(
         dte, padj_cutoff = co$padj, lfc_cutoff = co$lfc,
-        colors = res$config$volcano_colors, label_col = if (is.na(lab)) "gene" else lab,
-        max_points = st$max_points, title = "DTE volcano plot (transcript level)"
+        colors = res$config$volcano_colors,
+        label_col = if (is.na(lab)) "gene" else lab,
+        max_points = st$max_points,
+        title = "DTE volcano plot (transcript level)"
       ),
-      itable(
-        dte[order(.rep_num(dte$padj), na.last = TRUE), , drop = FALSE],
-        page_length = 15L, max_rows = st$table_rows, filename = "DTE_results"
-      )
+      itable(dte[order(.rep_num(dte$padj), na.last = TRUE), , drop = FALSE],
+             page_length = 15L, max_rows = st$table_rows, filename = "DTE_results")
     )
   }
 }
@@ -467,7 +484,8 @@ expressom_report_settings <- function(
         iplot_dtu(dtu, top_n = 30L, padj_cutoff = co$padj),
         if (!is.na(raw_p)) iplot_pvalue_hist(dtu[[raw_p]], "DTU p-value distribution")
       ),
-      itable(dtu[ord, , drop = FALSE], page_length = 15L, max_rows = st$table_rows, filename = "DTU_results")
+      itable(dtu[ord, , drop = FALSE], page_length = 15L,
+             max_rows = st$table_rows, filename = "DTU_results")
     )
   }
 }
@@ -487,17 +505,22 @@ expressom_report_settings <- function(
     if (!length(plots)) {
       return(.xp_note("No isoform-switch / DTU / DTE PNG plots were found."))
     }
-    n_all <- length(plots)
-    plots <- utils::head(plots, st$max_static_figures * 2L)
-    uris <- lapply(plots, .xp_img_uri)
-    ok <- !vapply(uris, is.null, logical(1))
+    n_all  <- length(plots)
+    n_show <- as.integer(st$max_isoform_plots %||% 6L)
+    plots  <- utils::head(plots, n_show)
+    uris <- if (.Platform$OS.type != "windows" && length(plots) > 1L) {
+      parallel::mclapply(plots, .xp_img_uri, figures_dir = st$figures_dir,
+                         mc.cores = min(parallel::detectCores() - 1L, 8L, length(plots)))
+    } else {
+      lapply(plots, .xp_img_uri, figures_dir = st$figures_dir)
+    }
     cap <- sub("\\.[^.]+$", "", basename(plots))
     htmltools::tagList(
       .xp_note(
         "Static plots produced by the isoform analysis (click an image to enlarge). ",
         if (n_all > length(plots)) paste0("Showing ", length(plots), " of ", n_all, ".")
       ),
-      .xp_gallery(uris[ok], cap[ok])
+      .xp_gallery(uris, cap)
     )
   }
 }
@@ -514,7 +537,7 @@ expressom_report_settings <- function(
 
 .xp_leaf_figures <- function(res, st, group) {
   function() {
-    fig <- res$figures[res$figures$group == group, , drop = FALSE]
+    fig  <- res$figures[res$figures$group == group, , drop = FALSE]
     pdfs <- fig[fig$type == "pdf" & fig$size >= 2000, , drop = FALSE]
     pngs <- fig[fig$type == "png", , drop = FALSE]
     tg <- htmltools::tags
@@ -524,39 +547,57 @@ expressom_report_settings <- function(
 
     items <- list()
     if (nrow(pngs)) {
-      for (i in seq_len(min(nrow(pngs), st$max_static_figures))) {
-        u <- .xp_img_uri(pngs$path[[i]])
-        if (!is.null(u)) items[[length(items) + 1L]] <- list(uri = u, cap = pngs$name[[i]])
+      n_take <- min(nrow(pngs), st$max_static_figures)
+      uris <- if (.Platform$OS.type != "windows" && n_take > 1L) {
+        parallel::mclapply(pngs$path[seq_len(n_take)], .xp_img_uri,
+                           figures_dir = st$figures_dir,
+                           mc.cores = min(parallel::detectCores() - 1L, 8L, n_take))
+      } else {
+        lapply(pngs$path[seq_len(n_take)], .xp_img_uri,
+               figures_dir = st$figures_dir)
+      }
+      for (i in seq_along(uris)) {
+        if (!is.null(uris[[i]])) {
+          items[[length(items) + 1L]] <- list(uri = uris[[i]], cap = pngs$name[[i]])
+        }
       }
     }
     have_pdftools <- requireNamespace("pdftools", quietly = TRUE)
     if (nrow(pdfs) && have_pdftools) {
       room <- st$max_static_figures - length(items)
-      for (i in seq_len(max(0L, min(nrow(pdfs), room)))) {
-        u <- .xp_pdf_uri(pdfs$path[[i]], st$static_dpi)
-        if (!is.null(u)) items[[length(items) + 1L]] <- list(uri = u, cap = .xp_strip_pdf(pdfs$name[[i]]))
+      n_take <- max(0L, min(nrow(pdfs), room))
+      if (n_take > 0L) {
+        batch <- pdfs$path[seq_len(n_take)]
+        uris <- if (.Platform$OS.type != "windows" && n_take > 1L) {
+          parallel::mclapply(batch, .xp_pdf_uri, dpi = st$static_dpi,
+                             figures_dir = st$figures_dir,
+                             mc.cores = min(parallel::detectCores() - 1L, 8L, n_take))
+        } else {
+          lapply(batch, .xp_pdf_uri, dpi = st$static_dpi,
+                 figures_dir = st$figures_dir)
+        }
+        for (i in seq_along(uris)) {
+          if (!is.null(uris[[i]])) {
+            items[[length(items) + 1L]] <- list(uri = uris[[i]],
+                                                 cap = .xp_strip_pdf(pdfs$name[[i]]))
+          }
+        }
       }
     }
     listing <- itable(
-      data.frame(
-        file = .rep_rel(fig$path, res$out_dir),
-        type = fig$type,
-        size_kb = round(fig$size / 1024, 1),
-        stringsAsFactors = FALSE
-      ),
+      data.frame(file = .rep_rel(fig$path, res$out_dir), type = fig$type,
+                 size_kb = round(fig$size / 1024, 1), stringsAsFactors = FALSE),
       page_length = 10L, filename = paste0("figures_", group)
     )
     htmltools::tagList(
       if (length(items)) {
-        .xp_gallery(lapply(items, `[[`, "uri"), vapply(items, `[[`, character(1), "cap"))
+        .xp_gallery(lapply(items, `[[`, "uri"),
+                    vapply(items, `[[`, character(1), "cap"))
       } else if (nrow(pdfs) && !have_pdftools) {
-        .xp_note(
-          "Install the 'pdftools' package to preview the PDF figures here. ",
-          "The files are listed below."
-        )
+        .xp_note("Install the 'pdftools' package to preview the PDF figures here. ",
+                 "The files are listed below.")
       },
-      tg$h4("Files"),
-      listing
+      tg$h4("Files"), listing
     )
   }
 }
@@ -571,20 +612,13 @@ expressom_report_settings <- function(
     if (!is.null(dl)) {
       blocks <- c(blocks, list(
         tg$h4("Differential expression parameters"),
-        tg$pre(paste(
-          utils::capture.output(print(unlist(dl))),
-          collapse = "\n"
-        ))
+        tg$pre(paste(utils::capture.output(print(unlist(dl))), collapse = "\n"))
       ))
     }
     det <- function(title, lines) {
-      if (is.null(lines) || !length(lines)) {
-        return(NULL)
-      }
-      tg$details(
-        tg$summary(title),
-        tg$pre(paste(utils::head(lines, 400L), collapse = "\n"))
-      )
+      if (is.null(lines) || !length(lines)) return(NULL)
+      tg$details(tg$summary(title),
+                 tg$pre(paste(utils::head(lines, 400L), collapse = "\n")))
     }
     blocks <- c(blocks, list(
       det("Warnings recorded during the run", res$logs$warnings),
@@ -593,20 +627,16 @@ expressom_report_settings <- function(
     if (length(res$logs$isoform_logs)) {
       blocks <- c(blocks, list(
         tg$h4("Isoform logs"),
-        tg$ul(lapply(
-          .rep_rel(res$logs$isoform_logs, res$out_dir),
-          function(x) tg$li(tg$code(x))
-        ))
+        tg$ul(lapply(.rep_rel(res$logs$isoform_logs, res$out_dir),
+                     function(x) tg$li(tg$code(x))))
       ))
     }
-    if (length(blocks) == 0L) {
-      return(.xp_note("No log files were found in Log/."))
-    }
+    if (length(blocks) == 0L) return(.xp_note("No log files were found in Log/."))
     htmltools::tagList(blocks)
   }
 }
 
-# ---- the tree --------------------------------------------------------------------------------
+# ---- the tree ----------------------------------------------------------------
 
 #' Build the tab tree of the report / Shiny viewer
 #'
@@ -618,11 +648,40 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   stopifnot(inherits(res, "expressom_results"))
   st <- settings
 
+  plotly_budget   <- as.integer(st$plotly_enrichment_max %||% 3L)
+  merge_threshold <- as.integer(st$merge_enrichment_threshold %||% 3L)
+  pca_budget      <- as.integer(st$plotly_pca_max %||% 2L)
+  plotly_used     <- 0L
+
+  take_plotly <- function() {
+    if (plotly_used < plotly_budget) {
+      plotly_used <<- plotly_used + 1L
+      TRUE
+    } else FALSE
+  }
+
   # -- QC / PCA
-  pca_nodes <- lapply(names(res$pca), function(nm) {
+  pca_keep <- utils::head(names(res$pca), pca_budget)
+  pca_drop <- setdiff(names(res$pca), pca_keep)
+  pca_nodes <- lapply(pca_keep, function(nm) {
     .xp_node(.xp_pca_title(nm), content = .xp_leaf_pca(res, st, res$pca[[nm]]))
   })
-  qc <- if (length(pca_nodes)) do.call(.xp_node, c(list("Samples & QC"), pca_nodes)) else NULL
+  if (length(pca_drop)) {
+    pca_nodes <- c(pca_nodes, list(
+      .xp_node("Other PCAs (tables only)", content = function() {
+        htmltools::tagList(lapply(pca_drop, function(nm) {
+          htmltools::tagList(
+            htmltools::tags$h4(.xp_pca_title(nm)),
+            itable(res$pca[[nm]]$scores, page_length = 10L,
+                   max_rows = st$table_rows, filename = nm)
+          )
+        }))
+      })
+    ))
+  }
+  qc <- if (length(pca_nodes)) {
+    do.call(.xp_node, c(list("Samples & QC"), pca_nodes))
+  } else NULL
 
   # -- DGE
   dge <- NULL
@@ -645,14 +704,35 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   if (nrow(inv)) {
     by_source <- lapply(split(inv, inv$source), function(si) {
       method_nodes <- lapply(split(si, si$method), function(mi) {
-        leaves <- lapply(seq_len(nrow(mi)), function(k) {
-          .xp_node(mi$collection[[k]], content = .xp_leaf_enrichment(res, st, mi$path[[k]], mi$kind[[k]]))
-        })
-        if (length(leaves) == 1L) {
-          leaves[[1L]]$title <- unique(mi$method)
-          leaves[[1L]]
+        n_col <- nrow(mi)
+        if (n_col > merge_threshold) {
+          children <- list(
+            .xp_node(sprintf("Merged table (%d collections)", n_col),
+                     content = .xp_leaf_enrichment_merged(
+                       res, st, mi$path, mi$collection, mi$kind[[1]]))
+          )
+          for (k in seq_len(n_col)) {
+            children <- c(children, list(
+              .xp_node(mi$collection[[k]],
+                       content = .xp_leaf_enrichment(res, st, mi$path[[k]],
+                                                     mi$kind[[k]],
+                                                     show_plot = take_plotly()))
+            ))
+          }
+          do.call(.xp_node, c(list(unique(mi$method)), children))
         } else {
-          do.call(.xp_node, c(list(unique(mi$method)), leaves))
+          leaves <- lapply(seq_len(n_col), function(k) {
+            .xp_node(mi$collection[[k]],
+                     content = .xp_leaf_enrichment(res, st, mi$path[[k]],
+                                                   mi$kind[[k]],
+                                                   show_plot = take_plotly()))
+          })
+          if (length(leaves) == 1L) {
+            leaves[[1L]]$title <- unique(mi$method)
+            leaves[[1L]]
+          } else {
+            do.call(.xp_node, c(list(unique(mi$method)), leaves))
+          }
         }
       })
       do.call(.xp_node, c(list(unique(si$source)), unname(method_nodes)))
@@ -680,27 +760,28 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
       if (!is.null(iso$dexseq)) {
         .xp_node("DEXSeq", content = .xp_leaf_table(
           iso$dexseq, "DEXSeq_results",
-          "DEXSeq (transcript features as bins) results.", st
-        ))
+          "DEXSeq (transcript features as bins) results.", st))
       },
       if (!is.null(iso$transcript_pca)) {
         .xp_node("Variable transcripts", content = .xp_leaf_table(
           iso$transcript_pca, "PCA_transcripts",
-          "Most variable transcripts used for the transcript-level PCA.", st
-        ))
+          "Most variable transcripts used for the transcript-level PCA.", st))
       },
       if (length(iso$plots)) .xp_node("Plots", content = .xp_leaf_switch_plots(res, st)),
       if (length(iso$methods)) .xp_node("Methods", content = .xp_leaf_methods(res))
     )
   }
 
-  # -- static figures (one tab per top-level output folder)
+  # -- static figures
   figs <- NULL
   if (nrow(res$figures) && isTRUE(st$static_figures)) {
     grp <- unique(res$figures$group)
     figs <- do.call(.xp_node, c(
       list("Figures"),
-      lapply(grp, function(g) .xp_node(if (identical(g, ".")) "(root)" else g, content = .xp_leaf_figures(res, st, g)))
+      lapply(grp, function(g) {
+        .xp_node(if (identical(g, ".")) "(root)" else g,
+                 content = .xp_leaf_figures(res, st, g))
+      })
     ))
   }
 
@@ -708,13 +789,11 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   info <- .xp_node(
     "Run info",
     .xp_node("Parameters", content = .xp_leaf_table(
-      .xp_params_table(res), "parameters", NULL, st
-    )),
+      .xp_params_table(res), "parameters", NULL, st)),
     .xp_node("Logs", content = .xp_leaf_logs(res)),
     .xp_node("Files", content = .xp_leaf_table(
       res$files, "file_inventory",
-      "Every file written to the output directory.", st
-    ))
+      "Every file written to the output directory.", st))
   )
 
   tree <- list(
@@ -724,33 +803,108 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   tree[!vapply(tree, is.null, logical(1))]
 }
 
-# ---- rendering: static report ---------------------------------------------------------------
+# ---- rendering: htmltools engine ---------------------------------------------
 
 .xp_clean_title <- function(x) {
   x <- gsub("[{}#\\[\\]]", "", x, perl = TRUE)
   trimws(x)
 }
 
-# A leaf that fails must not take the whole report down: show the error in
-# its own tab instead (the Shiny viewer does the same, see .app_safe_leaf()).
 .xp_safe_leaf <- function(fn) {
   force(fn)
   function() {
-    tryCatch(
-      fn(),
-      error = function(e) {
-        htmltools::tags$div(
-          class = "xp-problems",
-          "This tab could not be built: ", conditionMessage(e)
-        )
-      }
-    )
+    tryCatch(fn(), error = function(e) {
+      htmltools::tags$div(class = "xp-problems",
+                          "This tab could not be built: ", conditionMessage(e))
+    })
   }
 }
 
-# Turn the tab tree into markdown for an R Markdown tabset. Leaves are
-# evaluated through knitr::knit_child() so htmlwidgets (plotly, DT) register
-# their dependencies in the parent document.
+# Build one tabset (nav + content) from a list of nodes; returns a list of
+# `nav` and `content` tag objects. Ids are made unique per call.
+.xp_render_tabset <- function(nodes, classes = "nav-pills", counter = NULL) {
+  tg <- htmltools::tags
+  if (is.null(counter)) counter <- new.env(parent = emptyenv())
+  if (is.null(counter$n)) counter$n <- 0L
+  next_id <- function() {
+    counter$n <- counter$n + 1L
+    paste0("xp-tab-", counter$n)
+  }
+  navs  <- list()
+  panes <- list()
+  for (i in seq_along(nodes)) {
+    nd      <- nodes[[i]]
+    title   <- .xp_clean_title(nd$title)
+    pane_id <- next_id()
+    body <- if (is.function(nd$content)) {
+      .xp_safe_leaf(nd$content)()
+    } else {
+      nested <- .xp_render_tabset(nd$children, classes, counter)
+      tg$div(
+        nested$nav,
+        nested$content
+      )
+    }
+    navs[[i]] <- tg$li(
+      role = "presentation",
+      class = if (i == 1L) "active" else NULL,
+      tg$a(
+        href = paste0("#", pane_id),
+        `aria-controls` = pane_id,
+        role = "tab",
+        `data-toggle` = "tab",
+        title
+      )
+    )
+    panes[[i]] <- tg$div(
+      role = "tabpanel",
+      class = paste("tab-pane fade", if (i == 1L) "in active" else ""),
+      id = pane_id,
+      body
+    )
+  }
+  list(
+    nav     = tg$ul(class = paste("nav", classes), role = "tablist", navs),
+    content = tg$div(class = "tab-content", panes)
+  )
+}
+
+# Full standalone HTML page for the htmltools engine. Bootstrap 3 is pulled
+# from CDN, plotly/DT widget dependencies are handled by htmltools::save_html().
+.xp_build_html <- function(nodes, res, st) {
+  tg <- htmltools::tags
+  counter <- new.env(parent = emptyenv()); counter$n <- 0L
+
+  # Top-level tabsets are pills (matches the pandoc template)
+  top <- .xp_render_tabset(nodes, classes = "nav-pills xp-top", counter = counter)
+
+  tg$html(
+    lang = "en",
+    tg$head(
+      tg$meta(charset = "utf-8"),
+      tg$meta(name = "viewport", content = "width=device-width, initial-scale=1"),
+      tg$title(st$title %||% "ExpressOM report"),
+      tg$link(
+        rel = "stylesheet",
+        href = "https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.4.1/css/bootstrap.min.css"
+      ),
+      tg$style(htmltools::HTML(paste(.xp_css(), .xp_dark_css_text(), sep = "\n"))),
+      tg$script(src = "https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"),
+      tg$script(src = "https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.4.1/js/bootstrap.min.js")
+    ),
+    tg$body(
+      tg$div(
+        class = "container-fluid",
+        .xp_header_html(res, st),
+        top$nav,
+        top$content
+      )
+    )
+  )
+}
+
+# ---- rendering: pandoc engine (legacy, used when self_contained = TRUE) ------
+
 .xp_emit_tabs <- function(nodes, level = 2L) {
   counter <- 0L
   leaf_fns <- list()
@@ -784,8 +938,8 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   emit(nodes, level)
 }
 
-# Colours are CSS variables so the dark theme only has to redefine them (the
-# Shiny app uses this stylesheet too and simply stays on the light values).
+# ---- CSS + theme -------------------------------------------------------------
+
 .xp_css_light_vars <- function() {
   paste(
     "--xp-bg:#ffffff; --xp-fg:#1f2933; --xp-muted:#52606d; --xp-faint:#7b8794;",
@@ -818,6 +972,7 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
     "
 .main-container { max-width: 1480px !important; }
 body { font-family: -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: var(--xp-fg); }
+.container-fluid { max-width: 1480px; padding: 0 16px; }
 .section.level1.xp-top > h1 { display: none; }
 .xp-header { display:flex; flex-wrap:wrap; align-items:center; gap:6px 18px; padding: 16px 0 8px; border-bottom: 2px solid var(--xp-accent); margin-bottom: 14px; }
 .xp-header h1 { margin: 0; font-size: 28px; font-weight: 650; color: var(--xp-heading); }
@@ -831,6 +986,7 @@ html[data-theme='dark'] .xp-theme-toggle .xp-ico-moon { display:none; }
 @media print { .xp-theme-toggle { display:none; } }
 .nav-pills > li > a { padding: 6px 14px; border-radius: 16px; font-size: 14px; }
 .nav-pills > li.active > a, .nav-pills > li.active > a:hover, .nav-pills > li.active > a:focus { background: var(--xp-accent); }
+.nav-pills { display: flex; flex-wrap: wrap; gap: 4px; }
 .tab-content { padding-top: 12px; }
 .xp-problems { background: var(--xp-bad-bg); border:1px solid var(--xp-bad-border); color: var(--xp-bad-fg); border-radius:8px; padding:8px 12px; margin-top:10px; font-size:13px; }
 .xp-boxes { display:grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 6px 0 18px; }
@@ -859,12 +1015,12 @@ table.dataTable { font-size: 13px; }
   )
 }
 
-# Contents of the files in inst/rmd (dark-theme CSS, theme switch script)
+# Embedded stylesheet/script (no disk lookup needed). Legacy fallback to
+# .expressom_rmd_path() is kept only for the two .Rmd templates, which do exist
+# on disk if the caller overrides them.
 .xp_asset_text <- function(file) {
-  # Embedded assets (no disk lookup needed)
   if (identical(file, "expressom_dark.css"))  return(.xp_dark_css_text())
   if (identical(file, "expressom_theme.js")) return(.xp_theme_js_text())
-  # Legacy fallback: only the two .Rmd templates exist on disk
   path <- tryCatch(.expressom_rmd_path(file), error = function(e) NULL)
   if (is.null(path)) return("")
   paste(readLines(path, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
@@ -875,7 +1031,6 @@ table.dataTable { font-size: 13px; }
   if (is.character(th) && length(th) == 1L && th %in% c("auto", "light", "dark")) th else "auto"
 }
 
-# the light/dark button: shows the mode it switches to
 .xp_theme_toggle <- function() {
   htmltools::HTML(paste0(
     '<button type="button" id="xp-theme-toggle" class="xp-theme-toggle" ',
@@ -895,7 +1050,7 @@ table.dataTable { font-size: 13px; }
   sub <- c(
     if (!is.na(res$comparison)) paste0(res$config$level %||% "", " vs ", res$config$base %||% ""),
     if (!is.null(res$config$model)) paste0("design ", res$config$model),
-    if (!is.null(res$config$test)) paste0(res$config$test, " test"),
+    if (!is.null(res$config$test))  paste0(res$config$test, " test"),
     format(Sys.time(), "%Y-%m-%d %H:%M")
   )
   htmltools::tagList(
@@ -903,7 +1058,7 @@ table.dataTable { font-size: 13px; }
     tg$div(
       class = "xp-header",
       tg$h1(st$title %||% "ExpressOM report"),
-      tg$span(class = "xp-sub", paste(sub, collapse = "  ·  ")),
+      tg$span(class = "xp-sub", paste(sub, collapse = "  \u00b7  ")),
       .xp_theme_toggle()
     ),
     tg$script(htmltools::HTML(.xp_theme_js_text(.xp_theme_setting(st))))

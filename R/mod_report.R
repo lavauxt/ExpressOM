@@ -4,34 +4,27 @@
 #' expression (volcano, MA, heatmap, searchable tables), functional enrichment
 #' (ORA, GSEA, FGSEA, SPIA, transcription factors), isoform analysis (DTE, DTU,
 #' DEXSeq, isoform-switch plots), static figures and run logs -- in one
-#' self-contained HTML file with plotly figures and DT tables in tabs. The
+#' interactive HTML file with plotly figures and DT tables in tabs. The
 #' report only reads what the pipeline already wrote; it never recomputes an
 #' analysis, so it can be rebuilt in seconds (for instance with other cut-offs).
 #'
-#' Tabs for stages that were not run (no isoform analysis, EDA-only run ...)
-#' are left out.
+#' By default the report is rendered with `rmarkdown` + pandoc as a single
+#' self-contained `.html` file: every plotly/DT asset, every static figure and
+#' every table is inlined, so the file can be opened or emailed on its own.
+#' Pass `settings = expressom_report_settings(self_contained = FALSE)` for the
+#' legacy mode that writes a folder with `lib/` and `figures/` next to the
+#' HTML.
 #'
 #' @param out_dir Output directory of [expressom()] (its `out_dir` argument).
 #' @param output_file Path of the HTML file to write. Default:
 #'   `<out_dir>/Report/ExpressOM_report_<comparison>.html`.
 #' @param comparison Comparison to report (`<level>_vs_<base>`); see
 #'   [list_expressom_comparisons()]. `NULL` uses the most recent one.
-#' @param settings List from [expressom_report_settings()] (title, number of
-#'   points / genes / terms drawn, static-figure embedding, cut-off overrides).
-#' @param results Optional pre-loaded [load_expressom_results()] object (skips
-#'   re-reading the files).
-#' @param quiet Suppress knitr / pandoc console output.
+#' @param settings List from [expressom_report_settings()].
+#' @param results Optional pre-loaded [load_expressom_results()] object.
+#' @param quiet Suppress console output.
 #' @return The path of the HTML report (invisibly).
 #' @export
-#' @examples
-#' \dontrun{
-#' expressom(out_dir = "results", ...)
-#' build_expressom_report("results")
-#' build_expressom_report(
-#'   "results",
-#'   settings = expressom_report_settings(padj_cutoff = 0.01, highlight_genes = c("TP53", "MYC"))
-#' )
-#' }
 build_expressom_report <- function(
   out_dir,
   output_file = NULL,
@@ -40,17 +33,30 @@ build_expressom_report <- function(
   results = NULL,
   quiet = TRUE
 ) {
-  for (pkg in c("rmarkdown", "knitr", "plotly", "DT", "htmltools", "htmlwidgets")) {
+  # Core packages used by both engines
+  for (pkg in c("htmltools", "htmlwidgets")) {
     .rep_require(pkg, "to build the interactive report")
   }
-  if (!isTRUE(rmarkdown::pandoc_available())) {
-    stop(
-      "Pandoc was not found, but it is needed to write a self-contained HTML ",
-      "report. It is bundled with RStudio / Positron; otherwise install it ",
-      "from https://pandoc.org/installing.html",
-      call. = FALSE
-    )
+  pandoc_mode <- isTRUE(settings$self_contained)
+  if (pandoc_mode) {
+    for (pkg in c("rmarkdown", "knitr", "plotly", "DT")) {
+      .rep_require(pkg, "to build the interactive report")
+    }
+    if (!isTRUE(rmarkdown::pandoc_available())) {
+      stop(
+        "Pandoc is required for the self-contained single-file report ",
+        "(the default). Install pandoc (RStudio / Positron bundle it), or ",
+        "pass settings = expressom_report_settings(self_contained = FALSE) ",
+        "to produce a folder with the HTML + lib/ + figures/ instead.",
+        call. = FALSE
+      )
+    }
+  } else {
+    for (pkg in c("plotly", "DT")) {
+      .rep_require(pkg, "to build the interactive report")
+    }
   }
+
   if (is.null(results)) {
     results <- load_expressom_results(out_dir, comparison = comparison)
   } else if (!inherits(results, "expressom_results")) {
@@ -65,37 +71,59 @@ build_expressom_report <- function(
     }
     output_file <- file.path(out_dir, "Report", paste0(stem, ".html"))
   }
-  dir.create(dirname(output_file), recursive = TRUE, showWarnings = FALSE)
+  report_dir <- dirname(output_file)
+  dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
 
-  work <- tempfile("expressom_report_")
-  dir.create(work)
-  on.exit(unlink(work, recursive = TRUE), add = TRUE)
+  # ---------------------------------------------------------------------------
+  # Configuration for the leaves: figures go to `figures/` next to the HTML in
+  # external mode, or are inlined as base64 (pandoc mode).
+  # ---------------------------------------------------------------------------
+  st <- settings
+  st$figures_dir <- if (pandoc_mode) NULL else file.path(report_dir, "figures")
+  if (!is.null(st$figures_dir)) {
+    unlink(st$figures_dir, recursive = TRUE)
+    dir.create(st$figures_dir, recursive = TRUE, showWarnings = FALSE)
+  }
 
-  # Write the embedded template directly -- no disk file needed.
-  template <- file.path(work, "expressom_report.Rmd")
-  writeLines(.embedded_template_text("expressom_report.Rmd"), template, useBytes = TRUE)
+  tabs <- expressom_report_tabs(results, st)
 
-  results_rds  <- file.path(work, "results.rds")
-  settings_rds <- file.path(work, "settings.rds")
-  saveRDS(results, results_rds)
-  saveRDS(settings, settings_rds)
+  if (pandoc_mode) {
+    # ------- pandoc engine: single-file, self-contained HTML -------
+    work <- tempfile("expressom_report_")
+    dir.create(work)
+    on.exit(unlink(work, recursive = TRUE), add = TRUE)
 
-  # Render in a fresh environment whose parent is the package namespace, so the
-  # template can call the (internal) tab builders without `:::`.
-  render_env <- new.env(parent = environment(build_expressom_report))
-  rmarkdown::render(
-    input = template,
-    output_file = basename(output_file),
-    output_dir = normalizePath(dirname(output_file), winslash = "/"),
-    intermediates_dir = work,
-    knit_root_dir = work,
-    params = list(results_rds = results_rds, settings_rds = settings_rds),
-    envir = render_env,
-    quiet = quiet
-  )
+    template <- file.path(work, "expressom_report.Rmd")
+    writeLines(.embedded_template_text("expressom_report.Rmd"), template, useBytes = TRUE)
+
+    results_rds  <- file.path(work, "results.rds")
+    settings_rds <- file.path(work, "settings.rds")
+    saveRDS(results, results_rds)
+    saveRDS(settings, settings_rds)
+
+    render_env <- new.env(parent = environment(build_expressom_report))
+    rmarkdown::render(
+      input = template,
+      output_file = basename(output_file),
+      output_dir = normalizePath(report_dir, winslash = "/"),
+      intermediates_dir = work,
+      knit_root_dir = work,
+      params = list(results_rds = results_rds, settings_rds = settings_rds),
+      envir = render_env,
+      quiet = quiet
+    )
+  } else {
+    # ------- htmltools engine: external `lib/` and `figures/` -------
+    ui <- .xp_build_html(tabs, results, st)
+    htmltools::save_html(ui, file = output_file, libdir = "lib", lang = "en")
+  }
+
   size_mb <- file.size(output_file) / 1024^2
   message(
-    "Report written: ", output_file, " (", format(round(size_mb, 1), nsmall = 1), " MB)"
+    "Report written: ", output_file, " (", format(round(size_mb, 1), nsmall = 1),
+    " MB",
+    if (!pandoc_mode) " + figures/ and lib/" else ", self-contained",
+    ")"
   )
   invisible(normalizePath(output_file, winslash = "/"))
 }

@@ -10,7 +10,6 @@
 # functional analysis, EDA-only run ...) simply leaves the matching element
 # NULL/empty and the report omits the corresponding tab.
 
-
 # ---- small internal helpers -------------------------------------------------
 
 .rep_require <- function(pkg, why = "to build the interactive report") {
@@ -368,7 +367,8 @@ list_expressom_comparisons <- function(out_dir) {
 #' @param max_expr_genes Number of top DE genes (by adjusted p-value) whose
 #'   normalised counts are kept for the expression heatmap.
 #' @param max_table_rows Maximum number of rows read from each enrichment /
-#'   isoform table.
+#'   isoform table. Default `Inf` reads every row (complete tables in the
+#'   report).
 #' @return An object of class `expressom_results`: a list with elements
 #'   `out_dir`, `comparison`, `comparisons`, `config`, `dge`, `pca`,
 #'   `functional`, `isoform`, `figures`, `logs`, `files` and `notes`.
@@ -382,7 +382,7 @@ load_expressom_results <- function(
   out_dir,
   comparison = NULL,
   max_expr_genes = 200L,
-  max_table_rows = 5000L
+  max_table_rows = Inf
 ) {
   if (!is.character(out_dir) || length(out_dir) != 1L || !dir.exists(out_dir)) {
     stop("`out_dir` must be an existing ExpressOM output directory.", call. = FALSE)
@@ -513,10 +513,28 @@ load_expressom_results <- function(
   inv <- .rep_enrichment_inventory(out_dir)
   functional <- list(inventory = inv, tables = list())
   if (nrow(inv)) {
-    for (i in seq_len(nrow(inv))) {
-      tb <- .rep_read_table(file.path(out_dir, inv$path[[i]]), max_rows = max_table_rows)
-      if (!is.null(tb)) {
-        functional$tables[[inv$path[[i]]]] <- tb
+    # Reading the CSVs with data.table::fread() is fast; reading them in
+    # parallel with future::multisession would fail because future workers are
+    # fresh R processes that must have ExpressOM *installed* to find
+    # .rep_read_table(), which is not true for load_all() / HPC dev setups.
+    # fork-based parallel::mclapply (Unix only) inherits the namespace, so it
+    # is safe.
+    read_one <- function(p) {
+      .rep_read_table(file.path(out_dir, p), max_rows = max_table_rows)
+    }
+    tbl_list <- if (.Platform$OS.type != "windows" &&
+                    parallel::detectCores() > 1L &&
+                    length(inv$path) > 1L) {
+      parallel::mclapply(
+        inv$path, read_one,
+        mc.cores = min(parallel::detectCores() - 1L, 8L)
+      )
+    } else {
+      lapply(inv$path, read_one)
+    }
+    for (i in seq_along(tbl_list)) {
+      if (!is.null(tbl_list[[i]])) {
+        functional$tables[[inv$path[[i]]]] <- tbl_list[[i]]
       }
     }
     inv <- inv[inv$path %in% names(functional$tables), , drop = FALSE]

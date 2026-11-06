@@ -8,7 +8,7 @@ load_expressom_results(
   out_dir,
   comparison = NULL,
   max_expr_genes = 200L,
-  max_table_rows = 5000L
+  max_table_rows = Inf
 )
 }
 \arguments{
@@ -22,7 +22,8 @@ most recent one.}
 normalised counts are kept for the expression heatmap.}
 
 \item{max_table_rows}{Maximum number of rows read from each enrichment /
-isoform table.}
+isoform table. Default `Inf` reads every row (complete tables in the
+report).}
 }
 \value{
 An object of class `expressom_results`: a list with elements

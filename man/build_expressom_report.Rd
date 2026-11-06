@@ -22,13 +22,11 @@ build_expressom_report(
 \item{comparison}{Comparison to report (`<level>_vs_<base>`); see
 [list_expressom_comparisons()]. `NULL` uses the most recent one.}
 
-\item{settings}{List from [expressom_report_settings()] (title, number of
-points / genes / terms drawn, static-figure embedding, cut-off overrides).}
+\item{settings}{List from [expressom_report_settings()].}
 
-\item{results}{Optional pre-loaded [load_expressom_results()] object (skips
-re-reading the files).}
+\item{results}{Optional pre-loaded [load_expressom_results()] object.}
 
-\item{quiet}{Suppress knitr / pandoc console output.}
+\item{quiet}{Suppress console output.}
 }
 \value{
 The path of the HTML report (invisibly).
@@ -38,21 +36,15 @@ Regroups every result of an ExpressOM run -- sample QC / PCA, differential
 expression (volcano, MA, heatmap, searchable tables), functional enrichment
 (ORA, GSEA, FGSEA, SPIA, transcription factors), isoform analysis (DTE, DTU,
 DEXSeq, isoform-switch plots), static figures and run logs -- in one
-self-contained HTML file with plotly figures and DT tables in tabs. The
+interactive HTML file with plotly figures and DT tables in tabs. The
 report only reads what the pipeline already wrote; it never recomputes an
 analysis, so it can be rebuilt in seconds (for instance with other cut-offs).
 }
 \details{
-Tabs for stages that were not run (no isoform analysis, EDA-only run ...)
-are left out.
-}
-\examples{
-\dontrun{
-expressom(out_dir = "results", ...)
-build_expressom_report("results")
-build_expressom_report(
-  "results",
-  settings = expressom_report_settings(padj_cutoff = 0.01, highlight_genes = c("TP53", "MYC"))
-)
-}
+By default the report is rendered with `rmarkdown` + pandoc as a single
+self-contained `.html` file: every plotly/DT asset, every static figure and
+every table is inlined, so the file can be opened or emailed on its own.
+Pass `settings = expressom_report_settings(self_contained = FALSE)` for the
+legacy mode that writes a folder with `lib/` and `figures/` next to the
+HTML.
 }

@@ -101,7 +101,7 @@
   lfc_cutoff,
   test_type = "Wald",
   label_col = "gene",
-  max_points = 5000L
+  max_points = 2000L 
 ) {
   lfc <- .rep_num(res_tbl$log2FoldChange)
   padj <- .rep_num(res_tbl$padj)
@@ -176,7 +176,7 @@
       "Upregulated" = unname(colors[["up"]])
     )
   }
-  trace_type <- if (nrow(df) > 2000L) "scattergl" else "scatter"
+   trace_type <- if (nrow(df) > 500L) "scattergl" else "scatter" 
   for (k in cls) {
     d <- df[df$class == k, , drop = FALSE]
     if (nrow(d) == 0L) next
@@ -701,7 +701,7 @@ itable <- function(
   df,
   caption = NULL,
   page_length = 10L,
-  max_rows = 2000L,
+  max_rows = 800L,
   digits = 3L,
   filename = "expressom_table"
 ) {
