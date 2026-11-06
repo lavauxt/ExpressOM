@@ -6,13 +6,13 @@
 \usage{
 expressom_report_settings(
   title = "ExpressOM report",
-  max_points = 15000L,
-  heatmap_genes = 50L,
+  max_points = 5000L,
+  heatmap_genes = 30L,
   top_terms = 20L,
-  table_rows = 5000L,
+  table_rows = 2000L,
   static_figures = TRUE,
-  max_static_figures = 24L,
-  static_dpi = 100,
+  max_static_figures = 12L,
+  static_dpi = 72,
   highlight_genes = NULL,
   padj_cutoff = NULL,
   lfc_cutoff = NULL,

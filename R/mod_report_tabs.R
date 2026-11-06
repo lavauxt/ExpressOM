@@ -29,13 +29,13 @@
 #' @export
 expressom_report_settings <- function(
   title = "ExpressOM report",
-  max_points = 15000L,
-  heatmap_genes = 50L,
+  max_points = 5000L,       
+  heatmap_genes = 30L,      
   top_terms = 20L,
-  table_rows = 5000L,
+  table_rows = 2000L,        
   static_figures = TRUE,
-  max_static_figures = 24L,
-  static_dpi = 100,
+  max_static_figures = 12L, 
+  static_dpi = 72,          
   highlight_genes = NULL,
   padj_cutoff = NULL,
   lfc_cutoff = NULL,
@@ -861,10 +861,12 @@ table.dataTable { font-size: 13px; }
 
 # Contents of the files in inst/rmd (dark-theme CSS, theme switch script)
 .xp_asset_text <- function(file) {
+  # Embedded assets (no disk lookup needed)
+  if (identical(file, "expressom_dark.css"))  return(.xp_dark_css_text())
+  if (identical(file, "expressom_theme.js")) return(.xp_theme_js_text())
+  # Legacy fallback: only the two .Rmd templates exist on disk
   path <- tryCatch(.expressom_rmd_path(file), error = function(e) NULL)
-  if (is.null(path)) {
-    return("")
-  }
+  if (is.null(path)) return("")
   paste(readLines(path, warn = FALSE, encoding = "UTF-8"), collapse = "\n")
 }
 
@@ -896,15 +898,14 @@ table.dataTable { font-size: 13px; }
     if (!is.null(res$config$test)) paste0(res$config$test, " test"),
     format(Sys.time(), "%Y-%m-%d %H:%M")
   )
-  js <- sub("__XP_DEFAULT__", .xp_theme_setting(st), .xp_asset_text("expressom_theme.js"), fixed = TRUE)
   htmltools::tagList(
-    tg$style(htmltools::HTML(paste(.xp_css(), .xp_asset_text("expressom_dark.css"), sep = "\n"))),
+    tg$style(htmltools::HTML(paste(.xp_css(), .xp_dark_css_text(), sep = "\n"))),
     tg$div(
       class = "xp-header",
       tg$h1(st$title %||% "ExpressOM report"),
       tg$span(class = "xp-sub", paste(sub, collapse = "  ·  ")),
       .xp_theme_toggle()
     ),
-    tg$script(htmltools::HTML(js))
+    tg$script(htmltools::HTML(.xp_theme_js_text(.xp_theme_setting(st))))
   )
 }

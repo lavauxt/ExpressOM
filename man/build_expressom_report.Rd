@@ -37,9 +37,9 @@ The path of the HTML report (invisibly).
 Regroups every result of an ExpressOM run -- sample QC / PCA, differential
 expression (volcano, MA, heatmap, searchable tables), functional enrichment
 (ORA, GSEA, FGSEA, SPIA, transcription factors), isoform analysis (DTE, DTU,
-DEXSeq, isoform-switch plots), static figures and run logs -- in **one
-self-contained HTML file** with plotly figures and DT tables in tabs. The
-report only *reads* what the pipeline already wrote; it never recomputes an
+DEXSeq, isoform-switch plots), static figures and run logs -- in one
+self-contained HTML file with plotly figures and DT tables in tabs. The
+report only reads what the pipeline already wrote; it never recomputes an
 analysis, so it can be rebuilt in seconds (for instance with other cut-offs).
 }
 \details{

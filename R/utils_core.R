@@ -1108,17 +1108,27 @@ safe_run <- function(expr, label = "") {
   )
 }
 
-#' Locate a bundled template/Rmd file under inst/rmd/
+#' Locate a bundled template/Rmd file -- embedded-first, disk fallback
 #'
-#' More robust than the original version:
-#' - checks installed package first
-#' - checks common source-checkout locations
-#' - walks up from the working directory
-#' - honors EXPRESSOM_RMD_DIR
+#' Templates are embedded in code (mod_report_templates.R). This function
+#' writes the embedded content to a temp file and returns its path, so
+#' callers that expect a file path keep working unchanged. A disk lookup
+#' under inst/rmd/ is kept as a last-resort fallback for source checkouts
+#' that still carry the files, but is no longer required.
+#'
+#' Honors EXPRESSOM_RMD_DIR for explicit overrides.
 #' @keywords internal
 .expressom_rmd_path <- function(filename) {
-  env_dir <- Sys.getenv("EXPRESSOM_RMD_DIR", "")
+  # 1. Embedded templates (the normal path)
+  embedded_names <- c("expressom_report.Rmd", "dte_dtu_report.Rmd")
+  if (filename %in% embedded_names) {
+    tmp <- file.path(tempdir(), paste0("expressom_tpl_", filename))
+    .write_embedded_template(filename, tmp)
+    return(normalizePath(tmp, winslash = "/"))
+  }
 
+  # 2. Explicit env-var override
+  env_dir <- Sys.getenv("EXPRESSOM_RMD_DIR", "")
   candidates <- c(
     if (nzchar(env_dir)) file.path(env_dir, filename),
     system.file("rmd", filename, package = "ExpressOM"),
@@ -1128,37 +1138,32 @@ safe_run <- function(expr, label = "") {
     file.path("..", "..", "inst", "rmd", filename),
     file.path("..", "..", "..", "inst", "rmd", filename)
   )
-
   candidates <- candidates[nzchar(candidates)]
-
   for (p in candidates) {
     if (file.exists(p)) {
       return(normalizePath(p, winslash = "/"))
     }
   }
 
+  # 3. Walk up from working directory
   dir <- normalizePath(getwd(), winslash = "/")
-
   for (i in 0:6) {
     p1 <- file.path(dir, "inst", "rmd", filename)
     if (file.exists(p1)) {
       return(normalizePath(p1, winslash = "/"))
     }
-
     p2 <- file.path(dir, "rmd", filename)
     if (file.exists(p2)) {
       return(normalizePath(p2, winslash = "/"))
     }
-
     dir <- dirname(dir)
   }
 
   stop(
-    "Could not locate bundled template '",
-    filename,
-    "'.\n",
+    "Could not locate bundled template '", filename, "'.\n",
     "Run from the package root, reinstall the package, or set:\n",
-    "  Sys.setenv(EXPRESSOM_RMD_DIR = '/path/to/inst/rmd')"
+    "  Sys.setenv(EXPRESSOM_RMD_DIR = '/path/to/inst/rmd')",
+    call. = FALSE
   )
 }
 
@@ -1173,21 +1178,16 @@ safe_run <- function(expr, label = "") {
     .expressom_rmd_path(template_file),
     error = function(e) NULL
   )
-
   if (is.null(template_path)) {
     warning(
-      "Could not locate template '",
-      template_file,
-      "'. ",
+      "Could not locate template '", template_file, "'. ",
       "Skipping custom template step.",
       call. = FALSE
     )
     return(NULL)
   }
-
   txt <- readLines(template_path, warn = FALSE)
   txt <- paste(txt, collapse = "\n")
-
   for (nm in names(values)) {
     txt <- gsub(
       paste0("{{", nm, "}}"),
@@ -1196,7 +1196,6 @@ safe_run <- function(expr, label = "") {
       fixed = TRUE
     )
   }
-
   out <- tempfile(fileext = fileext)
   writeLines(txt, out)
   out

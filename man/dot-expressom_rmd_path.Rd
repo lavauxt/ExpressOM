@@ -2,15 +2,18 @@
 % Please edit documentation in R/utils_core.R
 \name{.expressom_rmd_path}
 \alias{.expressom_rmd_path}
-\title{Locate a bundled template/Rmd file under inst/rmd/}
+\title{Locate a bundled template/Rmd file -- embedded-first, disk fallback}
 \usage{
 .expressom_rmd_path(filename)
 }
 \description{
-More robust than the original version:
-- checks installed package first
-- checks common source-checkout locations
-- walks up from the working directory
-- honors EXPRESSOM_RMD_DIR
+Templates are embedded in code (mod_report_templates.R). This function
+writes the embedded content to a temp file and returns its path, so
+callers that expect a file path keep working unchanged. A disk lookup
+under inst/rmd/ is kept as a last-resort fallback for source checkouts
+that still carry the files, but is no longer required.
+}
+\details{
+Honors EXPRESSOM_RMD_DIR for explicit overrides.
 }
 \keyword{internal}

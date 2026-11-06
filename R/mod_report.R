@@ -1,19 +1,11 @@
-# mod_report.R -- the ONE unified, self-contained, interactive HTML report.
-#
-# build_expressom_report() reads an ExpressOM output directory through the
-# shared loader (mod_report_data.R), builds the tab tree (mod_report_tabs.R)
-# and renders inst/rmd/expressom_report.Rmd to a single HTML file with plotly
-# figures and DT tables in tabs. It replaces the RegionReport report and the
-# separate DTE/DTU report.
-
 #' Build the unified interactive HTML report
 #'
 #' Regroups every result of an ExpressOM run -- sample QC / PCA, differential
 #' expression (volcano, MA, heatmap, searchable tables), functional enrichment
 #' (ORA, GSEA, FGSEA, SPIA, transcription factors), isoform analysis (DTE, DTU,
-#' DEXSeq, isoform-switch plots), static figures and run logs -- in **one
-#' self-contained HTML file** with plotly figures and DT tables in tabs. The
-#' report only *reads* what the pipeline already wrote; it never recomputes an
+#' DEXSeq, isoform-switch plots), static figures and run logs -- in one
+#' self-contained HTML file with plotly figures and DT tables in tabs. The
+#' report only reads what the pipeline already wrote; it never recomputes an
 #' analysis, so it can be rebuilt in seconds (for instance with other cut-offs).
 #'
 #' Tabs for stages that were not run (no isoform analysis, EDA-only run ...)
@@ -59,14 +51,12 @@ build_expressom_report <- function(
       call. = FALSE
     )
   }
-
   if (is.null(results)) {
     results <- load_expressom_results(out_dir, comparison = comparison)
   } else if (!inherits(results, "expressom_results")) {
     stop("`results` must come from load_expressom_results().", call. = FALSE)
   }
   out_dir <- results$out_dir
-
   if (is.null(output_file)) {
     stem <- if (is.na(results$comparison)) {
       "ExpressOM_report"
@@ -81,9 +71,11 @@ build_expressom_report <- function(
   dir.create(work)
   on.exit(unlink(work, recursive = TRUE), add = TRUE)
 
+  # Write the embedded template directly -- no disk file needed.
   template <- file.path(work, "expressom_report.Rmd")
-  file.copy(.expressom_rmd_path("expressom_report.Rmd"), template)
-  results_rds <- file.path(work, "results.rds")
+  writeLines(.embedded_template_text("expressom_report.Rmd"), template, useBytes = TRUE)
+
+  results_rds  <- file.path(work, "results.rds")
   settings_rds <- file.path(work, "settings.rds")
   saveRDS(results, results_rds)
   saveRDS(settings, settings_rds)
@@ -91,7 +83,6 @@ build_expressom_report <- function(
   # Render in a fresh environment whose parent is the package namespace, so the
   # template can call the (internal) tab builders without `:::`.
   render_env <- new.env(parent = environment(build_expressom_report))
-
   rmarkdown::render(
     input = template,
     output_file = basename(output_file),
@@ -102,7 +93,6 @@ build_expressom_report <- function(
     envir = render_env,
     quiet = quiet
   )
-
   size_mb <- file.size(output_file) / 1024^2
   message(
     "Report written: ", output_file, " (", format(round(size_mb, 1), nsmall = 1), " MB)"

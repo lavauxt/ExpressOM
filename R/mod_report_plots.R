@@ -101,7 +101,7 @@
   lfc_cutoff,
   test_type = "Wald",
   label_col = "gene",
-  max_points = 15000L
+  max_points = 5000L
 ) {
   lfc <- .rep_num(res_tbl$log2FoldChange)
   padj <- .rep_num(res_tbl$padj)
@@ -176,7 +176,7 @@
       "Upregulated" = unname(colors[["up"]])
     )
   }
-  trace_type <- if (nrow(df) > 4000L) "scattergl" else "scatter"
+  trace_type <- if (nrow(df) > 2000L) "scattergl" else "scatter"
   for (k in cls) {
     d <- df[df$class == k, , drop = FALSE]
     if (nrow(d) == 0L) next
@@ -217,7 +217,7 @@ iplot_volcano <- function(
   colors = .de_direction_colors(),
   test_type = "Wald",
   label_col = "gene",
-  max_points = 15000L,
+  max_points = 5000L,
   highlight = NULL,
   title = NULL
 ) {
@@ -273,7 +273,7 @@ iplot_ma <- function(
   colors = .de_direction_colors(),
   test_type = "Wald",
   label_col = "gene",
-  max_points = 15000L,
+  max_points = 5000L,
   title = NULL
 ) {
   .rep_require("plotly")
@@ -701,7 +701,7 @@ itable <- function(
   df,
   caption = NULL,
   page_length = 10L,
-  max_rows = 5000L,
+  max_rows = 2000L,
   digits = 3L,
   filename = "expressom_table"
 ) {

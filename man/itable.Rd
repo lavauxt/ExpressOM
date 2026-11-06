@@ -8,7 +8,7 @@ itable(
   df,
   caption = NULL,
   page_length = 10L,
-  max_rows = 5000L,
+  max_rows = 2000L,
   digits = 3L,
   filename = "expressom_table"
 )

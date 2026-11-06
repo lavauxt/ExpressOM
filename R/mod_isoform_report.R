@@ -894,82 +894,10 @@ generate_dte_dtu_report <- function(dte_results,
     return(invisible(report_dir))
   }
 
-  template_path <- tryCatch(
-    .expressom_rmd_path("dte_dtu_report.Rmd"),
-    error = function(e) NULL
-  )
-
-  if (!is.null(template_path)) {
-    rmd_file <- tempfile(fileext = ".Rmd")
-    on.exit(unlink(rmd_file), add = TRUE)
-
-    file.copy(template_path, rmd_file, overwrite = TRUE)
-  } else {
-    warning(
-      "Template 'dte_dtu_report.Rmd' not found. Using minimal fallback report.",
-      call. = FALSE
-    )
-
-    rmd_file <- file.path(report_dir, "report_fallback.Rmd")
-
-    writeLines(
-      c(
-        "---",
-        "title: 'DTE / DTU fallback report'",
-        "output: html_document",
-        "params:",
-        "  level: ''",
-        "  base: ''",
-        "  top_n: 15",
-        "  genes_of_interest: ''",
-        "  dte_csv: ''",
-        "  dtu_csv: ''",
-        "  dexseq_csv: ''",
-        "  has_dexseq: no",
-        "  has_switch: no",
-        "  plot_dir: ''",
-        "  switch_plot_top_n: 10",
-        "  table_n: 1000",
-        "  padj_cutoff: 0.05",
-        "---",
-        "",
-        "```{r setup, include=FALSE}",
-        "knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)",
-        "```",
-        "",
-        "# DTE results",
-        "",
-        "```{r}",
-        "if (nzchar(params$dte_csv) && file.exists(params$dte_csv)) {",
-        "  DT::datatable(utils::head(utils::read.csv(params$dte_csv), params$table_n), filter = 'top')",
-        "} else {",
-        "  knitr::asis_output('DTE result file not found.')",
-        "}",
-        "```",
-        "",
-        "# DTU results",
-        "",
-        "```{r}",
-        "if (nzchar(params$dtu_csv) && file.exists(params$dtu_csv)) {",
-        "  DT::datatable(utils::head(utils::read.csv(params$dtu_csv), params$table_n), filter = 'top')",
-        "} else {",
-        "  knitr::asis_output('DTU result file not found.')",
-        "}",
-        "```",
-        "",
-        "# DEXSeq results",
-        "",
-        "```{r}",
-        "if (isTRUE(params$has_dexseq) && nzchar(params$dexseq_csv) && file.exists(params$dexseq_csv)) {",
-        "  DT::datatable(utils::read.csv(params$dexseq_csv), filter = 'top')",
-        "} else {",
-        "  knitr::asis_output('No DEXSeq results available.')",
-        "}",
-        "```"
-      ),
-      rmd_file
-    )
-  }
+  # Write the embedded DTE/DTU template to a temp file -- no disk file needed.
+  rmd_file <- file.path(report_dir, "dte_dtu_report_tmp.Rmd")
+  on.exit(unlink(rmd_file), add = TRUE)
+  writeLines(.embedded_template_text("dte_dtu_report.Rmd"), rmd_file, useBytes = TRUE)
 
   rmarkdown::render(
     rmd_file,
@@ -993,15 +921,12 @@ generate_dte_dtu_report <- function(dte_results,
       table_n = 1000L,
       padj_cutoff = padj_cutoff,
       dge_test = dge_test,
-      design = if (is.null(design)) "not provided" else paste(deparse(as.formula(design)), collapse = ""),
-      reduced = if (is.null(reduced)) "not applicable" else paste(deparse(as.formula(reduced)), collapse = ""),
+      design = if (is.null(design)) "not provided" else paste(deparse(as.formula(design)), collapse = " "),
+      reduced = if (is.null(reduced)) "not applicable" else paste(deparse(as.formula(reduced)), collapse = " "),
       methods_file = normalizePath(methods_path, winslash = "/")
     )
   )
-
   gc()
-
   message("DTE/DTU report generated in: ", report_dir)
-
   invisible(NULL)
 }

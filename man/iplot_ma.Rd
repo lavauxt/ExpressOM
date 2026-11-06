@@ -11,7 +11,7 @@ iplot_ma(
   colors = .de_direction_colors(),
   test_type = "Wald",
   label_col = "gene",
-  max_points = 15000L,
+  max_points = 5000L,
   title = NULL
 )
 }

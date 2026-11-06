@@ -978,6 +978,8 @@
 .app_css <- function() {
   paste0(
     .xp_css(),
+    "\n",
+    .xp_dark_css_text(),
     "
 .xp-app { display:grid; grid-template-columns: minmax(300px, 360px) 1fr; gap: 22px; align-items: start; padding: 0 6px 30px; }
 @media (max-width: 980px) { .xp-app { grid-template-columns: 1fr; } }
