@@ -463,7 +463,9 @@ plot_exon_usage_comparison <- function(switch_list, gene, level, base, plot_dir)
   bin_summary <- stats::aggregate(
     cbind(iso_value_1, iso_value_2) ~ bin_id,
     data = map_df,
-    FUN = sum
+    FUN = function(x) sum(x, na.rm = TRUE)  # a single NA isoform must not
+                                            # blank a whole exon bin (the
+                                            # sashimi aggregate already did)
   )
 
   colnames(bin_summary) <- c("bin_id", base, level)

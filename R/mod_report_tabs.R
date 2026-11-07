@@ -3,8 +3,10 @@
 
 #' Settings of the interactive report
 #'
-#' Defaults aim for a complete report: every figure, table and enrichment
-#' plot is included. Lower any value to trade size/speed for content.
+#' Defaults aim for a fast-opening report: the values cap how many points,
+#' rows and widgets are embedded, while the complete data always remains in
+#' the CSV/TSV files of the run directory. Raise any value to trade
+#' size/speed for content.
 #'
 #' @param title Report title.
 #' @param max_points Points drawn in the volcano / MA plots.
@@ -24,6 +26,9 @@
 #' @param highlight_genes Genes to mark on the volcano plot.
 #' @param padj_cutoff,lfc_cutoff Override the run's cut-offs.
 #' @param theme "auto", "light" or "dark".
+#' @param slim_tables `TRUE` (default) drops helper columns that bloat the
+#'   embedded tables (`lfcSE`, `stat`, `entrezid`, ORA `geneID`, GSEA
+#'   `core_enrichment`, ...); the CSV/TSV files keep every column.
 #' @param self_contained `TRUE` (default) renders with `rmarkdown` + pandoc
 #'   for a single self-contained HTML file (every plotly / DT asset and every
 #'   static figure inlined). `FALSE` falls back to `htmltools` and produces a
@@ -32,22 +37,23 @@
 #' @export
 expressom_report_settings <- function(
   title = "ExpressOM report",
-  max_points = 2000L,
+  max_points = 1500L,
   heatmap_genes = 20L,
   top_terms = 15L,
-  table_rows = .Machine$integer.max,
+  table_rows = 2000L,
   static_figures = TRUE,
-  max_static_figures = .Machine$integer.max,
+  max_static_figures = 24L,
   static_dpi = 60,
-  max_isoform_plots = .Machine$integer.max,
-  plotly_enrichment_max = .Machine$integer.max,
+  max_isoform_plots = 24L,
+  plotly_enrichment_max = 12L,
   merge_enrichment_threshold = 3L,
-  plotly_pca_max = .Machine$integer.max,
+  plotly_pca_max = 4L,
   highlight_genes = NULL,
   padj_cutoff = NULL,
   lfc_cutoff = NULL,
   theme = c("auto", "light", "dark"),
-  self_contained = TRUE
+  self_contained = TRUE,
+  slim_tables = TRUE
 ) {
   theme <- match.arg(theme)
   list(
@@ -67,7 +73,8 @@ expressom_report_settings <- function(
     padj_cutoff = padj_cutoff,
     lfc_cutoff = lfc_cutoff,
     theme = theme,
-    self_contained = self_contained
+    self_contained = self_contained,
+    slim_tables = slim_tables
   )
 }
 
@@ -373,10 +380,33 @@ expressom_report_settings <- function(
   }
 }
 
+# ---- table slimming (report open-speed) ---------------------------------------
+#
+# The DE / DTE tables carry helper statistics (lfcSE, stat, entrezid, ...) and
+# the enrichment tables carry the ORA `geneID` and GSEA `core_enrichment` /
+# `leadingEdge` columns, each a comma-separated list of EVERY gene of the
+# term -- typically the second biggest chunk of the embedded HTML after the
+# row count itself. They are useless for interactive browsing (the CSV export
+# keeps them) and are dropped when slim_tables is TRUE (the default).
+
+.xp_table_drop_cols <- c(
+  "lfcSE", "stat", "contrast_stat", "contrast_pvalue",
+  "entrezid", "description",
+  "geneID", "core_enrichment", "leadingEdge", "leading_edge"
+)
+
+.xp_prune_table <- function(df, st) {
+  if (is.null(df) || nrow(df) == 0L) return(df)
+  if (!isTRUE(st$slim_tables %||% TRUE)) return(df)
+  drop <- intersect(.xp_table_drop_cols, colnames(df))
+  if (length(drop)) df[setdiff(colnames(df), drop)] else df
+}
+
 .xp_leaf_de_table <- function(res, st) {
   function() {
     tbl <- res$dge$results
     tbl <- tbl[order(tbl$padj, na.last = TRUE), , drop = FALSE]
+    tbl <- .xp_prune_table(tbl, st)
     htmltools::tagList(
       .xp_note("Genes are sorted by adjusted p-value. Use the column filters to ",
                "select genes of interest; the buttons export what is currently ",
@@ -399,12 +429,22 @@ expressom_report_settings <- function(
   }
 }
 
-.xp_leaf_enrichment <- function(res, st, path, kind, show_plot = TRUE) {
+.xp_leaf_enrichment <- function(res, st, path, kind, show_plot = TRUE,
+                                show_table = TRUE) {
   function() {
     tb <- res$functional$tables[[path]]
     co <- .xp_cutoffs(res, st)
     std <- .rep_standardise_enrichment(tb, kind)
     n_sig <- if (is.null(std)) NA_integer_ else sum(std$padj < co$padj, na.rm = TRUE)
+
+    if (!isTRUE(show_plot) && !isTRUE(show_table)) {
+      return(.xp_note(
+        "The rows of this collection are in the merged table above ",
+        "(filter by 'collection'); the CSV in the run folder keeps every ",
+        "column."
+      ))
+    }
+
     htmltools::tagList(
       .xp_note(
         paste0(
@@ -425,8 +465,10 @@ expressom_report_settings <- function(
       } else {
         .xp_note("Interactive plot omitted here to keep the report light \u2014 see the table below.")
       },
-      itable(tb, page_length = 10L, max_rows = st$table_rows,
-             filename = sub("\\.[^.]+$", "", basename(path)))
+      if (isTRUE(show_table)) {
+        itable(.xp_prune_table(tb, st), page_length = 10L, max_rows = st$table_rows,
+               filename = sub("\\.[^.]+$", "", basename(path)))
+      }
     )
   }
 }
@@ -447,7 +489,7 @@ expressom_report_settings <- function(
     htmltools::tagList(
       .xp_note(sprintf("%s rows across %d collections. Filter by 'collection'.",
                        .xp_fmt(nrow(merged)), length(paths))),
-      itable(merged, page_length = 15L, max_rows = st$table_rows,
+      itable(.xp_prune_table(merged, st), page_length = 15L, max_rows = st$table_rows,
              filename = paste0("merged_", kind))
     )
   }
@@ -466,7 +508,10 @@ expressom_report_settings <- function(
         max_points = st$max_points,
         title = "DTE volcano plot (transcript level)"
       ),
-      itable(dte[order(.rep_num(dte$padj), na.last = TRUE), , drop = FALSE],
+      itable(.xp_prune_table(
+               dte[order(.rep_num(dte$padj), na.last = TRUE), , drop = FALSE],
+               st
+             ),
              page_length = 15L, max_rows = st$table_rows, filename = "DTE_results")
     )
   }
@@ -484,7 +529,7 @@ expressom_report_settings <- function(
         iplot_dtu(dtu, top_n = 30L, padj_cutoff = co$padj),
         if (!is.na(raw_p)) iplot_pvalue_hist(dtu[[raw_p]], "DTU p-value distribution")
       ),
-      itable(dtu[ord, , drop = FALSE], page_length = 15L,
+      itable(.xp_prune_table(dtu[ord, , drop = FALSE], st), page_length = 15L,
              max_rows = st$table_rows, filename = "DTU_results")
     )
   }
@@ -714,9 +759,10 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
           for (k in seq_len(n_col)) {
             children <- c(children, list(
               .xp_node(mi$collection[[k]],
-                       content = .xp_leaf_enrichment(res, st, mi$path[[k]],
-                                                     mi$kind[[k]],
-                                                     show_plot = take_plotly()))
+                       content = .xp_leaf_enrichment(
+                         res, st, mi$path[[k]], mi$kind[[k]],
+                         show_plot = take_plotly(),
+                         show_table = FALSE))   # rows live in the merged table
             ))
           }
           do.call(.xp_node, c(list(unique(mi$method)), children))
@@ -898,7 +944,10 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
         .xp_header_html(res, st),
         top$nav,
         top$content
-      )
+      ),
+      # lazy tab widgets -- must be the last element of <body> so that it runs
+      # during parsing, before htmlwidgets scans the document at DOM ready
+      tg$script(htmltools::HTML(.xp_lazy_js_text()))
     )
   )
 }

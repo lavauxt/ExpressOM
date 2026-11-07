@@ -266,6 +266,15 @@
     !is.na(significance_padj) & significance_padj < padj_cutoff &
       abs(plot_df$log2FoldChange) > lfc_cutoff
   )
+  # Data-driven y range: the old hard clip coord_cartesian(ylim = c(-2, 2))
+  # silently discarded every |log2FC| > 2 from the MA PDFs. Keep outlier
+  # protection (a single extreme point would otherwise flatten the cloud)
+  # but let the data, not a constant, choose the range: the 99.9th percentile
+  # of |log2FC| with the cut-off lines as the floor.
+  y_cap <- max(
+    lfc_cutoff,
+    stats::quantile(abs(plot_df$log2FoldChange), 0.999, na.rm = TRUE)
+  )
   ggplot2::ggplot(
     plot_df,
     ggplot2::aes(x = baseMean, y = log2FoldChange, color = direction)
@@ -275,7 +284,7 @@
     ggplot2::scale_color_manual(values = .de_direction_scale(), drop = FALSE) +
     ggplot2::geom_hline(yintercept = c(-lfc_cutoff, lfc_cutoff),
                         color = "grey40", linetype = "dashed") +
-    ggplot2::coord_cartesian(ylim = c(-2, 2)) +
+    ggplot2::coord_cartesian(ylim = c(-y_cap, y_cap)) +
     ggplot2::labs(title = title, x = "Mean of normalized counts",
                   y = "log2 Fold Change", color = NULL) +
     ggplot2::theme_minimal()
@@ -732,9 +741,15 @@ plot_custom_pca <- function(vsd, condition, batch = NULL, title = "PCA", ellipse
   }
 
   p <- p +
-    ggrepel::geom_text_repel(ggplot2::aes(label = .data[["sample_label"]]),
-                             size = 3, show.legend = FALSE,
-                             box.padding = 0.4, max.overlaps = Inf) +
+    if (requireNamespace("ggrepel", quietly = TRUE)) {
+      ggrepel::geom_text_repel(ggplot2::aes(label = .data[["sample_label"]]),
+                               size = 3, show.legend = FALSE,
+                               box.padding = 0.4, max.overlaps = Inf)
+    } else {
+      ggplot2::geom_text(ggplot2::aes(label = .data[["sample_label"]]),
+                         size = 3, show.legend = FALSE, vjust = -0.8)
+    }
+  p <- p +
     ggplot2::xlab(paste0("PC1: ", percentVar[1], "% variance")) +
     ggplot2::ylab(paste0("PC2: ", percentVar[2], "% variance")) +
     ggplot2::theme_bw() +
@@ -1525,10 +1540,17 @@ plotP_fork <- function(x, threshold = 0.01) {
     }
   }
 
-  p <- p + ggrepel::geom_text_repel(
-    ggplot2::aes(label = Label, color = Group),
-    size = 3.5, box.padding = 0.6, max.overlaps = Inf, show.legend = FALSE
-  )
+  if (requireNamespace("ggrepel", quietly = TRUE)) {
+    p <- p + ggrepel::geom_text_repel(
+      ggplot2::aes(label = Label, color = Group),
+      size = 3.5, box.padding = 0.6, max.overlaps = Inf, show.legend = FALSE
+    )
+  } else {
+    p <- p + ggplot2::geom_text(
+      ggplot2::aes(label = Label, color = Group),
+      size = 3.5, show.legend = FALSE
+    )
+  }
   if (any(okx)) {
     p <- p + ggplot2::geom_text(data = df[okx, ], ggplot2::aes(x = x_val - 0.15, y = y_val),
                                 label = "|", size = 4, color = "black")

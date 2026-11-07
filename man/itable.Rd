@@ -10,7 +10,8 @@ itable(
   page_length = 10L,
   max_rows = 800L,
   digits = 3L,
-  filename = "expressom_table"
+  filename = "expressom_table",
+  round_payload = TRUE
 )
 }
 \arguments{
@@ -26,6 +27,12 @@ caption); the complete table is always available as a file in `out_dir`.}
 \item{digits}{Significant digits for numeric columns.}
 
 \item{filename}{Base name of the exported CSV / Excel files.}
+
+\item{round_payload}{`TRUE` (default) rounds real-valued columns to
+`digits` significant digits in R BEFORE serialisation: DT::formatSignif
+only changes the rendered text, while the data itself would be embedded
+at full double precision (16 significant digits), which is what makes
+big tables heavy.}
 }
 \value{
 A DT htmlwidget.

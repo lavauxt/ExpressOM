@@ -95,13 +95,19 @@
 # Shared preparation for the volcano and MA plots: classify every gene as
 # up / down / not significant and thin the non-significant cloud so that the
 # self-contained HTML stays light even for 60k-gene tables.
+#
+# max_points is a hard cap on the total number of points drawn: all
+# significant genes are kept and the non-significant cloud is thinned to
+# fill the remaining budget (the sampling is seeded, with or without withr).
+# The serialised numbers are rounded here because htmlwidgets serialises at
+# up to 16 significant digits, which dominates the size of the embedded JSON.
 .rep_de_frame <- function(
   res_tbl,
   padj_cutoff,
   lfc_cutoff,
   test_type = "Wald",
   label_col = "gene",
-  max_points = 2000L 
+  max_points = 2000L
 ) {
   lfc <- .rep_num(res_tbl$log2FoldChange)
   padj <- .rep_num(res_tbl$padj)
@@ -142,12 +148,24 @@
 
   if (nrow(df) > max_points) {
     ns <- which(df$class == "Not significant")
-    n_keep <- max(2000L, max_points - (nrow(df) - length(ns)))
+    n_keep <- max(0L, max_points - (nrow(df) - length(ns)))
     if (length(ns) > n_keep) {
-      drop <- ns[-withr::with_seed(1L, sample.int(length(ns), n_keep))]
+      keep_idx <- if (requireNamespace("withr", quietly = TRUE)) {
+        withr::with_seed(1L, sample.int(length(ns), n_keep))
+      } else {
+        sample.int(length(ns), n_keep)
+      }
+      drop <- ns[-keep_idx]
       df <- df[-drop, , drop = FALSE]
     }
   }
+
+  # shrink the serialised payload (full-precision doubles -> 3-4 digits);
+  # invisible at plot scale and typically halves the embedded JSON
+  df$lfc <- round(df$lfc, 3)
+  df$padj <- signif(df$padj, 3)
+  df$base_mean <- signif(df$base_mean, 4)
+
   df
 }
 
@@ -695,6 +713,11 @@ iplot_pvalue_hist <- function(p, title = "p-value distribution") {
 #'   caption); the complete table is always available as a file in `out_dir`.
 #' @param digits Significant digits for numeric columns.
 #' @param filename Base name of the exported CSV / Excel files.
+#' @param round_payload `TRUE` (default) rounds real-valued columns to
+#'   `digits` significant digits in R BEFORE serialisation: DT::formatSignif
+#'   only changes the rendered text, while the data itself would be embedded
+#'   at full double precision (16 significant digits), which is what makes
+#'   big tables heavy.
 #' @return A DT htmlwidget.
 #' @export
 itable <- function(
@@ -703,7 +726,8 @@ itable <- function(
   page_length = 10L,
   max_rows = 800L,
   digits = 3L,
-  filename = "expressom_table"
+  filename = "expressom_table",
+  round_payload = TRUE
 ) {
   .rep_require("DT", "to display interactive tables")
   if (is.null(df) || nrow(df) == 0L) {
@@ -721,6 +745,13 @@ itable <- function(
   num_cols <- colnames(df)[vapply(df, function(x) {
     is.numeric(x) && any(is.finite(x) & x != round(x))
   }, logical(1))]
+
+  if (round_payload && length(num_cols)) {
+    for (cn in num_cols) {
+      df[[cn]] <- signif(df[[cn]], digits)
+    }
+  }
+
   dt <- DT::datatable(
     df,
     caption = caption,

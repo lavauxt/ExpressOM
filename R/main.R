@@ -186,6 +186,16 @@ expressom <- function(
   p <- ctx$p
   out_dir <- p$out_dir
 
+  # Normalise vector defaults that are single choices: the `p <- as.list(environment())`
+  # above captures the evaluated length-2 default of execution_order (and of
+  # isoform_test_engine), and a length-2 value turns
+  # `p$execution_order == "dge_first"` into a length-2 logical -- an error
+  # inside if() on R >= 4.2, a silent first-element pick on older versions.
+  # Taking the first element keeps the documented default; if
+  # .expressom_prepare() already normalised them this is a harmless no-op.
+  p$execution_order <- if (length(p$execution_order)) p$execution_order[[1L]] else "dge_first"
+  p$isoform_test_engine <- if (length(p$isoform_test_engine)) p$isoform_test_engine[[1L]] else "DEXSeq"
+
   old_warn <- getOption("nwarnings")
   options(nwarnings = 10000)
 

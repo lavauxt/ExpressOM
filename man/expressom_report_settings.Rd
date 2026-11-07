@@ -6,22 +6,23 @@
 \usage{
 expressom_report_settings(
   title = "ExpressOM report",
-  max_points = 2000L,
+  max_points = 1500L,
   heatmap_genes = 20L,
   top_terms = 15L,
-  table_rows = .Machine$integer.max,
+  table_rows = 2000L,
   static_figures = TRUE,
-  max_static_figures = .Machine$integer.max,
+  max_static_figures = 24L,
   static_dpi = 60,
-  max_isoform_plots = .Machine$integer.max,
-  plotly_enrichment_max = .Machine$integer.max,
+  max_isoform_plots = 24L,
+  plotly_enrichment_max = 12L,
   merge_enrichment_threshold = 3L,
-  plotly_pca_max = .Machine$integer.max,
+  plotly_pca_max = 4L,
   highlight_genes = NULL,
   padj_cutoff = NULL,
   lfc_cutoff = NULL,
   theme = c("auto", "light", "dark"),
-  self_contained = TRUE
+  self_contained = TRUE,
+  slim_tables = TRUE
 )
 }
 \arguments{
@@ -62,11 +63,17 @@ ones are shown as tables only).}
 for a single self-contained HTML file (every plotly / DT asset and every
 static figure inlined). `FALSE` falls back to `htmltools` and produces a
 folder with `lib/` and `figures/` next to the HTML (legacy).}
+
+\item{slim_tables}{`TRUE` (default) drops helper columns that bloat the
+embedded tables (`lfcSE`, `stat`, `entrezid`, ORA `geneID`, GSEA
+`core_enrichment`, ...); the CSV/TSV files keep every column.}
 }
 \value{
 A named list.
 }
 \description{
-Defaults aim for a complete report: every figure, table and enrichment
-plot is included. Lower any value to trade size/speed for content.
+Defaults aim for a fast-opening report: the values cap how many points,
+rows and widgets are embedded, while the complete data always remains in
+the CSV/TSV files of the run directory. Raise any value to trade
+size/speed for content.
 }

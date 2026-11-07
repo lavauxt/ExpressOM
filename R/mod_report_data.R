@@ -525,6 +525,12 @@ load_expressom_results <- function(
     tbl_list <- if (.Platform$OS.type != "windows" &&
                     parallel::detectCores() > 1L &&
                     length(inv$path) > 1L) {
+      # fork-safety: data.table's OpenMP threads are not fork-safe on every
+      # version/platform and can deadlock inside the mclapply() children;
+      # pinning to 1 thread before the fork is inherited by the children.
+      if (requireNamespace("data.table", quietly = TRUE)) {
+        data.table::setDTthreads(1L)
+      }
       parallel::mclapply(
         inv$path, read_one,
         mc.cores = min(parallel::detectCores() - 1L, 8L)
@@ -828,4 +834,37 @@ print.expressom_results <- function(x, ...) {
     "\n"
   )
   invisible(x)
+}
+
+# ---- report size audit ---------------------------------------------------------
+
+#' Where are the megabytes of an ExpressOM report?
+#'
+#' Scans a rendered `ExpressOM_report_*.html` and reports its size, how many
+#' htmlwidgets it embeds and which widgets carry the largest JSON payloads --
+#' the two numbers that decide how slowly the file opens. Use it before/after
+#' applying report settings to see what actually moved.
+#'
+#' @param path Path of the HTML report.
+#' @return A data.frame of widgets and JSON sizes (KB), largest first
+#'   (invisibly); a summary is printed.
+#' @export
+#' @examples
+#' \dontrun{
+#' audit_expressom_report("results/Report/ExpressOM_report_T_vs_C.html")
+#' }
+audit_expressom_report <- function(path) {
+  stopifnot(file.exists(path))
+  lines <- readLines(path, warn = FALSE)
+  idx <- grepl('<script type="application/json" data-for="', lines, fixed = TRUE)
+  w <- data.frame(
+    widget  = sub('.*data-for="([^"]+)".*', '\\1', lines[idx]),
+    json_kb = round(nchar(lines[idx]) / 1024),
+    stringsAsFactors = FALSE
+  )
+  w <- w[order(-w$json_kb), , drop = FALSE]
+  cat(sprintf("file: %.1f MB | widgets: %d | widget JSON: %.1f MB\n",
+              file.size(path) / 1e6, nrow(w), sum(w$json_kb) / 1024))
+  if (nrow(w)) print(utils::head(w, 15), row.names = FALSE)
+  invisible(w)
 }
