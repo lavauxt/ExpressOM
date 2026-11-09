@@ -47,6 +47,25 @@
   ), collapse = "\n")
 }
 
+# ---- inline <script> safety ----------------------------------------------------
+#
+# JavaScript that is inlined in the page must not contain the character
+# sequence "</script" anywhere -- in a string, a regexp or a COMMENT: the HTML
+# parser ends the script element at the first one (comments are not skipped).
+# The rest of the code then becomes page text and the script silently does not
+# run. A comment of the lazy-tab script once contained one; this check turns
+# that class of mistake into an immediate, explicit error.
+.xp_assert_script_safe <- function(js, what = "inline script") {
+  if (grepl("</script", js, ignore.case = TRUE) || grepl("<!--", js, fixed = TRUE)) {
+    stop(
+      "The ", what, " contains '</script' or '<!--', which would end or ",
+      "corrupt the inline <script> element it is embedded in.",
+      call. = FALSE
+    )
+  }
+  js
+}
+
 # ---- lazy tab widgets (report open-speed) --------------------------------------
 #
 # htmlwidgets initialises EVERY plotly / DT widget of the report at
@@ -74,7 +93,7 @@
 # 3.7.1 and Bootstrap 3.4.1 tab behaviour (30 assertions, all passing).
 
 .xp_lazy_js_text <- function() {
-  paste(c(
+  js <- paste(c(
     "/* ExpressOM report - lazy tab widgets + correct sizing on tab activation.",
     " *",
     " * WHAT IT DOES",
@@ -115,9 +134,14 @@
     " *     report shows all tabs.",
     " *   - Kill switch: define window.XP_LAZY_TABS_OFF = true before this script.",
     " *",
-    " * Retrofit / A-B test: paste this file inside <script> ... </script> right",
-    " * before </body> of an existing ExpressOM_report_*.html copy and compare the",
-    " * load time - no need to re-run the pipeline.",
+    " * Retrofit / A-B test: paste this file inside a script element right before",
+    " * the end of the body of an existing ExpressOM_report_*.html copy and compare",
+    " * the load time - no need to re-run the pipeline.",
+    " *",
+    " * NOTE: never write a literal closing script tag anywhere in this text, not",
+    " * even in a comment: the HTML parser ends the script at the first one, the",
+    " * rest of the code is then shown as page text and the lazy loading silently",
+    " * does nothing (guarded by the check at the end of .xp_lazy_js_text()).",
     " */",
     "(function () {",
     "  'use strict';",
@@ -250,13 +274,26 @@
     "  var deferred = deferHidden();   // during parsing, before DOMContentLoaded",
     "",
     "  if (usedSectionRule) {",
-    "    // Safety net: tabsets.js should have built the panes by DOM ready (it",
-    "    // runs in an earlier jQuery-ready callback than htmlwidgets' scan). If",
-    "    // it somehow did not, undo the deferral so no widget stays hidden.",
-    "    document.addEventListener('DOMContentLoaded', function () {",
+    "    // Safety net: tabsets.js builds the panes in a $(document).ready()",
+    "    // callback. jQuery >= 3 runs those callbacks asynchronously (one timer",
+    "    // per callback, queued when DOMContentLoaded fires), i.e. AFTER every",
+    "    // DOMContentLoaded listener: checking for .tab-pane inside such a",
+    "    // listener always finds none and undid the whole deferral at once. So",
+    "    // wait until the ready callbacks have run -- a timer queued from inside",
+    "    // a ready callback is served after the ones already queued -- and only",
+    "    // then, if the panes still do not exist, undo the deferral so that no",
+    "    // widget can stay hidden. 'load' is a second, later chance.",
+    "    var safetyNet = function () {",
     "      if (document.querySelector('.tab-pane')) return;",
     "      if (restoreTemplates(document.body, false) > 0 && canLazy) staticRender();",
-    "    });",
+    "    };",
+    "    var armSafetyNet = function () { window.setTimeout(safetyNet, 0); };",
+    "    if (window.jQuery) {",
+    "      jQuery(armSafetyNet);",
+    "    } else {",
+    "      document.addEventListener('DOMContentLoaded', armSafetyNet);",
+    "    }",
+    "    window.addEventListener('load', function () { window.setTimeout(safetyNet, 100); });",
     "  }",
     "",
     "  if (window.jQuery) {",
@@ -293,6 +330,7 @@
     "  };",
     "})();"
   ), collapse = "\n")
+  .xp_assert_script_safe(js, "lazy-tab script")
 }
 
 
@@ -1048,7 +1086,7 @@
     "});",
     "})();"
   ), collapse = "\n")
-  sub("XP_DEFAULT", default_mode, js, fixed = TRUE)
+  .xp_assert_script_safe(sub("XP_DEFAULT", default_mode, js, fixed = TRUE), "theme script")
 }
 
 # ---- writers ------------------------------------------------------------------

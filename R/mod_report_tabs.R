@@ -16,6 +16,11 @@
 #' @param static_figures Embed the PDF figures of the run (needs `pdftools`).
 #' @param max_static_figures Maximum number of embedded static figures per group.
 #' @param static_dpi Resolution of the embedded static figures.
+#' @param static_max_px Embedded PNG figures wider than about this many pixels
+#'   (the isoform plots are written at 200 dpi, ~0.5 MB each once base64
+#'   encoded) are reduced by an integer factor before being inlined in the
+#'   single-file report. Needs the `png` package; the files on disk are never
+#'   touched. `0` embeds the PNGs as they are.
 #' @param max_isoform_plots Maximum number of isoform-gallery PNGs.
 #' @param plotly_enrichment_max Number of enrichment files that get an
 #'   interactive plotly widget (the rest show the table only).
@@ -44,6 +49,7 @@ expressom_report_settings <- function(
   static_figures = TRUE,
   max_static_figures = 24L,
   static_dpi = 60,
+  static_max_px = 1000L,
   max_isoform_plots = 24L,
   plotly_enrichment_max = 12L,
   merge_enrichment_threshold = 3L,
@@ -65,6 +71,7 @@ expressom_report_settings <- function(
     static_figures = static_figures,
     max_static_figures = max_static_figures,
     static_dpi = static_dpi,
+    static_max_px = static_max_px,
     max_isoform_plots = max_isoform_plots,
     plotly_enrichment_max = plotly_enrichment_max,
     merge_enrichment_threshold = merge_enrichment_threshold,
@@ -118,15 +125,73 @@ expressom_report_settings <- function(
   )
 }
 
+# Reduce a PNG by an integer block-average factor so that it ends up close to
+# `max_px` wide. Base64 PNGs are the bulk of a single-file report (the isoform
+# plots are 2000+ px wide, ~0.5 MB each) and a gallery tile / click-to-zoom
+# never needs more than ~1000 px. Returns the path of the file to embed: a new
+# temporary PNG when the image was reduced (the caller deletes it), otherwise
+# `path` itself -- also when the 'png' package is missing or the file cannot
+# be read, so this can only ever make the report smaller, never fail it.
+.xp_shrink_png <- function(path, max_px = 1000L) {
+  max_px <- suppressWarnings(as.integer(max_px))
+  if (length(max_px) != 1L || is.na(max_px) || max_px < 100L) return(path)
+  if (!requireNamespace("png", quietly = TRUE)) return(path)
+  img <- tryCatch(png::readPNG(path), error = function(e) NULL)
+  if (is.null(img)) return(path)
+
+  d <- dim(img)
+  if (length(d) == 2L) dim(img) <- c(d, 1L)            # grey-scale: one channel
+  d <- dim(img)
+  k <- max(1L, as.integer(round(d[[2L]] / max_px)))
+  if (k < 2L) return(path)
+  h2 <- d[[1L]] %/% k
+  w2 <- d[[2L]] %/% k
+  if (h2 < 1L || w2 < 1L) return(path)
+
+  # an alpha channel that is fully opaque only costs bytes
+  if (d[[3L]] == 4L && all(img[, , 4L] == 1)) img <- img[, , 1:3, drop = FALSE]
+
+  out <- tryCatch({
+    # k x k block mean = sum of the k^2 strided sub-grids / k^2
+    pick <- function(i, n) seq.int(i, by = k, length.out = n)
+    acc <- 0
+    for (i in seq_len(k)) {
+      for (j in seq_len(k)) {
+        acc <- acc + img[pick(i, h2), pick(j, w2), , drop = FALSE]
+      }
+    }
+    acc <- acc / (k * k)
+    if (dim(acc)[[3L]] == 1L) acc <- acc[, , 1L]       # writePNG: matrix = grey
+    tmp <- tempfile("xp_small_", fileext = ".png")
+    png::writePNG(acc, tmp)
+    tmp
+  }, error = function(e) NULL)
+
+  if (is.null(out) || !file.exists(out)) return(path)
+  # keep the original if reducing did not actually save anything
+  if (file.size(out) >= file.size(path)) {
+    unlink(out)
+    return(path)
+  }
+  out
+}
+
 # Returns either a data-URI string (figures_dir = NULL) or a list with a `src`
 # pointing to "figures/<basename>" (figures_dir set, external mode).
-.xp_img_uri <- function(path, figures_dir = NULL) {
+# `max_px` (inline mode only) caps the width of embedded PNGs, see
+# .xp_shrink_png().
+.xp_img_uri <- function(path, figures_dir = NULL, max_px = NULL) {
   if (!is.null(figures_dir)) {
     dest <- file.path(figures_dir, basename(path))
     if (!file.exists(dest)) file.copy(path, dest, overwrite = TRUE)
     return(list(src = paste0("figures/", basename(path))))
   }
-  tryCatch(knitr::image_uri(path), error = function(e) NULL)
+  src <- path
+  if (!is.null(max_px) && grepl("\\.png$", path, ignore.case = TRUE)) {
+    src <- .xp_shrink_png(path, max_px)
+    if (!identical(src, path)) on.exit(unlink(src), add = TRUE)
+  }
+  tryCatch(knitr::image_uri(src), error = function(e) NULL)
 }
 
 # Same contract as .xp_img_uri.
@@ -555,9 +620,11 @@ expressom_report_settings <- function(
     plots  <- utils::head(plots, n_show)
     uris <- if (.Platform$OS.type != "windows" && length(plots) > 1L) {
       parallel::mclapply(plots, .xp_img_uri, figures_dir = st$figures_dir,
+                         max_px = st$static_max_px %||% 1000L,
                          mc.cores = min(parallel::detectCores() - 1L, 8L, length(plots)))
     } else {
-      lapply(plots, .xp_img_uri, figures_dir = st$figures_dir)
+      lapply(plots, .xp_img_uri, figures_dir = st$figures_dir,
+             max_px = st$static_max_px %||% 1000L)
     }
     cap <- sub("\\.[^.]+$", "", basename(plots))
     htmltools::tagList(
@@ -596,10 +663,12 @@ expressom_report_settings <- function(
       uris <- if (.Platform$OS.type != "windows" && n_take > 1L) {
         parallel::mclapply(pngs$path[seq_len(n_take)], .xp_img_uri,
                            figures_dir = st$figures_dir,
+                           max_px = st$static_max_px %||% 1000L,
                            mc.cores = min(parallel::detectCores() - 1L, 8L, n_take))
       } else {
         lapply(pngs$path[seq_len(n_take)], .xp_img_uri,
-               figures_dir = st$figures_dir)
+               figures_dir = st$figures_dir,
+               max_px = st$static_max_px %||% 1000L)
       }
       for (i in seq_along(uris)) {
         if (!is.null(uris[[i]])) {
@@ -1112,4 +1181,4 @@ table.dataTable { font-size: 13px; }
     ),
     tg$script(htmltools::HTML(.xp_theme_js_text(.xp_theme_setting(st))))
   )
-}
+}

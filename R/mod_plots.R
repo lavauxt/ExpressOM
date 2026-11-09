@@ -937,6 +937,13 @@ plot_top_genes_heatmap <- function(dds, results_data, condition_col, level, base
     mat <- norm_counts[present_ids, , drop = FALSE]
   }
 
+  # Work on the log2 scale: limma::removeBatchEffect() is a linear-model
+  # correction that is only meaningful on log-scale data (on raw normalised
+  # counts it produces negative "counts"), and z-scoring linear counts lets a
+  # single very high gene dominate each row. Same transform as the interactive
+  # heatmap of the HTML report.
+  mat <- log2(mat + 1)
+
   if (!is.null(batch_col) && batch_col %in% colnames(SummarizedExperiment::colData(dds)) &&
       requireNamespace("limma", quietly = TRUE)) {
     batch_vec <- SummarizedExperiment::colData(dds)[[batch_col]]
@@ -971,17 +978,22 @@ plot_top_genes_heatmap <- function(dds, results_data, condition_col, level, base
 
   col_pal <- colorRampPalette(c("navy", "white", "firebrick3"))(50)
 
-  .pdf_device()(file.path(plot_dir, paste0("TopGenes_Heatmap_", level, "_vs_", base, ".pdf")),
-      width = 10, height = max(6, nrow(mat_z) * 0.3))
-  pheatmap::pheatmap(mat_z,
-                     annotation_col = annotation_col,
-                     main           = paste0("Top ", nrow(mat_z), " DE genes (", level, " vs ", base, ")"),
-                     color          = col_pal,
-                     cluster_rows   = TRUE, cluster_cols = TRUE,
-                     scale          = "none",
-                     fontsize_row   = 8,
-                     show_rownames  = TRUE)
-  dev.off()
+  # safe_pdf() closes the device even if pheatmap() fails (a bare dev.off()
+  # after the call left a PDF device open on error and shifted every later plot)
+  safe_pdf(
+    file.path(plot_dir, paste0("TopGenes_Heatmap_", level, "_vs_", base, ".pdf")),
+    width = 10, height = max(6, nrow(mat_z) * 0.3),
+    expr = {
+      pheatmap::pheatmap(mat_z,
+                         annotation_col = annotation_col,
+                         main           = paste0("Top ", nrow(mat_z), " DE genes (", level, " vs ", base, ")"),
+                         color          = col_pal,
+                         cluster_rows   = TRUE, cluster_cols = TRUE,
+                         scale          = "none",
+                         fontsize_row   = 8,
+                         show_rownames  = TRUE)
+    }
+  )
   message("   -> Top genes heatmap saved to: ", plot_dir)
 }
 

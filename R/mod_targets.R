@@ -5,9 +5,18 @@
 #
 #  * caching: only the stages whose inputs changed are re-run;
 #  * fine-grained invalidation: each stage depends on a small *subset* of the
-#    parameters (see .stage_param_groups()), so changing `padj_cutoff` or the
-#    volcano colours never re-imports the counts or re-fits DESeq2 -- targets
-#    compares the subset's value, not the whole parameter list;
+#    parameters (see .stage_param_groups()), so changing the volcano colours or
+#    `top_genes` never re-imports the counts or re-fits DESeq2 -- targets
+#    compares the subset's value, not the whole parameter list. Note that
+#    `padj_cutoff` / `deg_lfc_cutoff` ARE part of the `dge` group (they set the
+#    DESeq2 `alpha` and the DEG lists), so changing them re-runs the DESeq2
+#    stage and everything downstream of it -- but not the import or the EDA;
+#  * code changes are only tracked for the stage *wrapper* functions of
+#    mod_stages.R (they are copied into the targets environment, see
+#    .pipeline_env()). Targets does not follow the functions they call
+#    (run_deseq2_analysis(), run_functional_analysis(), ...), so after
+#    upgrading ExpressOM use expressom_targets_invalidate() on the stages
+#    whose code changed;
 #  * stage-level re-runs and status, used by the Shiny app (mod_shiny.R).
 #
 # Layout of a pipeline directory (default `<out_dir>/.expressom_targets/`):
@@ -329,9 +338,10 @@ expressom_pipeline_stages <- function() {
 # The functions the target commands call. They are copied into the environment
 # targets evaluates in, so the generated _targets.R only needs
 # ExpressOM::expressom_pipeline() -- no `:::` and no library(ExpressOM) -- and
-# targets hashes their code: reinstalling a package with an edited stage re-runs
-# that stage. `overrides` (a named list of functions) replaces any of them; the
-# test-suite uses it to run the DAG with cheap stand-ins.
+# targets hashes their code: reinstalling a package with an edited stage
+# *wrapper* re-runs that stage (the code those wrappers call is not tracked, see
+# the header of this file). `overrides` (a named list of functions) replaces any
+# of them; the test-suite uses it to run the DAG with cheap stand-ins.
 .pipeline_functions <- function() {
   c(
     ".stage_ctx", ".fp_counts", ".fp_labels", ".fp_isoform", ".pipeline_setup",
@@ -613,12 +623,23 @@ run_expressom_targets <- function(
   args <- c(args, list(...))
 
   # tar_make() reads `_targets.R` from the script's own directory
-  withr::with_dir(
-    paths$dir,
-    do.call(targets::tar_make, args)
+  # A stage that stops the pipeline (error = "stop") makes tar_make() throw --
+  # but the stages that completed BEFORE it are up to date in the store. Record
+  # their parameter hashes either way, otherwise the app keeps flagging them
+  # "stale" after a failed run and offers to re-run work that is already done.
+  make_error <- NULL
+  tryCatch(
+    withr::with_dir(
+      paths$dir,
+      do.call(targets::tar_make, args)
+    ),
+    error = function(e) make_error <<- e
   )
 
   .record_stage_hashes(params, paths$dir)
+  if (!is.null(make_error)) {
+    stop(make_error)
+  }
   status <- expressom_stage_status(params, dir = paths$dir)
 
   # stages that may fail without stopping the pipeline (the report and the

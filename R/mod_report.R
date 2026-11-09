@@ -85,8 +85,6 @@ build_expressom_report <- function(
     dir.create(st$figures_dir, recursive = TRUE, showWarnings = FALSE)
   }
 
-  tabs <- expressom_report_tabs(results, st)
-
   if (pandoc_mode) {
     # ------- pandoc engine: single-file, self-contained HTML -------
     work <- tempfile("expressom_report_")
@@ -98,8 +96,10 @@ build_expressom_report <- function(
 
     results_rds  <- file.path(work, "results.rds")
     settings_rds <- file.path(work, "settings.rds")
-    saveRDS(results, results_rds)
-    saveRDS(settings, settings_rds)
+    # temporary hand-over to the Rmd: skip compression (gzip of the result
+    # tables is pure wasted CPU for a file that lives a few seconds)
+    saveRDS(results, results_rds, compress = FALSE)
+    saveRDS(settings, settings_rds, compress = FALSE)
 
     render_env <- new.env(parent = environment(build_expressom_report))
     rmarkdown::render(
@@ -114,6 +114,8 @@ build_expressom_report <- function(
     )
   } else {
     # ------- htmltools engine: external `lib/` and `figures/` -------
+    # (the pandoc engine rebuilds the tab tree itself inside the Rmd)
+    tabs <- expressom_report_tabs(results, st)
     ui <- .xp_build_html(tabs, results, st)
     htmltools::save_html(ui, file = output_file, libdir = "lib", lang = "en")
   }
@@ -126,4 +128,4 @@ build_expressom_report <- function(
     ")"
   )
   invisible(normalizePath(output_file, winslash = "/"))
-}
+}

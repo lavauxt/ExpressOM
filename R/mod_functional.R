@@ -1544,7 +1544,13 @@ run_fgsea_analysis <- function(
   ranks <- sort(ranks, decreasing = TRUE)
 
   for (gmt_item in gmt_list) {
-    if (is.null(gmt_item) || .is_msigdbr_collection(gmt_item)) {
+    # `gmt_file = NULL` is documented as "Hallmark via msigdbr". The NULL used
+    # to reach toupper(NULL) -> grepl() -> `if (logical(0))` and abort the whole
+    # FGSEA stage, so resolve it to the Hallmark collection up front.
+    if (is.null(gmt_item)) {
+      gmt_item <- "H"
+    }
+    if (.is_msigdbr_collection(gmt_item)) {
       if (!requireNamespace("msigdbr", quietly = TRUE)) {
         stop(
           "Package 'msigdbr' is required to download pathways. Please install it."

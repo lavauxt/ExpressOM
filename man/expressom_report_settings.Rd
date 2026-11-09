@@ -13,6 +13,7 @@ expressom_report_settings(
   static_figures = TRUE,
   max_static_figures = 24L,
   static_dpi = 60,
+  static_max_px = 1000L,
   max_isoform_plots = 24L,
   plotly_enrichment_max = 12L,
   merge_enrichment_threshold = 3L,
@@ -41,6 +42,12 @@ expressom_report_settings(
 \item{max_static_figures}{Maximum number of embedded static figures per group.}
 
 \item{static_dpi}{Resolution of the embedded static figures.}
+
+\item{static_max_px}{Embedded PNG figures wider than about this many pixels
+(the isoform plots are written at 200 dpi, ~0.5 MB each once base64
+encoded) are reduced by an integer factor before being inlined in the
+single-file report. Needs the `png` package; the files on disk are never
+touched. `0` embeds the PNGs as they are.}
 
 \item{max_isoform_plots}{Maximum number of isoform-gallery PNGs.}
 

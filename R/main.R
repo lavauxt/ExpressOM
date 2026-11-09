@@ -199,6 +199,13 @@ expressom <- function(
   old_warn <- getOption("nwarnings")
   options(nwarnings = 10000)
 
+  # Warnings of THIS run. base::warnings() only returns the warnings of the
+  # previous *top-level* call (last.warning is set when a top-level call
+  # finishes), so inside on.exit() it reported the preceding command's warnings
+  # -- or nothing -- and Log/Warnings.txt (shown in the report's "Logs" tab) was
+  # wrong. A calling handler records them as they are raised, without muffling.
+  run_warnings <- character(0)
+
   on.exit(
     {
       options(nwarnings = old_warn)
@@ -212,8 +219,10 @@ expressom <- function(
           file = file.path(log_dir, "SessionInfo.txt")
         )
 
-        if (!is.null(warnings())) {
-          capture.output(warnings(), file = file.path(log_dir, "Warnings.txt"))
+        if (length(run_warnings)) {
+          writeLines(run_warnings, file.path(log_dir, "Warnings.txt"))
+        } else {
+          unlink(file.path(log_dir, "Warnings.txt"))
         }
       }
     },
@@ -223,52 +232,71 @@ expressom <- function(
   # parameter snapshot read back by the report and the Shiny app
   .write_run_config(out_dir, p)
 
-  ## ------------------------------------------------------------------
-  ## Always import counts and run EDA
-  ## ------------------------------------------------------------------
-  tx_data <- .stage_import(ctx)
-  .stage_eda(ctx, tx_data)
+  withCallingHandlers(
+    {
+      ## ------------------------------------------------------------------
+      ## Always import counts and run EDA
+      ## ------------------------------------------------------------------
+      tx_data <- .stage_import(ctx)
+      .stage_eda(ctx, tx_data)
 
-  if (!p$run_dge && !p$run_isoform) {
-    message(
-      "EDA completed. Skipping differential expression and isoform analyses."
-    )
-    if (isTRUE(p$make_report)) {
-      safe_run(.stage_report(ctx), label = "Interactive report")
+      if (!p$run_dge && !p$run_isoform) {
+        message(
+          "EDA completed. Skipping differential expression and isoform analyses."
+        )
+        if (isTRUE(p$make_report)) {
+          safe_run(.stage_report(ctx), label = "Interactive report")
+        }
+        return(invisible(NULL))
+      }
+
+      pipeline_steps <- if (p$execution_order == "dge_first") {
+        c("dge", "isoform")
+      } else {
+        c("isoform", "dge")
+      }
+
+      dge <- NULL
+      func <- NULL
+      isoform <- NULL
+
+      for (step in pipeline_steps) {
+        if (step == "dge" && p$run_dge) {
+          dge <- .stage_dge(ctx, tx_data)
+          .stage_dge_plots(ctx, tx_data, dge)
+          func <- .stage_functional(ctx, dge)
+          .stage_fgsea(ctx, dge)
+        }
+
+        if (step == "isoform" && p$run_isoform) {
+          isoform <- .stage_isoform(ctx)
+        }
+      }
+
+      .stage_save_rdata(ctx, tx_data, dge, func, isoform)
+
+      if (isTRUE(p$make_report)) {
+        safe_run(.stage_report(ctx), label = "Interactive report")
+      }
+
+      message("=== Pipeline complete for: ", ctx$comp_name, " ===")
+
+    },
+    warning = function(w) {
+      if (length(run_warnings) < 10000L) {
+        run_warnings <<- c(
+          run_warnings,
+          paste0(
+            "[", format(Sys.time(), "%H:%M:%S"), "] ",
+            conditionMessage(w),
+            if (!is.null(conditionCall(w))) {
+              paste0(" (in ", deparse(conditionCall(w), nlines = 1L), ")")
+            }
+          )
+        )
+      }
     }
-    return(invisible(NULL))
-  }
-
-  pipeline_steps <- if (p$execution_order == "dge_first") {
-    c("dge", "isoform")
-  } else {
-    c("isoform", "dge")
-  }
-
-  dge <- NULL
-  func <- NULL
-  isoform <- NULL
-
-  for (step in pipeline_steps) {
-    if (step == "dge" && p$run_dge) {
-      dge <- .stage_dge(ctx, tx_data)
-      .stage_dge_plots(ctx, tx_data, dge)
-      func <- .stage_functional(ctx, dge)
-      .stage_fgsea(ctx, dge)
-    }
-
-    if (step == "isoform" && p$run_isoform) {
-      isoform <- .stage_isoform(ctx)
-    }
-  }
-
-  .stage_save_rdata(ctx, tx_data, dge, func, isoform)
-
-  if (isTRUE(p$make_report)) {
-    safe_run(.stage_report(ctx), label = "Interactive report")
-  }
-
-  message("=== Pipeline complete for: ", ctx$comp_name, " ===")
+  )
 
   invisible(NULL)
 }

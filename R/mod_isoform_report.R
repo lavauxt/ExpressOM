@@ -345,7 +345,8 @@ generate_dte_dtu_report <- function(dte_results,
     tx2gene <- isoform_obj$tx2gene
 
     for (gene_sym in genes_of_interest) {
-      gene_ens <- isoform_obj$gene_map$ensembl[isoform_obj$gene_map$symbol == gene_sym]
+      # which(): a NA gene symbol in the map must not count as a match
+      gene_ens <- isoform_obj$gene_map$ensembl[which(isoform_obj$gene_map$symbol == gene_sym)]
 
       if (length(gene_ens) == 0) {
         message("Gene ", gene_sym, " not found in gene map. Skipping.")
@@ -356,23 +357,31 @@ generate_dte_dtu_report <- function(dte_results,
       if (length(tx_ids) == 0) next
 
       tx_counts <- counts[rownames(counts) %in% tx_ids, , drop = FALSE]
+      if (nrow(tx_counts) < 2L) {
+        message("   -> ", gene_sym, ": fewer than 2 quantified transcripts; skipping proportion plot.")
+        next
+      }
 
       prop_df <- as.data.frame(t(tx_counts))
-      prop_df <- prop_df / rowSums(prop_df)
-      prop_df$sample <- rownames(prop_df)
+      tot <- rowSums(prop_df)
+      # a sample with no counts for the whole gene has no proportion (NaN)
+      prop_df <- prop_df / ifelse(tot > 0, tot, NA_real_)
+      # `.xp_sample`, not `sample`: a metadata column called "sample" used to
+      # collide in merge() (sample.x / sample.y) and break the plot
+      prop_df$.xp_sample <- rownames(prop_df)
 
       prop_long <- tidyr::pivot_longer(
         prop_df,
-        cols = -sample,
+        cols = -".xp_sample",
         names_to = "transcript",
         values_to = "proportion"
       )
 
-      prop_long <- merge(prop_long, meta, by.x = "sample", by.y = 0)
+      prop_long <- merge(prop_long, meta, by.x = ".xp_sample", by.y = 0)
 
       p_prop <- ggplot2::ggplot(
         prop_long,
-        ggplot2::aes(x = sample, y = proportion, fill = transcript)
+        ggplot2::aes(x = .xp_sample, y = proportion, fill = transcript)
       ) +
         ggplot2::geom_bar(stat = "identity", position = "fill") +
         ggplot2::facet_grid(
@@ -692,7 +701,7 @@ generate_dte_dtu_report <- function(dte_results,
 
   if (has_dexseq && !is.null(dexseq_results$dxr_list) && !is.null(genes_of_interest)) {
     for (gene_sym in genes_of_interest) {
-      gene_ens <- isoform_obj$gene_map$ensembl[isoform_obj$gene_map$symbol == gene_sym]
+      gene_ens <- isoform_obj$gene_map$ensembl[which(isoform_obj$gene_map$symbol == gene_sym)]
       if (length(gene_ens) == 0) next
 
       safe_run(
@@ -929,4 +938,4 @@ generate_dte_dtu_report <- function(dte_results,
   gc()
   message("DTE/DTU report generated in: ", report_dir)
   invisible(NULL)
-}
+}
