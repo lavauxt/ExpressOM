@@ -61,6 +61,21 @@
     min_samps_gene_expr <- ceiling(num_samples * 0.5)
   }
 
+  # NULL means "auto": size the feature filter to the smallest condition
+  # group, as the DRIMSeq documentation suggests (use min_samps_feature_expr
+  # "equal to the minimal number of replicates in a group"). For a balanced
+  # 12-vs-12 comparison this means a transcript must be expressed in at
+  # least 12 samples to reach the DTU fit. Explicit values (e.g. the 3 that
+  # run_dexseq_dtu() passes) bypass this auto-sizing.
+  if (is.null(min_samps_feature_expr)) {
+    grp_sizes <- table(sample_data[[condition]])
+    min_samps_feature_expr <- if (length(grp_sizes) > 0L) {
+      max(2L, min(grp_sizes))
+    } else {
+      3L
+    }
+  }
+
   min_samps_gene_expr <- min(min_samps_gene_expr, num_samples)
   min_samps_feature_expr <- min(min_samps_feature_expr, num_samples)
 
@@ -222,6 +237,34 @@
 }
 
 #' Run DTU using DRIMSeq
+#'
+#' DRIMSeq's Dirichlet-multinomial optimizer (dmPrecision -> optimHess on
+#' dm_lik_regG) is numerically fragile for low-count features and for
+#' multi-variable (e.g. paired ~ condition + donor) designs -- the known
+#' "non-finite value supplied by optim" failure. Defaults therefore follow
+#' the DRIMSeq DTU vignette stringency (min_feature_expr = 10;
+#' min_samps_feature_expr auto-sized to the smallest condition group), each
+#' chunk is retried with escalating feature stringency, and -- if every chunk
+#' still fails under a multi-variable design -- the whole fit is retried once
+#' with the reduced ~ condition design, recorded via attributes on the
+#' result (`design_used`, `design_was_reduced`).
+#'
+#' Two additional numerical-stability levers are applied per retry:
+#'   * `prec_moderation` is set to "common" on attempts 1-2 and "full" on
+#'     attempts 3+, applying DRIMSeq's empirical-Bayes shrinkage of per-gene
+#'     precision estimates toward the common precision. This is what
+#'     stabilises the per-gene optimHess step that otherwise diverges after
+#'     a successful common-precision estimate.
+#'   * The random seed used by dmPrecision's 0.1 gene subset is rotated by
+#'     +100 per retry, so a degenerate gene in one subset does not doom the
+#'     chunk.
+#'
+#' @param fit_attempts Number of per-chunk attempts, escalating
+#'   min_feature_expr (x 5 per retry, floored at 10), prec_moderation
+#'   ("common" -> "full" after attempt 2), and the subset seed (+100 per
+#'   retry) before a chunk is declared failed.
+#' @param fallback_reduce_design Logical: if all chunks fail under a
+#'   multi-variable design, retry the whole fit once with ~ condition only.
 #' @export
 run_dtu <- function(
   isoform_obj,
@@ -229,14 +272,16 @@ run_dtu <- function(
   level,
   base,
   min_gene_expr = 10,
-  min_transcript_expr = 0.05,
+  min_transcript_expr = 10,
   min_samps_gene_expr = NULL,
-  min_samps_feature_expr = 3,
+  min_samps_feature_expr = NULL,
   chunk_size = 5000,
   max_transcripts = 300,
   min_transcript_total = 10,
   bpparam = NULL,
-  design = NULL
+  design = NULL,
+  fit_attempts = 4,
+  fallback_reduce_design = TRUE
 ) {
   if (!requireNamespace("DRIMSeq", quietly = TRUE)) {
     stop("DRIMSeq is required for DTU analysis.")
@@ -274,128 +319,265 @@ run_dtu <- function(
     ceiling(seq_along(unique_genes) / chunk_size)
   )
 
-  all_results <- list()
-  failed_chunks <- integer()
-
   rownames(sample_data) <- trimws(rownames(sample_data))
   colnames(counts) <- trimws(colnames(counts))
 
-  for (i in seq_along(gene_chunks)) {
-    message("Processing chunk ", i, " / ", length(gene_chunks))
+  # DRIMSeq's Dirichlet-multinomial optimizer (dmPrecision -> optimHess on
+  # dm_lik_regG) is known to fail with "non-finite value supplied by optim"
+  # on low-count features and on multi-variable (e.g. paired) designs -- see
+  # Bioconductor support 9150638 (same error, same 24-sample / 6-subject
+  # paired design, no upstream fix). Strategy, in order:
+  #   1. per chunk: retry with escalating feature-expression stringency
+  #      (min_feature_expr x 5 per attempt), which drops the features whose
+  #      usage proportions blow up the likelihood;
+  #   2. if every chunk still fails and the design has more than one
+  #      variable, retry the whole fit with the reduced ~ condition design.
+  #      Donor blocking stays in place for DGE/DTE (DESeq2 handles it fine);
+  #      the reduction applies to the DTU model only and is recorded on the
+  #      result (attributes 'design_used' / 'design_was_reduced').
+  full_design <- stats::as.formula(design %||% stats::reformulate(condition))
 
-    current_genes <- gene_chunks[[i]]
-    idx <- which(gene_id_map %in% current_genes)
+  designs_to_try <- list(full_design)
+  if (isTRUE(fallback_reduce_design) && length(all.vars(full_design)) > 1L) {
+    designs_to_try <- c(designs_to_try, stats::reformulate(condition))
+  }
 
-    curr_counts <- .integerize_dtu_counts(counts[idx, , drop = FALSE])
-    curr_gene_ids <- gene_id_map[idx]
-    curr_tx_ids <- tx_ids_original[idx]
+  all_results <- list()
+  failed_chunks <- integer()
+  design_used <- NULL
+  design_was_reduced <- FALSE
 
-    common_samples <- intersect(colnames(curr_counts), rownames(sample_data))
+  for (d_idx in seq_along(designs_to_try)) {
+    current_design <- designs_to_try[[d_idx]]
 
-    if (length(common_samples) == 0) {
-      warning(
-        "Chunk ",
-        i,
-        ": No common samples between counts and metadata. Skipping."
+    if (d_idx > 1L) {
+      message(
+        "\n!!! DTU: all chunks failed with design ",
+        paste(deparse(full_design), collapse = " "),
+        ".\n!!! Retrying with reduced design ",
+        paste(deparse(current_design), collapse = " "),
+        " -- DRIMSeq's optimizer cannot fit this data under the full design.\n",
+        "!!! Donor/covariate blocking is still applied in the DGE and DTE ",
+        "steps; only the DTU model is reduced.\n"
       )
-      failed_chunks <- c(failed_chunks, i)
-      next
     }
 
-    curr_counts <- curr_counts[, common_samples, drop = FALSE]
-    sample_data_sub <- sample_data[common_samples, , drop = FALSE]
+    all_results <- list()
+    failed_chunks <- integer()
 
-    curr_df <- data.frame(
-      gene_id = curr_gene_ids,
-      feature_id = curr_tx_ids,
-      curr_counts,
-      check.names = FALSE
-    )
+    for (i in seq_along(gene_chunks)) {
+      message(
+        "Processing chunk ", i, " / ", length(gene_chunks),
+        if (d_idx > 1L) " [reduced design]" else ""
+      )
 
-    d <- DRIMSeq::dmDSdata(counts = curr_df, samples = sample_data_sub)
+      current_genes <- gene_chunks[[i]]
+      idx <- which(gene_id_map %in% current_genes)
 
-    d <- DRIMSeq::dmFilter(
-      d,
-      min_samps_gene_expr = min_samps_gene_expr,
-      min_samps_feature_expr = min_samps_feature_expr,
-      min_gene_expr = min_gene_expr,
-      min_feature_expr = min_transcript_expr
-    )
+      curr_counts <- .integerize_dtu_counts(counts[idx, , drop = FALSE])
+      curr_gene_ids <- gene_id_map[idx]
+      curr_tx_ids <- tx_ids_original[idx]
 
-    if (nrow(DRIMSeq::counts(d)) == 0) {
-      # Filtering legitimately removes genes; this is not an engine failure.
-      gc()
-      next
-    }
+      if (any(!is.finite(curr_counts))) {
+        stop(
+          "Chunk ", i, ": non-finite values (NA/Inf/NaN) in the count matrix. ",
+          "Check the imported counts upstream of run_dtu().",
+          call. = FALSE
+        )
+      }
 
-    counts_d <- DRIMSeq::counts(d)
-    samples_d <- DRIMSeq::samples(d)
+      common_samples <- intersect(colnames(curr_counts), rownames(sample_data))
 
-    if (!identical(rownames(samples_d), colnames(counts_d))) {
-      sample_idx <- match(colnames(counts_d), rownames(samples_d))
-      if (anyNA(sample_idx)) {
+      if (length(common_samples) == 0) {
         warning(
           "Chunk ",
           i,
-          ": count samples are missing from metadata. Skipping."
+          ": No common samples between counts and metadata. Skipping."
         )
         failed_chunks <- c(failed_chunks, i)
         next
       }
-      samples_d <- samples_d[sample_idx, , drop = FALSE]
-    }
 
-    if (nrow(samples_d) != ncol(counts_d)) {
-      warning(
-        "Chunk ",
-        i,
-        ": Design matrix rows (",
-        nrow(samples_d),
-        ") do not match number of samples (",
-        ncol(counts_d),
-        "). Skipping."
+      curr_counts <- curr_counts[, common_samples, drop = FALSE]
+      sample_data_sub <- sample_data[common_samples, , drop = FALSE]
+
+      curr_df <- data.frame(
+        gene_id = curr_gene_ids,
+        feature_id = curr_tx_ids,
+        curr_counts,
+        check.names = FALSE
       )
-      failed_chunks <- c(failed_chunks, i)
-      next
-    }
 
-    design_info <- .validate_isoform_design(
-      design %||% stats::reformulate(condition),
-      condition,
-      samples_d
-    )
-    model_matrix <- stats::model.matrix(
-      design_info$formula,
-      data = design_info$metadata
-    )
-    coef_name <- .design_contrast_coef(
-      design_info$formula,
-      design_info$metadata,
-      condition,
-      level,
-      base
-    )
+      d_raw <- DRIMSeq::dmDSdata(counts = curr_df, samples = sample_data_sub)
 
-    res <- tryCatch(
-      {
-        d <- DRIMSeq::dmPrecision(d, design = model_matrix, BPPARAM = bp_param)
+      # One filter + fit attempt at a given feature-expression stringency.
+      # Returns list(empty = TRUE) when filtering legitimately removes
+      # everything, list(empty = FALSE, res = <feature-level results>) on
+      # success, or propagates the error for the retry ladder to catch.
+      #
+      # Two numerical-stability levers are exposed:
+      #   * min_feature_expr_val -- raises the per-transcript count floor,
+      #     dropping transcripts whose usage proportions blow up the
+      #     Dirichlet-multinomial likelihood;
+      #   * prec_moderation_val -- DRIMSeq's empirical-Bayes shrinkage
+      #     ("none" / "common" / "full"). "common" shrinks per-gene
+      #     precisions toward the common precision, which is exactly what
+      #     stabilises the per-gene optimHess step (the chunk-4-style
+      #     failure where common_precision was estimated but a single gene
+      #     then diverged). "full" additionally moderates the coef fit and
+      #     is reserved for the last-ditch retry.
+      #   * seed_val -- dmPrecision draws a random subset (default 0.1) of
+      #     genes to estimate the common precision; rotating the seed per
+      #     retry reshuffles which genes land in that subset, sidestepping
+      #     the chunk-1/2/3/5-style failure where one degenerate gene in
+      #     the fixed seed=42 subset kills the common-precision Hessian.
+      fit_chunk <- function(min_feature_expr_val,
+                            prec_moderation_val = "common",
+                            seed_val = 42L) {
+        d <- DRIMSeq::dmFilter(
+          d_raw,
+          min_samps_gene_expr = min_samps_gene_expr,
+          min_samps_feature_expr = min_samps_feature_expr,
+          min_gene_expr = min_gene_expr,
+          min_feature_expr = min_feature_expr_val
+        )
+
+        if (nrow(DRIMSeq::counts(d)) == 0) {
+          return(list(empty = TRUE, res = NULL))
+        }
+
+        counts_d <- DRIMSeq::counts(d)
+        samples_d <- DRIMSeq::samples(d)
+
+        # DRIMSeq::counts(dmDSdata) returns a data.frame whose first two
+        # columns are 'gene_id' and 'feature_id'; the remaining columns are
+        # the per-sample count columns. Matching colnames(counts_d) directly
+        # against rownames(samples_d) always produced NAs for those two
+        # metadata columns (the original alignment bug) -- strip them first.
+        sample_cols <- setdiff(colnames(counts_d), c("gene_id", "feature_id"))
+
+        if (!identical(rownames(samples_d), sample_cols)) {
+          sample_idx <- match(sample_cols, rownames(samples_d))
+          if (anyNA(sample_idx)) {
+            stop("count samples are missing from metadata.", call. = FALSE)
+          }
+          samples_d <- samples_d[sample_idx, , drop = FALSE]
+        }
+
+        if (nrow(samples_d) != length(sample_cols)) {
+          stop(
+            "Design matrix rows (", nrow(samples_d),
+            ") do not match number of samples (", length(sample_cols), ").",
+            call. = FALSE
+          )
+        }
+
+        design_info <- .validate_isoform_design(
+          current_design,
+          condition,
+          samples_d
+        )
+        model_matrix <- stats::model.matrix(
+          design_info$formula,
+          data = design_info$metadata
+        )
+        coef_name <- .design_contrast_coef(
+          design_info$formula,
+          design_info$metadata,
+          condition,
+          level,
+          base
+        )
+
+        # dmPrecision estimates the common precision on a random subset of
+        # genes (subset = 0.1); the seed is rotated per retry by the outer
+        # loop so a degenerate gene in one subset doesn't doom the chunk.
+        set.seed(seed_val)
+
+        d <- DRIMSeq::dmPrecision(
+          d,
+          design        = model_matrix,
+          prec_moderation = prec_moderation_val,
+          BPPARAM       = bp_param
+        )
         d <- DRIMSeq::dmFit(d, design = model_matrix, BPPARAM = bp_param)
         d <- DRIMSeq::dmTest(d, coef = coef_name, BPPARAM = bp_param)
-        DRIMSeq::results(d, level = "feature")
-      },
-      error = function(e) {
-        message("Chunk ", i, " failed: ", e$message)
-        failed_chunks <<- c(failed_chunks, i)
-        NULL
-      }
-    )
 
-    if (!is.null(res)) {
-      all_results[[length(all_results) + 1]] <- res
+        list(empty = FALSE, res = DRIMSeq::results(d, level = "feature"))
+      }
+
+      res <- NULL
+      chunk_empty <- FALSE
+      errored <- FALSE
+      min_feature_try <- min_transcript_expr
+      seed_try <- 42L
+
+      for (attempt in seq_len(fit_attempts)) {
+        # Escalate BOTH levers per attempt:
+        #   attempt 1: prec_moderation = "common", base min_feature_expr, seed 42
+        #   attempt 2: prec_moderation = "common", 5x  min_feature_expr, seed 142
+        #   attempt 3: prec_moderation = "full",   25x min_feature_expr, seed 242
+        #   attempt 4+: prec_moderation = "full",  125x min_feature_expr, +100/attempt
+        prec_mod_try <- if (attempt <= 2L) "common" else "full"
+
+        outcome <- tryCatch(
+          fit_chunk(min_feature_try,
+                    prec_moderation_val = prec_mod_try,
+                    seed_val            = seed_try),
+          error = function(e) {
+            message(
+              "Chunk ", i, " attempt ", attempt,
+              " (min_feature_expr = ", min_feature_try,
+              ", prec_moderation = ", prec_mod_try,
+              ", seed = ", seed_try, ") failed: ",
+              e$message
+            )
+            NULL
+          }
+        )
+
+        if (is.null(outcome)) {
+          errored <- TRUE
+          # Escalate feature stringency for the next attempt. The floor of
+          # 10 keeps a loose caller-supplied base threshold from never
+          # reaching a workable retry level.
+          min_feature_try <- max(min_feature_try * 5, 10)
+          # Rotate the seed so the next attempt reshuffles which genes land
+          # in dmPrecision's random 0.1 common-precision subset.
+          seed_try <- seed_try + 100L
+          next
+        }
+
+        chunk_empty <- isTRUE(outcome$empty)
+        if (!chunk_empty) res <- outcome$res
+        break
+      }
+
+      if (!is.null(res)) {
+        all_results[[length(all_results) + 1]] <- res
+      } else if (chunk_empty && !errored) {
+        # Filtering legitimately removed everything at base stringency;
+        # this is not an engine failure.
+      } else {
+        warning(
+          "Chunk ", i, ": DRIMSeq fitting failed after ",
+          fit_attempts, " attempt(s). Skipping."
+        )
+        failed_chunks <- c(failed_chunks, i)
+      }
+
+      rm(d_raw, curr_counts, curr_df)
+      gc()
     }
 
-    rm(d, curr_counts, curr_df)
-    gc()
+    if (length(failed_chunks) == 0L) {
+      design_used <- current_design
+      design_was_reduced <- d_idx > 1L
+      break
+    }
+
+    # Otherwise fall through to the next design (if any); the final
+    # failed_chunks are reported by .stop_on_failed_chunks() below.
   }
 
   .stop_on_failed_chunks(failed_chunks, "DTU")
@@ -412,6 +594,20 @@ run_dtu <- function(
   gc()
 
   dtu_results$test_unit <- "transcript-feature-level; gene-level FDR is not provided"
+
+  attr(dtu_results, "design_used") <- paste(deparse(design_used), collapse = "")
+  attr(dtu_results, "design_was_reduced") <- design_was_reduced
+
+  if (isTRUE(design_was_reduced)) {
+    message(
+      "NOTE: DTU was run with the reduced design ",
+      attr(dtu_results, "design_used"),
+      "; the requested design ",
+      paste(deparse(full_design), collapse = ""),
+      " could not be fitted by DRIMSeq. ",
+      "DGE and DTE results still use the full design."
+    )
+  }
 
   dtu_results <- .normalize_dtu_pvalues(dtu_results)
   dtu_results$adj_pvalue <- stats::p.adjust(dtu_results$pvalue, method = "BH")
