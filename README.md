@@ -790,12 +790,6 @@ Tests that need optional packages (`plotly`, `DT`, `shiny`, `targets`, `callr`, 
 
 ---
 
-## Acknowledgements
-
-The report and app design borrows ideas from other open-source projects (no code is copied from them): the result-contract / "discover what is on disk" approach of [alevinQC](https://github.com/csoneson/alevinQC), the tabbed exploration and on-the-fly re-analysis of [SCHNAPPs](https://github.com/C3BI-pasteur-fr/UTechSCB-SCHNAPPs), the browsable single-file viewers of [ShinyCell2](https://github.com/the-ouyang-lab/ShinyCell2) and [FuSViz](https://github.com/senzhaocode/FuSViz), and the one-command statistics report of [scRNAstat](https://github.com/cran/scRNAstat).
-
----
-
 ## License
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE).
