@@ -5,7 +5,7 @@
 \title{Find the Pfam-A.hmm database in common paths inside the execution environment}
 \usage{
 .find_pfam_db(
-  wsl_distro = "Ubuntu-22.04",
+  wsl_distro = "Ubuntu",
   use_wsl = TRUE,
   conda_sh = NULL,
   conda_env = "isoform_tools",

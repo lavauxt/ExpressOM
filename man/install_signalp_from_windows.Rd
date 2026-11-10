@@ -6,7 +6,7 @@
 \usage{
 install_signalp_from_windows(
   windows_signalp_dir,
-  distro = "Ubuntu-22.04",
+  distro = "Ubuntu",
   install_path = "/usr/local/signalp",
   log_dir = NULL
 )

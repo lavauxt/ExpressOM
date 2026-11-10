@@ -6,7 +6,7 @@
 \usage{
 .wsl_tool_exists(
   tool_name,
-  wsl_distro = "Ubuntu-22.04",
+  wsl_distro = "Ubuntu",
   use_wsl = TRUE,
   conda_sh = NULL,
   conda_env = "isoform_tools",

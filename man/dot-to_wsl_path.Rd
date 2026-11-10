@@ -4,7 +4,7 @@
 \alias{.to_wsl_path}
 \title{Convert a Windows file path to a WSL-compatible Unix path}
 \usage{
-.to_wsl_path(win_path, distro = "Ubuntu-22.04")
+.to_wsl_path(win_path, distro = "Ubuntu")
 }
 \description{
 Convert a Windows file path to a WSL-compatible Unix path

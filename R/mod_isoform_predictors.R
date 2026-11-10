@@ -1379,7 +1379,7 @@ run_isoform_switch <- function(
   out_dir,
   run_predictors = FALSE,
   use_wsl = (.Platform$OS.type == "windows"),
-  wsl_distro = "Ubuntu-22.04",
+  wsl_distro = "Ubuntu",
   save_dir = NULL,
   resume_from = NULL,
   bsgenome_name = NULL,

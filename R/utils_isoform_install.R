@@ -5,7 +5,7 @@
 #' @export
 install_signalp_from_windows <- function(
   windows_signalp_dir,
-  distro = "Ubuntu-22.04",
+  distro = "Ubuntu",
   install_path = "/usr/local/signalp",
   log_dir = NULL
 ) {
@@ -184,7 +184,7 @@ install_signalp_from_windows <- function(
 #' @export
 install_signalp_from_tarball <- function(
   tarball_path = NULL,
-  distro = "Ubuntu-22.04",
+  distro = "Ubuntu",
   conda_env = "isoform_tools",
   log_dir = NULL
 ) {
@@ -435,7 +435,7 @@ install_signalp_from_tarball <- function(
 #' Install required external tools inside WSL using mamba or apt/pip
 #' @export
 install_wsl_isoform_tools <- function(
-  distro = "Ubuntu-22.04",
+  distro = "Ubuntu",
   use_mamba = TRUE,
   install_databases = TRUE,
   windows_signalp_dir = NULL,
@@ -758,7 +758,7 @@ install_wsl_isoform_tools <- function(
 #' Install required databases for CPAT, Pfam, and SignalP
 #' @export
 install_isoform_databases <- function(
-  distro = "Ubuntu-22.04",
+  distro = "Ubuntu",
   use_wsl = (.Platform$OS.type == "windows"),
   cpat_data_dir = NULL,
   pfam_db_dir = NULL,

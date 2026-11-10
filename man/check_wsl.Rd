@@ -4,7 +4,7 @@
 \alias{check_wsl}
 \title{Check if WSL is available and configured}
 \usage{
-check_wsl(distro = "Ubuntu-22.04")
+check_wsl(distro = "Ubuntu")
 }
 \arguments{
 \item{distro}{WSL distribution name}

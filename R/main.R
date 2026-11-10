@@ -156,7 +156,7 @@ expressom <- function(
   isoform_fasta = NULL,
   isoform_gff = NULL,
   use_wsl = (.Platform$OS.type == "windows"),
-  wsl_distro = "Ubuntu-22.04",
+  wsl_distro = "Ubuntu",
   predictor_cpu = NULL,
   resume_isoform_from = NULL,
   isoform_report_genes = NULL,

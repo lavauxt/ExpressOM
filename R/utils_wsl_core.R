@@ -57,7 +57,7 @@
 .wsl_write_env_var <- function(
   var,
   value,
-  wsl_distro = "Ubuntu-22.04",
+  wsl_distro = "Ubuntu",
   use_wsl = TRUE,
   log_dir = NULL
 ) {
@@ -125,7 +125,7 @@
 #' Best-effort discovery of a conda profile script (conda.sh)
 #' @keywords internal
 .find_conda_sh <- function(
-  wsl_distro = "Ubuntu-22.04",
+  wsl_distro = "Ubuntu",
   use_wsl = TRUE,
   log_dir = NULL
 ) {
@@ -167,7 +167,7 @@
 
 #' Convert a Windows file path to a WSL-compatible Unix path
 #' @keywords internal
-.to_wsl_path <- function(win_path, distro = "Ubuntu-22.04") {
+.to_wsl_path <- function(win_path, distro = "Ubuntu") {
   if (.Platform$OS.type != "windows") {
     return(win_path)
   }
@@ -253,7 +253,7 @@
 #' @keywords internal
 .wsl_exec_script <- function(
   bash_body,
-  wsl_distro = "Ubuntu-22.04",
+  wsl_distro = "Ubuntu",
   use_wsl = TRUE,
   conda_sh = NULL,
   conda_env = "isoform_tools",
@@ -425,7 +425,7 @@
 #' @keywords internal
 .wsl_tool_exists <- function(
   tool_name,
-  wsl_distro = "Ubuntu-22.04",
+  wsl_distro = "Ubuntu",
   use_wsl = TRUE,
   conda_sh = NULL,
   conda_env = "isoform_tools",

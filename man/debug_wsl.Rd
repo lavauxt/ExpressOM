@@ -5,7 +5,7 @@
 \title{Debug the external-predictor execution environment}
 \usage{
 debug_wsl(
-  distro = "Ubuntu-22.04",
+  distro = "Ubuntu",
   out_dir = NULL,
   log_dir = NULL,
   conda_env = "isoform_tools",

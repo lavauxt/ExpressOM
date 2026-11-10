@@ -5,7 +5,7 @@
 \title{Install required databases for CPAT, Pfam, and SignalP}
 \usage{
 install_isoform_databases(
-  distro = "Ubuntu-22.04",
+  distro = "Ubuntu",
   use_wsl = (.Platform$OS.type == "windows"),
   cpat_data_dir = NULL,
   pfam_db_dir = NULL,

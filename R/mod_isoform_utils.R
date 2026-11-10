@@ -347,7 +347,7 @@ import_transcript_counts <- function(
 
 #' Find the Pfam-A.hmm database in common paths inside the execution environment
 #' @keywords internal
-.find_pfam_db <- function(wsl_distro = "Ubuntu-22.04",
+.find_pfam_db <- function(wsl_distro = "Ubuntu",
                           use_wsl = TRUE,
                           conda_sh = NULL,
                           conda_env = "isoform_tools",
@@ -420,7 +420,7 @@ import_transcript_counts <- function(
 #' of locations.
 #' @keywords internal
 .find_cpat_data_file <- function(fname,
-                                 wsl_distro = "Ubuntu-22.04",
+                                 wsl_distro = "Ubuntu",
                                  use_wsl = TRUE,
                                  conda_sh = NULL,
                                  conda_env = "isoform_tools",
@@ -489,7 +489,7 @@ import_transcript_counts <- function(
 #' Locate the CPAT logit model RData file for a given organism
 #' @keywords internal
 .find_cpat_logit_model <- function(organism = "Human",
-                                   wsl_distro = "Ubuntu-22.04",
+                                   wsl_distro = "Ubuntu",
                                    use_wsl = TRUE,
                                    conda_sh = NULL,
                                    conda_env = "isoform_tools",
@@ -507,7 +507,7 @@ import_transcript_counts <- function(
 #' Locate the CPAT hexamer frequency table for a given organism
 #' @keywords internal
 .find_cpat_hexamer <- function(organism = "Human",
-                               wsl_distro = "Ubuntu-22.04",
+                               wsl_distro = "Ubuntu",
                                use_wsl = TRUE,
                                conda_sh = NULL,
                                conda_env = "isoform_tools",
@@ -526,7 +526,7 @@ import_transcript_counts <- function(
 #' @param distro WSL distribution name
 #' @return Logical indicating success
 #' @export
-check_wsl <- function(distro = "Ubuntu-22.04") {
+check_wsl <- function(distro = "Ubuntu") {
   if (.Platform$OS.type != "windows") {
     return(FALSE)
   }
@@ -553,7 +553,7 @@ check_wsl <- function(distro = "Ubuntu-22.04") {
 
 #' Debug the external-predictor execution environment
 #' @export
-debug_wsl <- function(distro = "Ubuntu-22.04",
+debug_wsl <- function(distro = "Ubuntu",
                       out_dir = NULL,
                       log_dir = NULL,
                       conda_env = "isoform_tools",

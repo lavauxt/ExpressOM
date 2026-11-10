@@ -10,16 +10,47 @@ run_dtu(
   level,
   base,
   min_gene_expr = 10,
-  min_transcript_expr = 0.05,
+  min_transcript_expr = 10,
   min_samps_gene_expr = NULL,
-  min_samps_feature_expr = 3,
+  min_samps_feature_expr = NULL,
   chunk_size = 5000,
   max_transcripts = 300,
   min_transcript_total = 10,
   bpparam = NULL,
-  design = NULL
+  design = NULL,
+  fit_attempts = 4,
+  fallback_reduce_design = TRUE
 )
 }
+\arguments{
+\item{fit_attempts}{Number of per-chunk attempts, escalating
+min_feature_expr (x 5 per retry, floored at 10), prec_moderation
+("common" -> "full" after attempt 2), and the subset seed (+100 per
+retry) before a chunk is declared failed.}
+
+\item{fallback_reduce_design}{Logical: if all chunks fail under a
+multi-variable design, retry the whole fit once with ~ condition only.}
+}
 \description{
-Run DTU using DRIMSeq
+DRIMSeq's Dirichlet-multinomial optimizer (dmPrecision -> optimHess on
+dm_lik_regG) is numerically fragile for low-count features and for
+multi-variable (e.g. paired ~ condition + donor) designs -- the known
+"non-finite value supplied by optim" failure. Defaults therefore follow
+the DRIMSeq DTU vignette stringency (min_feature_expr = 10;
+min_samps_feature_expr auto-sized to the smallest condition group), each
+chunk is retried with escalating feature stringency, and -- if every chunk
+still fails under a multi-variable design -- the whole fit is retried once
+with the reduced ~ condition design, recorded via attributes on the
+result (`design_used`, `design_was_reduced`).
+}
+\details{
+Two additional numerical-stability levers are applied per retry:
+  * `prec_moderation` is set to "common" on attempts 1-2 and "full" on
+    attempts 3+, applying DRIMSeq's empirical-Bayes shrinkage of per-gene
+    precision estimates toward the common precision. This is what
+    stabilises the per-gene optimHess step that otherwise diverges after
+    a successful common-precision estimate.
+  * The random seed used by dmPrecision's 0.1 gene subset is rotated by
+    +100 per retry, so a degenerate gene in one subset does not doom the
+    chunk.
 }

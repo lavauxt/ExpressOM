@@ -7,7 +7,7 @@
 .wsl_write_env_var(
   var,
   value,
-  wsl_distro = "Ubuntu-22.04",
+  wsl_distro = "Ubuntu",
   use_wsl = TRUE,
   log_dir = NULL
 )

@@ -4,7 +4,7 @@
 \alias{.find_conda_sh}
 \title{Best-effort discovery of a conda profile script (conda.sh)}
 \usage{
-.find_conda_sh(wsl_distro = "Ubuntu-22.04", use_wsl = TRUE, log_dir = NULL)
+.find_conda_sh(wsl_distro = "Ubuntu", use_wsl = TRUE, log_dir = NULL)
 }
 \description{
 Best-effort discovery of a conda profile script (conda.sh)

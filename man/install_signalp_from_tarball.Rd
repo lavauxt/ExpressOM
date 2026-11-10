@@ -6,7 +6,7 @@
 \usage{
 install_signalp_from_tarball(
   tarball_path = NULL,
-  distro = "Ubuntu-22.04",
+  distro = "Ubuntu",
   conda_env = "isoform_tools",
   log_dir = NULL
 )

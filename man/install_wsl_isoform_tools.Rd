@@ -5,7 +5,7 @@
 \title{Install required external tools inside WSL using mamba or apt/pip}
 \usage{
 install_wsl_isoform_tools(
-  distro = "Ubuntu-22.04",
+  distro = "Ubuntu",
   use_mamba = TRUE,
   install_databases = TRUE,
   windows_signalp_dir = NULL,
