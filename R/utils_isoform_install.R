@@ -160,27 +160,6 @@ install_signalp_from_windows <- function(
 }
 
 #' Install SignalP 6.0 from a `signalp-6.0*.tar.gz` distribution archive
-#'
-#' Unlike `install_signalp_from_windows()` (which copies an *already installed*
-#' SignalP directory, e.g. from a prior Linux/native install, and expects a
-#' `bin/signalp` executable + `data/` directory), this installs directly from
-#' the `.tar.gz` package DTU distributes: it is a Python package (`pip install
-#' signalp-6-package/`) that provides the `signalp6` command, plus a separate
-#' `models/` folder of weight files that must be copied into the installed
-#' package's `model_weights/` directory (see the archive's own
-#' `signalp6_fast/signalp-6-package/README.md`).
-#'
-#' @param tarball_path Path to the `signalp-6.0*.tar.gz` archive on Windows
-#'   (or already inside WSL). Defaults to the copy bundled at
-#'   `inst/extdata/signalp-6.0i.fast.tar.gz`, resolved via
-#'   `system.file("extdata", ..., package = "ExpressOM")` with a source-checkout
-#'   fallback -- pass an explicit path to use a different archive (e.g. a
-#'   `.fast.tar.gz`, `.slow.tar.gz`, or a newer release).
-#' @param distro WSL distribution name.
-#' @param conda_env Conda environment to install the `signalp` Python package
-#'   into (created via `install_wsl_isoform_tools()` / `mamba create`).
-#' @param log_dir Directory for `wsl_commands.log`; defaults per
-#'   `.default_wsl_log_dir()`.
 #' @export
 install_signalp_from_tarball <- function(
   tarball_path = NULL,
@@ -433,6 +412,28 @@ install_signalp_from_tarball <- function(
 }
 
 #' Install required external tools inside WSL using mamba or apt/pip
+#'
+#' Resolves the WSL execution environment in this order:
+#'   1. `.find_conda_sh()` -- locates an existing conda installation
+#'      (`~/miniconda3`, `~/anaconda3`, `~/mambaforge`, `~/miniforge3`, or
+#'      whatever `conda info --base` reports);
+#'   2. sources that `conda.sh`, then probes for `mamba` **or** `conda`
+#'      inside it. Recent conda (>= 23.10) uses libmamba internally, so
+#'      plain `conda create/install` is as fast as `mamba create/install`;
+#'      we prefer whichever binary is actually present;
+#'   3. only bootstraps Mambaforge if neither is found -- and only after
+#'      verifying the installer file actually downloaded (previously
+#'      `bash /tmp/Mambaforge.sh` on a missing file returned exit 0 and
+#'      was misread as success).
+#'
+#' `isoform_tools` is created with **`python=3.10`** and with explicit
+#' `-c conda-forge -c bioconda`: CPAT 3.0.5 (the current bioconda
+#' release) only ships `python_abi` builds for 3.10/3.11/3.12, so
+#' `python=3.9` fails to solve with `nothing provides python_abi 3.9.*`.
+#' `conda-forge` supplies `bx-python` / `python_abi` for py3.10;
+#' `bioconda` supplies `cpat` and `hmmer` (the latter gives both
+#' `hmmscan` and `hmmpress`).
+#'
 #' @export
 install_wsl_isoform_tools <- function(
   distro = "Ubuntu",
@@ -487,67 +488,88 @@ install_wsl_isoform_tools <- function(
   if (use_mamba) {
     message("Installing tools using mamba/conda in WSL (default)...")
 
-    mamba_check <- .run_intern("command -v mamba || true")
-    mamba_check <- trimws(mamba_check[nzchar(trimws(mamba_check))])
+    # --- Step 1: locate conda.sh FIRST -----------------------------------
+    # This is the only reliable way to reach an existing mamba when it was
+    # installed into a conda prefix (e.g.
+    #   conda install -n base -c conda-forge mamba
+    # puts it at $HOME/miniconda3/bin/mamba), because the non-login shell
+    # used by .wsl_exec_script() never sources ~/.bashrc.
+    conda_sh_path <- .find_conda_sh(wsl_distro = distro, use_wsl = TRUE)
 
-    if (length(mamba_check) == 0) {
-      message("mamba not found. Installing mambaforge...")
+    pkg_path <- NULL
+    if (!is.null(conda_sh_path)) {
+      probed <- .run_intern(sprintf(
+        '. %s 2>/dev/null || true; command -v mamba || command -v conda || true',
+        .dq_home(conda_sh_path)
+      ))
+      probed <- trimws(probed[nzchar(trimws(probed))])
+      if (length(probed) > 0) pkg_path <- probed[1]
+    }
 
-      bootstrap_cmds <- c(
-        "wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Linux-x86_64.sh -O /tmp/Mambaforge.sh",
-        "bash /tmp/Mambaforge.sh -b -p $HOME/mambaforge"
+    # --- Step 2: bootstrap only if conda.sh / binary really missing -------
+    if (is.null(conda_sh_path) || is.null(pkg_path)) {
+      message("conda/mamba not found. Installing mambaforge...")
+
+      # Download + VERIFY before running the installer: `bash /missing.sh`
+      # exits 0, which the previous code misread as a successful bootstrap.
+      download_status <- .run(
+        "wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Mambaforge-Linux-x86_64.sh -O /tmp/Mambaforge.sh"
       )
+      file_ok <- isTRUE(.run("[ -s /tmp/Mambaforge.sh ]") == 0L)
 
-      bootstrap_ok <- TRUE
-
-      for (cmd in bootstrap_cmds) {
-        status <- .run(cmd)
-
-        if (!isTRUE(status == 0L)) {
-          bootstrap_ok <- FALSE
-          message("  \u2717 FAILED: ", cmd, " (exit code ", status, ")")
-        } else {
-          message("  \u2713 OK: ", cmd)
-        }
-      }
-
-      if (!bootstrap_ok) {
+      if (!isTRUE(download_status == 0L) || !file_ok) {
         message(
-          "mambaforge bootstrap failed -- aborting mamba-based install. ",
-          "Re-run with use_mamba = FALSE for the apt/pip path, or install mambaforge manually."
+          "  \u2717 Could not download Mambaforge from GitHub (exit ", download_status, ").\n",
+          "  Install Miniconda manually -- the Anaconda CDN usually works when GitHub is blocked:\n",
+          "    wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/mc.sh\n",
+          "    bash /tmp/mc.sh -b -p $HOME/miniconda3\n",
+          "    $HOME/miniconda3/bin/conda init bash\n",
+          "  Then re-run install_wsl_isoform_tools() -- it will detect conda.sh and skip this step."
         )
         return(invisible(FALSE))
       }
+
+      install_status <- .run("bash /tmp/Mambaforge.sh -b -p $HOME/mambaforge")
+      verify_status  <- .run("[ -x $HOME/mambaforge/bin/mamba ]")
+
+      if (!isTRUE(install_status == 0L) || !isTRUE(verify_status == 0L)) {
+        message("  \u2717 Mambaforge install or verification failed. Aborting.")
+        return(invisible(FALSE))
+      }
+
+      conda_sh_path <- .find_conda_sh(wsl_distro = distro, use_wsl = TRUE)
+      if (is.null(conda_sh_path)) {
+        message(
+          "  \u2717 Mambaforge installed but conda.sh not found. Aborting -- ",
+          "check .find_conda_sh() search paths."
+        )
+        return(invisible(FALSE))
+      }
+      pkg_path <- "$HOME/mambaforge/bin/mamba"
+      message("  \u2713 Mambaforge installed and detected.")
     } else {
-      message("mamba already installed (", mamba_check[1], ").")
+      message("conda.sh found: ", conda_sh_path)
+      message("package manager: ", pkg_path)
     }
 
-    conda_sh_path <- .find_conda_sh(wsl_distro = distro, use_wsl = TRUE)
+    # Prefer `mamba` when available; otherwise `conda` (>= 23.10 uses
+    # libmamba internally, so the CLI is functionally identical).
+    pkg_bin <- if (grepl("/mamba$", pkg_path)) "mamba" else "conda"
 
-    if (is.null(conda_sh_path)) {
-      message(
-        "  ! Could not locate conda.sh after mamba install/detection -- falling back to ",
-        "$HOME/mambaforge/etc/profile.d/conda.sh, which may not exist for this install. ",
-        "If subsequent steps report activation failures, locate conda.sh manually and check ",
-        ".find_conda_sh()'s search paths."
-      )
-    } else {
-      message("  Using conda.sh: ", conda_sh_path)
-    }
-
+    # --- Step 3: create isoform_tools with python=3.10 --------------------
     env_check <- .run_intern(sprintf(
-      '. %s 2>/dev/null && conda env list | grep isoform_tools || true',
-      .dq_home(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh")
+      '. %s 2>/dev/null && conda env list | grep -q isoform_tools && echo exists || true',
+      .dq_home(conda_sh_path)
     ))
-
     env_check <- trimws(env_check[nzchar(trimws(env_check))])
 
     if (length(env_check) == 0) {
-      message("Creating conda environment 'isoform_tools'...")
+      message("Creating conda environment 'isoform_tools' (python=3.10)...")
 
       create_status <- .run(sprintf(
-        '. %s && conda activate base && mamba create -y -n isoform_tools python=3.9',
-        .dq_home(conda_sh_path %||% "$HOME/mambaforge/etc/profile.d/conda.sh")
+        '. %s && %s create -y -n isoform_tools -c conda-forge -c bioconda python=3.10 pip',
+        .dq_home(conda_sh_path),
+        pkg_bin
       ))
 
       if (!isTRUE(create_status == 0L)) {
@@ -564,25 +586,34 @@ install_wsl_isoform_tools <- function(
       message("Environment 'isoform_tools' already exists.")
     }
 
-    install_cmds <- c(
-      "mamba install -y -c bioconda cpat",
-      "mamba install -y -c bioconda hmmer"
+    # --- Step 4: install cpat + hmmer (python=3.10 compatible) -----------
+    # CPAT 3.0.5 (current bioconda) only builds for python>=3.10.
+    # conda-forge supplies bx-python/python_abi for py3.10; bioconda
+    # supplies cpat and hmmer (hmmer gives hmmscan AND hmmpress).
+    icmd <- sprintf(
+      "%s install -y -n isoform_tools -c conda-forge -c bioconda cpat hmmer",
+      pkg_bin
     )
 
-    for (icmd in install_cmds) {
-      status <- .run(icmd, conda = TRUE)
+    install_status <- .run(sprintf(
+      '. %s && %s',
+      .dq_home(conda_sh_path),
+      icmd
+    ))
 
-      if (isTRUE(status == 0L)) {
-        message("  \u2713 ", icmd)
-      } else {
-        message(
-          "  \u2717 FAILED: ",
-          icmd,
-          " (exit code ",
-          status,
-          "). Try running this manually inside the 'isoform_tools' conda env to see the full error."
-        )
-      }
+    if (isTRUE(install_status == 0L)) {
+      message("  \u2713 ", icmd)
+    } else {
+      message(
+        "  \u2717 FAILED: ",
+        icmd,
+        " (exit code ",
+        install_status,
+        ").\n",
+        "  If 'isoform_tools' already existed from an earlier attempt ",
+        "with python<3.10, delete it (`conda env remove -n isoform_tools`) ",
+        "and re-run this function."
+      )
     }
 
     if (!is.null(windows_signalp_dir)) {
@@ -850,18 +881,6 @@ install_isoform_databases <- function(
     )
   }
 
-  # Each entry is one target file with an ordered list of source URLs to try.
-  # SourceForge is first everywhere (it's the canonical source and has both
-  # species), with a realistic full browser user-agent + Accept headers --
-  # a bare "Mozilla/5.0" with nothing else was getting flagged and rejected
-  # with an HTTP error (wget exit 8) even though the exact same URLs serve
-  # the file fine from an actual browser. The two Human files also get a
-  # Zenodo mirror (zenodo.org/record/5076056, used as-is by the sheynkman-lab
-  # Long-Read-Proteogenomics pipeline for these same files) as a fallback if
-  # SourceForge still rejects the request -- e.g. if a network/proxy is
-  # blocking sourceforge.net outright rather than this being bot-detection,
-  # better headers won't help and a different host is the only fix. No
-  # equivalent second mirror was found for the Mouse files.
   cpat_targets <- list(
     list(
       fname = "Human_Hexamer.tsv",
@@ -960,14 +979,6 @@ install_isoform_databases <- function(
     for (url in if (downloaded) character(0) else target$urls) {
       status <- .browser_wget(url, dest)
 
-      # wget's exit code only reflects that the HTTP transaction completed --
-      # it says nothing about whether the bytes it saved are the file we
-      # asked for. A server can resolve a download link to an HTML
-      # mirror-selection or error page with an HTTP 200 status, which wget
-      # then writes to `dest` and happily reports as success. Confirm the
-      # saved file is plausible data (not tiny, not an HTML page) before
-      # trusting it -- this is what was letting an HTML page silently take
-      # the place of Human_Hexamer.tsv and crash CPAT later.
       content_ok <- isTRUE(status == 0L) &&
         isTRUE(
           .run(sprintf(

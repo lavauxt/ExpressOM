@@ -552,6 +552,35 @@ check_wsl <- function(distro = "Ubuntu") {
 }
 
 #' Debug the external-predictor execution environment
+#'
+#' Diagnoses whether the WSL/conda environment that hosts the external
+#' predictor tools (CPAT, SignalP 6, hmmscan, InterProScan, biolib/
+#' DeepTMHMM) is reachable, whether `isoform_tools` exists, and which
+#' tools and databases are actually visible.
+#'
+#' Earlier versions of this function had three false-negative bugs that
+#' hid a working environment:
+#'   * `command -v conda` was run without first sourcing `conda.sh`.
+#'     Conda installs registered with `conda init bash` only inject
+#'     themselves into PATH from an *interactive login* shell, but the
+#'     shell used by `.wsl_exec_script()` is non-login, non-interactive.
+#'     Result: `conda` was reported missing even when it existed, which
+#'     in turn left `conda_env_exists = FALSE` and made every tool check
+#'     fall back to the bare PATH.
+#'   * Every tool probe used `conda_sh = NULL` first and only retried on
+#'     the env-derived conda.sh -- but that value was computed *after*
+#'     the conda check, which never succeeded (bug above). The tools were
+#'     therefore never probed inside `isoform_tools`.
+#'   * The CPAT-model check required *both* the Human and Mouse logit
+#'     models. A single-species run is complete with one model; the
+#'     Human-only case was still being reported as a failure.
+#'
+#' All three are fixed below: `conda.sh` is located once, up front, and
+#' passed to every probe; `conda` is checked after sourcing it; the CPAT
+#' model status is reported per species and treated as OK when at least
+#' one model is present. `biolib` (DeepTMHMM) is now included in the
+#' tool inventory so its status appears alongside the other predictors.
+#'
 #' @export
 debug_wsl <- function(distro = "Ubuntu",
                       out_dir = NULL,
@@ -649,8 +678,24 @@ debug_wsl <- function(distro = "Ubuntu",
   results$wsl_available <- TRUE
   if (verbose) message("  \u2713 execution environment reachable")
 
+  # FIX #1: pre-source conda.sh so `command -v conda` sees an install that
+  # was registered with `conda init bash`. This also gives us a reusable
+  # `pre_conda_sh` value to pass to every tool / database probe below,
+  # breaking the circular dependency that made every check fall back to
+  # the bare PATH.
+  pre_conda_sh <- .find_conda_sh(
+    wsl_distro = distro,
+    use_wsl = via_wsl,
+    log_dir = effective_log_dir
+  )
+
   conda_check <- .wsl_exec_script(
-    bash_body = "command -v conda || echo 'not found'",
+    bash_body = c(
+      if (!is.null(pre_conda_sh)) {
+        sprintf('. %s 2>/dev/null || true', .dq(pre_conda_sh))
+      },
+      "command -v conda || echo 'not found'"
+    ),
     wsl_distro = distro,
     use_wsl = via_wsl,
     intern = TRUE,
@@ -658,14 +703,22 @@ debug_wsl <- function(distro = "Ubuntu",
     log_dir = effective_log_dir
   )
 
-  if (any(grepl("conda", conda_check)) && !any(grepl("^not found$", trimws(conda_check)))) {
+  conda_found <- any(grepl("conda", conda_check)) &&
+    !any(grepl("^not found$", trimws(conda_check)))
+
+  if (conda_found) {
     results$conda_available <- TRUE
     if (verbose) message("  \u2713 conda found")
 
     env_check <- .wsl_exec_script(
-      bash_body = sprintf(
-        "conda env list 2>/dev/null | grep -q '%s' && echo 'exists'",
-        conda_env
+      bash_body = c(
+        if (!is.null(pre_conda_sh)) {
+          sprintf('. %s 2>/dev/null || true', .dq(pre_conda_sh))
+        },
+        sprintf(
+          "conda env list 2>/dev/null | grep -q '%s' && echo 'exists'",
+          conda_env
+        )
       ),
       wsl_distro = distro,
       use_wsl = via_wsl,
@@ -686,17 +739,15 @@ debug_wsl <- function(distro = "Ubuntu",
     if (verbose) message("  \u2717 conda not found (tools may still be available directly on PATH)")
   }
 
-  conda_sh_guess <- NULL
+  # Reuse the pre-computed conda.sh for everything below; keep the old name
+  # so downstream code paths that referred to it still work.
+  conda_sh_guess <- pre_conda_sh
 
-  if (results$conda_env_exists) {
-    conda_sh_guess <- .find_conda_sh(
-      wsl_distro = distro,
-      use_wsl = via_wsl,
-      log_dir = effective_log_dir
-    )
-  }
-
-  tools_list <- c("cpat", "signalp6", "hmmscan", "interproscan.sh")
+  # FIX #2: try the bare PATH first (catches apt-installed / /usr/local/bin
+  # tools), then the conda env. Previously the conda-env attempt only
+  # happened when conda_env_exists was TRUE -- which required the (failing)
+  # conda check. Now conda_sh_guess is always available.
+  tools_list <- c("cpat", "signalp6", "hmmscan", "interproscan.sh", "biolib")
 
   .check_tool <- function(tool) {
     found <- .wsl_tool_exists(
@@ -817,6 +868,9 @@ debug_wsl <- function(distro = "Ubuntu",
     }
   }
 
+  # FIX #3: CPAT logit models are per-species; a human-only run does not
+  # need the mouse model (and vice versa). Report each species and treat
+  # the check as passing when at least one model is present.
   cpat_logit_human <- .find_cpat_logit_model(
     "Human",
     distro,
@@ -835,12 +889,32 @@ debug_wsl <- function(distro = "Ubuntu",
     log_dir = effective_log_dir
   )
 
-  results$cpat_models_found <- !is.null(cpat_logit_human) && !is.null(cpat_logit_mouse)
+  results$cpat_human_model <- !is.null(cpat_logit_human)
+  results$cpat_mouse_model <- !is.null(cpat_logit_mouse)
+  results$cpat_models_found <-
+    results$cpat_human_model || results$cpat_mouse_model
 
   if (verbose) {
-    message("   ", if (results$cpat_models_found) "\u2713" else "\u2717", " CPAT logit models")
+    message(
+      "   ",
+      if (results$cpat_human_model) "\u2713" else "\u2717",
+      " CPAT Human logit model",
+      if (is.null(cpat_logit_human)) " (needed only for human data)" else ""
+    )
+    message(
+      "   ",
+      if (results$cpat_mouse_model) "\u2713" else "\u2717",
+      " CPAT Mouse logit model",
+      if (is.null(cpat_logit_mouse)) " (needed only for mouse data)" else ""
+    )
+  }
+
+  if (!results$cpat_models_found) {
+    results$errors <- c(
+      results$errors,
+      "No CPAT logit models found (need at least one species)"
+    )
   }
 
   .finish(results)
 }
-
