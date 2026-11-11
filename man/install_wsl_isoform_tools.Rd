@@ -13,5 +13,25 @@ install_wsl_isoform_tools(
 )
 }
 \description{
-Install required external tools inside WSL using mamba or apt/pip
+Resolves the WSL execution environment in this order:
+  1. `.find_conda_sh()` -- locates an existing conda installation
+     (`~/miniconda3`, `~/anaconda3`, `~/mambaforge`, `~/miniforge3`, or
+     whatever `conda info --base` reports);
+  2. sources that `conda.sh`, then probes for `mamba` **or** `conda`
+     inside it. Recent conda (>= 23.10) uses libmamba internally, so
+     plain `conda create/install` is as fast as `mamba create/install`;
+     we prefer whichever binary is actually present;
+  3. only bootstraps Mambaforge if neither is found -- and only after
+     verifying the installer file actually downloaded (previously
+     `bash /tmp/Mambaforge.sh` on a missing file returned exit 0 and
+     was misread as success).
+}
+\details{
+`isoform_tools` is created with **`python=3.10`** and with explicit
+`-c conda-forge -c bioconda`: CPAT 3.0.5 (the current bioconda
+release) only ships `python_abi` builds for 3.10/3.11/3.12, so
+`python=3.9` fails to solve with `nothing provides python_abi 3.9.*`.
+`conda-forge` supplies `bx-python` / `python_abi` for py3.10;
+`bioconda` supplies `cpat` and `hmmer` (the latter gives both
+`hmmscan` and `hmmpress`).
 }

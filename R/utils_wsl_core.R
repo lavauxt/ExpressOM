@@ -447,3 +447,82 @@
 
   isTRUE(status == 0L)
 }
+
+#' Fingerprint of the external predictor environment
+#'
+#' Cheap hash of the tool / database inventory the isoform predictors depend
+#' on. Included in the checkpoint signatures of `.stage_isoform()` and
+#' `run_isoform_switch()`, so installing (or removing) a predictor or
+#' database invalidates the cached predictor / switch results -- otherwise a
+#' checkpoint saved when SignalP / cpat / hmmscan were missing keeps being
+#' reused forever, even after those tools have been installed.
+#'
+#' The output is stable when the environment is unchanged and different as
+#' soon as anything material changes:
+#'   * which predictor binaries are reachable on PATH / in `isoform_tools`
+#'     (cpat, signalp6, hmmscan, interproscan.sh, biolib, run_cpat.py);
+#'   * whether the Pfam-A.hmm database is present;
+#'   * which species' CPAT logit models are present.
+#'
+#' Implemented as a single WSL round-trip (~1-2s) so it is cheap enough to
+#' call from `targets` on every run.
+#'
+#' @keywords internal
+.predictor_environment_fingerprint <- function(
+  wsl_distro = "Ubuntu",
+  use_wsl    = (.Platform$OS.type == "windows"),
+  conda_env  = "isoform_tools"
+) {
+  if (is.null(wsl_distro) || !nzchar(wsl_distro)) wsl_distro <- "Ubuntu"
+  if (is.null(use_wsl)) use_wsl <- (.Platform$OS.type == "windows")
+  if (is.null(conda_env) || !nzchar(conda_env)) conda_env <- "isoform_tools"
+
+  conda_sh <- tryCatch(
+    .find_conda_sh(wsl_distro = wsl_distro, use_wsl = use_wsl),
+    error = function(e) NULL
+  )
+
+  # One shell script does all the checks; the previous per-tool approach
+  # made 10+ WSL round-trips, which is too slow to run on every tar_make().
+  script <- c(
+    'for t in cpat run_cpat.py signalp6 hmmscan interproscan.sh biolib; do',
+    '  command -v "$t" >/dev/null 2>&1 && echo "TOOL:$t"',
+    'done',
+    '[ -n "$PFAM_DB" ] && [ -f "$PFAM_DB" ] && echo "PFAM:found"',
+    'for _p in "$HOME/pfam_db/Pfam-A.hmm" "$HOME/databases/Pfam-A.hmm" \\',
+    '          "$HOME/.local/share/pfam/Pfam-A.hmm" "/opt/databases/Pfam-A.hmm"; do',
+    '  [ -f "$_p" ] && { echo "PFAM:found"; break; }',
+    'done',
+    'for _p in "$HOME/.cpat_data/Human_logitModel.RData" \\',
+    '          "${CPAT_DATA:-.}/Human_logitModel.RData"; do',
+    '  [ -f "$_p" ] && { echo "CPAT_HUMAN:found"; break; }',
+    'done',
+    'for _p in "$HOME/.cpat_data/Mouse_logitModel.RData" \\',
+    '          "${CPAT_DATA:-.}/Mouse_logitModel.RData"; do',
+    '  [ -f "$_p" ] && { echo "CPAT_MOUSE:found"; break; }',
+    'done'
+  )
+
+  out <- tryCatch(
+    .wsl_exec_script(
+      bash_body     = script,
+      wsl_distro    = wsl_distro,
+      use_wsl       = use_wsl,
+      conda_sh      = conda_sh,
+      conda_env     = conda_env,
+      intern        = TRUE,
+      ignore_stderr = TRUE,
+      verbose       = FALSE
+    ),
+    error = function(e) character(0)
+  )
+
+  tools <- sort(unique(sub("^TOOL:", "", out[grepl("^TOOL:", out)])))
+
+  .object_md5(list(
+    tools      = tools,
+    pfam_db    = any(grepl("^PFAM:", out)),
+    cpat_human = any(grepl("^CPAT_HUMAN:", out)),
+    cpat_mouse = any(grepl("^CPAT_MOUSE:", out))
+  ))
+}

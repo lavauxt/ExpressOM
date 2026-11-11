@@ -14,5 +14,32 @@ debug_wsl(
 )
 }
 \description{
-Debug the external-predictor execution environment
+Diagnoses whether the WSL/conda environment that hosts the external
+predictor tools (CPAT, SignalP 6, hmmscan, InterProScan, biolib/
+DeepTMHMM) is reachable, whether `isoform_tools` exists, and which
+tools and databases are actually visible.
+}
+\details{
+Earlier versions of this function had three false-negative bugs that
+hid a working environment:
+  * `command -v conda` was run without first sourcing `conda.sh`.
+    Conda installs registered with `conda init bash` only inject
+    themselves into PATH from an *interactive login* shell, but the
+    shell used by `.wsl_exec_script()` is non-login, non-interactive.
+    Result: `conda` was reported missing even when it existed, which
+    in turn left `conda_env_exists = FALSE` and made every tool check
+    fall back to the bare PATH.
+  * Every tool probe used `conda_sh = NULL` first and only retried on
+    the env-derived conda.sh -- but that value was computed *after*
+    the conda check, which never succeeded (bug above). The tools were
+    therefore never probed inside `isoform_tools`.
+  * The CPAT-model check required *both* the Human and Mouse logit
+    models. A single-species run is complete with one model; the
+    Human-only case was still being reported as a failure.
+
+All three are fixed below: `conda.sh` is located once, up front, and
+passed to every probe; `conda` is checked after sourcing it; the CPAT
+model status is reported per species and treated as OK when at least
+one model is present. `biolib` (DeepTMHMM) is now included in the
+tool inventory so its status appears alongside the other predictors.
 }

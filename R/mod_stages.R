@@ -547,12 +547,6 @@
   list(files = .out_manifest(p$out_dir, file.path("GSEA", "FGSEA")))
 }
 
-# ---- stage 4: isoform-level analysis (DTE / DTU / switches) ------------------------------------
-#
-# Self-contained: it imports the transcript counts itself and keeps its own
-# signed RDS checkpoints in <out_dir>/IsoformSwitch/saved, so re-running the
-# stage resumes after the last completed step.
-
 .stage_isoform <- function(ctx) {
   p <- ctx$p
   if (!isTRUE(p$run_isoform)) {
@@ -694,6 +688,20 @@
     go_pvalue_cutoff = go_pvalue_cutoff,
     go_qvalue_cutoff = go_qvalue_cutoff,
     run_predictors = run_predictors,
+    # --- FIX: invalidate the isoform checkpoints when the predictor
+    # environment changes (a tool/database newly installed or removed),
+    # not only when the run_predictors flag changes. Without this, the
+    # isoform stage re-runs the predictors against a checkpoint saved when
+    # SignalP / cpat / hmmscan were unavailable -- the predictors appear
+    # "installed" in debug_wsl() but their output is still empty.
+    predictor_env = if (isTRUE(run_predictors)) {
+      .predictor_environment_fingerprint(
+        wsl_distro = wsl_distro,
+        use_wsl    = use_wsl
+      )
+    } else {
+      NULL
+    },
     predictor_cpu = predictor_cpu,
     use_wsl = use_wsl,
     wsl_distro = wsl_distro,
@@ -839,13 +847,6 @@
     }
   }
 
-  # Step D: functional enrichment on DTE/DTU results, using the exact
-  # same ORA/FGSEA machinery and GO/Reactome/DO/MSigDB databases as the
-  # DGE-level analysis (run_isoform_functional_analysis() in
-  # mod_functional.R). Runs once DTE/DTU are available -- whether just
-  # computed above or loaded from a checkpoint/resume directory -- and
-  # deliberately before run_isoform_switch() below, since that's the
-  # point in the pipeline the person asked for it.
   dte_func_res <- NULL
   dtu_func_res <- NULL
 
@@ -945,9 +946,6 @@
   )
 
   if (!is.null(dte_res) && !is.null(dtu_res) && !is.null(isoform_import)) {
-    # Tables and PNG plots always feed the unified report; the legacy
-    # stand-alone DTU_DTE_report.html is only rendered when the unified
-    # report is switched off.
     generate_dte_dtu_report(
       dte_results = dte_res,
       dtu_results = dtu_res,

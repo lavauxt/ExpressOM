@@ -11,29 +11,6 @@ install_signalp_from_tarball(
   log_dir = NULL
 )
 }
-\arguments{
-\item{tarball_path}{Path to the `signalp-6.0*.tar.gz` archive on Windows
-(or already inside WSL). Defaults to the copy bundled at
-`inst/extdata/signalp-6.0i.fast.tar.gz`, resolved via
-`system.file("extdata", ..., package = "ExpressOM")` with a source-checkout
-fallback -- pass an explicit path to use a different archive (e.g. a
-`.fast.tar.gz`, `.slow.tar.gz`, or a newer release).}
-
-\item{distro}{WSL distribution name.}
-
-\item{conda_env}{Conda environment to install the `signalp` Python package
-into (created via `install_wsl_isoform_tools()` / `mamba create`).}
-
-\item{log_dir}{Directory for `wsl_commands.log`; defaults per
-`.default_wsl_log_dir()`.}
-}
 \description{
-Unlike `install_signalp_from_windows()` (which copies an *already installed*
-SignalP directory, e.g. from a prior Linux/native install, and expects a
-`bin/signalp` executable + `data/` directory), this installs directly from
-the `.tar.gz` package DTU distributes: it is a Python package (`pip install
-signalp-6-package/`) that provides the `signalp6` command, plus a separate
-`models/` folder of weight files that must be copied into the installed
-package's `model_weights/` directory (see the archive's own
-`signalp6_fast/signalp-6-package/README.md`).
+Install SignalP 6.0 from a `signalp-6.0*.tar.gz` distribution archive
 }

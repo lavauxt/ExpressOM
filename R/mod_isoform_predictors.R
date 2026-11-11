@@ -1359,9 +1359,6 @@
   return(switch_list)
 }
 
-# mod_isoform_switch.R -- IsoformSwitchAnalyzeR orchestration (run_isoform_switch)
-#
-
 #' Run IsoformSwitchAnalyzeR analysis
 #' @param custom_transcript_id_map A data frame or path to a TSV/CSV with
 #'   `count_id` and `fasta_id` columns. Count IDs map to FASTA identifiers, and
@@ -1433,6 +1430,20 @@ run_isoform_switch <- function(
     skip_fasta_filter = skip_fasta_filter,
     plot_topology = plot_topology,
     run_predictors = run_predictors,
+    # --- FIX: invalidate the predictor-stage checkpoints when the
+    # predictor environment changes (a tool/database newly installed or
+    # removed), not only when the run_predictors flag changes. Without
+    # this, step3_predictors.rds / step3_5_refreshed.rds / switch_list.rds
+    # saved before a predictor was installed were silently reused
+    # forever, so the newly-installed predictor never actually ran.
+    predictor_env = if (isTRUE(run_predictors)) {
+      .predictor_environment_fingerprint(
+        wsl_distro = wsl_distro,
+        use_wsl    = use_wsl
+      )
+    } else {
+      NULL
+    },
     predictor_cpu = predictor_cpu,
     use_wsl = use_wsl,
     wsl_distro = wsl_distro,
@@ -2242,18 +2253,6 @@ run_isoform_switch <- function(
         "Refreshing switch consequence analysis and plots with predictor annotations..."
       )
 
-      # Lives under DTU_DTE_report/plots (not out_dir/plots) so it's inside
-      # the same tree generate_dte_dtu_report() already scans for its PDF
-      # -> PNG conversion, and so dte_dtu_report.Rmd can list it (see the
-      # switch_by_consequence_section chunk there) -- it used to sit in an
-      # entirely separate out_dir/plots/switch_plots_with_predictors tree
-      # that neither of those ever looked inside, making it invisible to
-      # the HTML report and just a second, disconnected pile of PDFs next
-      # to top_switches/. "with predictors" was also a misleading name: by
-      # the time either this step or the report's top_switches step runs,
-      # switch_list already carries predictor annotations either way -- the
-      # actual difference is that this set is filtered to switches with an
-      # identified consequence and split by consequence type.
       plot_refresh_dir <- file.path(
         out_dir,
         "DTU_DTE_report",
@@ -2316,12 +2315,6 @@ run_isoform_switch <- function(
             dir.create(plot_refresh_dir, recursive = TRUE)
           }
 
-          # switchPlotTopSwitches() doesn't expose plotTopology as a
-          # parameter (verified against its signature and the
-          # additionalArguments whitelist it forwards to switchPlot() --
-          # plotTopology isn't in either), so suppressMessages() is the
-          # only way to silence its "Omitting topology visualization..."
-          # message from here when there's no DeepTMHMM data to plot.
           run_switch_plots <- function() {
             IsoformSwitchAnalyzeR::switchPlotTopSwitches(
               switchAnalyzeRlist = sl,

@@ -345,6 +345,7 @@ expressom_pipeline_stages <- function() {
 .pipeline_functions <- function() {
   c(
     ".stage_ctx", ".fp_counts", ".fp_labels", ".fp_isoform", ".pipeline_setup",
+    ".predictor_environment_fingerprint",
     ".stage_import", ".stage_eda", ".stage_dge", ".stage_dge_plots",
     ".stage_functional", ".stage_fgsea", ".stage_isoform", ".stage_report",
     ".stage_save_rdata"
@@ -373,7 +374,11 @@ expressom_pipeline_stages <- function() {
 #' `functional`, `fgsea`; `isoform` is independent of `dge`; `report` and
 #' `rdata` close the graph. Each stage target depends on a small context target
 #' (`ctx_<stage>`) holding only the parameters it uses, so a parameter that
-#' concerns one stage leaves the cached results of the others untouched.
+#' concerns one stage leaves the cached results of the others untouched. When
+#' `run_predictors = TRUE`, the `isoform` target additionally depends on
+#' `fp_predictors` (the external predictor environment fingerprint), so it
+#' re-runs when a predictor tool or database is installed or removed even
+#' though no parameter or input file changed.
 #'
 #' @param params_file Path to the `params.rds` written by
 #'   [write_expressom_targets()].
@@ -440,16 +445,47 @@ expressom_pipeline <- function(params_file, overrides = list()) {
   }
 
   if (flags$run_isoform) {
-    out <- c(out, list(
+    isoform_deps <- list(
       tgt("fp_isoform", quote(.fp_isoform(params)), cue = always),
-      ctx_target("isoform"),
-      tgt("isoform", quote({
+      ctx_target("isoform")
+    )
+    # Re-probe the predictor environment on every run if predictors are
+    # enabled (~1-2s WSL round-trip). Without this, "isoform" stays cached
+    # even after a new predictor tool / database was installed, and the
+    # pipeline reuses the old, predictor-empty checkpoints. Combined with
+    # `predictor_env` now being part of `.stage_isoform()`'s checkpoint
+    # signature, this is what makes "install a tool → re-run → predictor
+    # results appear" work end-to-end.
+    if (isTRUE(p0$run_predictors)) {
+      isoform_deps <- c(isoform_deps, list(
+        tgt(
+          "fp_predictors",
+          quote(.predictor_environment_fingerprint(
+            wsl_distro = params$wsl_distro,
+            use_wsl    = params$use_wsl
+          )),
+          cue = always
+        )
+      ))
+    }
+    isoform_body <- if (isTRUE(p0$run_predictors)) {
+      quote({
+        fp_counts
+        fp_isoform
+        fp_predictors
+        .stage_isoform(ctx_isoform)
+      })
+    } else {
+      quote({
         fp_counts
         fp_isoform
         .stage_isoform(ctx_isoform)
-      })),
+      })
+    }
+    out <- c(out, c(isoform_deps, list(
+      tgt("isoform", isoform_body),
       tgt("m_isoform", quote(isoform$files))
-    ))
+    )))
     manifests <- c(manifests, "m_isoform")
   }
 
