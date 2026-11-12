@@ -1,9 +1,9 @@
 # mod_decouple.R -- decoupleR-based TF/pathway activity inference.
 #
 # Adds three "human resources" (or their mouse counterparts) to the pipeline:
-#   * CollecTRI  – TF -> target regulons with sign (mor)
-#   * PROGENy    – pathway footprints (source = pathway, target = gene, mor = weight)
-#   * DoRothEA   – TF regulons filtered to confidence A/B/C
+#   * CollecTRI  - TF -> target regulons with sign (mor)
+#   * PROGENy    - pathway footprints (source = pathway, target = gene, mor = weight)
+#   * DoRothEA   - TF regulons filtered to confidence A/B/C
 #
 # The stat column of the DGE table (DESeq2 Wald stat, or signed -log10 padj)
 # is used as the gene-level score. Results are written to
@@ -75,7 +75,7 @@
 #'   `log2FoldChange` and `padj` are present, `sign(log2FC) * -log10(padj)`
 #'   is used.
 #' @param lfc_cutoff Absolute log2 fold-change floor used to categorize regulon
-#'   targets (activé/réprimé/autre) in the targeted volcano and the summary
+#'   targets (activated/repressed/other) in the targeted volcano and the summary
 #'   table. Default 1.
 #' @return list(results = named list per resource, files = manifest)
 #' @export
@@ -240,10 +240,10 @@ run_decouple_analysis <- function(
 #   * tf_regulon_summary.csv : per-source counts (targets / up / down / ns)
 #
 # The category assigned to each target follows the user's rule:
-#   mor > 0 & LFC >  lfc_cutoff & padj < padj_cutoff  -> "Activé (attendu)"
-#   mor < 0 & LFC < -lfc_cutoff & padj < padj_cutoff  -> "Réprimé (attendu)"
-#   padj < padj_cutoff & |LFC| > lfc_cutoff           -> "Autre variation"
-#   else                                              -> "Non significatif"
+#   mor > 0 & LFC >  lfc_cutoff & padj < padj_cutoff  -> "Activated (expected)"
+#   mor < 0 & LFC < -lfc_cutoff & padj < padj_cutoff  -> "Repressed (expected)"
+#   padj < padj_cutoff & |LFC| > lfc_cutoff           -> "Other change"
+#   else                                              -> "Not significant"
 #
 # Under test = "LRT", the DGE results table's `stat` column is the unsigned
 # OMNIBUS statistic; the signed contrast Wald statistic lives in
@@ -338,7 +338,7 @@ run_decouple_analysis <- function(
     }
 
     # Categorise each target -- user's rule, exact.
-    reg <- rep("Non significatif", nrow(regulon))
+    reg <- rep("Not significant", nrow(regulon))
     up_expected <- !is.na(regulon$mor) & regulon$mor > 0 &
                    !is.na(regulon$log2FoldChange) &
                    regulon$log2FoldChange >  lfc_cutoff &
@@ -347,17 +347,17 @@ run_decouple_analysis <- function(
                    !is.na(regulon$log2FoldChange) &
                    regulon$log2FoldChange < -lfc_cutoff &
                    !is.na(regulon$padj) & regulon$padj < padj_cutoff
-    reg[up_expected] <- "Activé (attendu)"
-    reg[dn_expected] <- "Réprimé (attendu)"
+    reg[up_expected] <- "Activated (expected)"
+    reg[dn_expected] <- "Repressed (expected)"
     other <- !is.na(regulon$padj) & regulon$padj < padj_cutoff &
              !is.na(regulon$log2FoldChange) &
              abs(regulon$log2FoldChange) > lfc_cutoff &
-             reg == "Non significatif"
-    reg[other] <- "Autre variation"
+             reg == "Not significant"
+    reg[other] <- "Other change"
     regulon$Regulation <- factor(
       reg,
-      levels = c("Non significatif", "Autre variation",
-                 "Activé (attendu)", "Réprimé (attendu)")
+      levels = c("Not significant", "Other change",
+                 "Activated (expected)", "Repressed (expected)")
     )
 
     safe_tf <- gsub("[^A-Za-z0-9_-]", "_", tf)
@@ -412,16 +412,16 @@ run_decouple_analysis <- function(
       p_value           = tf_p,
       n_targets_total   = nrow(tf_net),
       n_targets_matched = nrow(regulon),
-      n_activated       = sum(regulon$Regulation == "Activé (attendu)"),
-      n_repressed       = sum(regulon$Regulation == "Réprimé (attendu)"),
-      n_other_var       = sum(regulon$Regulation == "Autre variation"),
-      n_ns              = sum(regulon$Regulation == "Non significatif"),
+      n_activated       = sum(regulon$Regulation == "Activated (expected)"),
+      n_repressed       = sum(regulon$Regulation == "Repressed (expected)"),
+      n_other_var       = sum(regulon$Regulation == "Other change"),
+      n_ns              = sum(regulon$Regulation == "Not significant"),
       stringsAsFactors  = FALSE
     )
     message("      ", resource, " / ", tf,
             ": ", nrow(regulon), " targets (",
-            sum(regulon$Regulation == "Activé (attendu)"), " up, ",
-            sum(regulon$Regulation == "Réprimé (attendu)"), " down)")
+            sum(regulon$Regulation == "Activated (expected)"), " up, ",
+            sum(regulon$Regulation == "Repressed (expected)"), " down)")
   }
 
   if (length(summary_rows)) {
@@ -446,10 +446,10 @@ run_decouple_analysis <- function(
   if (!requireNamespace("ggplot2", quietly = TRUE)) return(NULL)
   regulon$padj_plot <- pmax(regulon$padj, .Machine$double.xmin)
   colors <- c(
-    "Non significatif"  = "grey80",
-    "Autre variation"   = "#ff7f00",
-    "Activé (attendu)"  = "#1f78b4",
-    "Réprimé (attendu)" = "#e31a1c"
+    "Not significant"      = "grey80",
+    "Other change"         = "#ff7f00",
+    "Activated (expected)" = "#1f78b4",
+    "Repressed (expected)" = "#e31a1c"
   )
   p <- ggplot2::ggplot(
     regulon,
@@ -463,9 +463,9 @@ run_decouple_analysis <- function(
     ggplot2::scale_color_manual(values = colors, drop = FALSE) +
     ggplot2::theme_classic() +
     ggplot2::labs(
-      title = paste("Cibles transcriptionnelles de", tf),
+      title = paste("Transcriptional targets of", tf),
       subtitle = sprintf(
-        "Score: %+.2f  |  p: %.2e  |  %d cibles dans le DGE (CollecTRI/DoRothEA)",
+        "Score: %+.2f  |  p: %.2e  |  %d targets in the DGE (CollecTRI/DoRothEA)",
         tf_score, tf_p, nrow(regulon)
       ),
       x = "log2 Fold Change",
@@ -473,7 +473,8 @@ run_decouple_analysis <- function(
       color = NULL
     )
   if (requireNamespace("ggrepel", quietly = TRUE)) {
-    lbl <- regulon[regulon$Regulation %in% c("Activé (attendu)", "Réprimé (attendu)"),
+    lbl <- regulon[regulon$Regulation %in% c("Activated (expected)",
+                                             "Repressed (expected)"),
                    , drop = FALSE]
     if (nrow(lbl)) {
       lbl <- utils::head(lbl[order(lbl$padj), , drop = FALSE], 20)
@@ -521,13 +522,13 @@ run_decouple_analysis <- function(
     ggplot2::geom_vline(xintercept = peak_idx,
                         color = "grey40", linetype = "dotted") +
     ggplot2::labs(
-      title = paste("Leading edge des cibles de", tf),
+      title = paste("Leading edge of", tf, "targets"),
       subtitle = sprintf(
-        "Score: %+.2f  |  p: %.2e  |  %d cibles  |  ES max = %.3f au rang %d",
+        "Score: %+.2f  |  p: %.2e  |  %d targets  |  max ES = %.3f at rank %d",
         tf_score, tf_p, n_hits, es_vec[peak_idx], peak_idx
       ),
-      x = "Rang des gènes (par statistique, décroissant)",
-      y = "Score d'enrichissement cumulé (running ES)"
+      x = "Gene rank (by statistic, decreasing)",
+      y = "Cumulative enrichment score (running ES)"
     ) +
     ggplot2::theme_minimal()
 }
