@@ -1407,6 +1407,20 @@ run_isoform_switch <- function(
     dir.create(save_dir, recursive = TRUE)
   }
 
+  # NEW: initialise log_dir BEFORE building the checkpoint signature. The
+  # signature itself needs to call .predictor_environment_fingerprint(), which
+  # issues WSL probes and writes to its log_dir -- without this the probes
+  # would fall back to <cwd>/expressom_wsl_logs/ and the WSL command log
+  # would never reach <out_dir>/Log/WSL/. Default keeps backward compat when
+  # the caller does not specify a log_dir: fall back to Log/WSL (the pipeline
+  # convention) rather than Log/ (older default).
+  if (is.null(log_dir)) {
+    log_dir <- file.path(out_dir, "Log", "WSL")
+  }
+  if (!dir.exists(log_dir)) {
+    dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+
   switch_checkpoint_signature <- .object_md5(list(
     counts = if (identical(isoform_obj$type, "tximport")) {
       isoform_obj$txi$counts
@@ -1436,10 +1450,12 @@ run_isoform_switch <- function(
     # this, step3_predictors.rds / step3_5_refreshed.rds / switch_list.rds
     # saved before a predictor was installed were silently reused
     # forever, so the newly-installed predictor never actually ran.
+    # log_dir is passed so the WSL probes write to Log/WSL/.
     predictor_env = if (isTRUE(run_predictors)) {
       .predictor_environment_fingerprint(
         wsl_distro = wsl_distro,
-        use_wsl    = use_wsl
+        use_wsl    = use_wsl,
+        log_dir    = log_dir
       )
     } else {
       NULL
@@ -1450,12 +1466,9 @@ run_isoform_switch <- function(
     organism = organism
   ))
 
-  if (is.null(log_dir)) {
-    log_dir <- file.path(out_dir, "Log")
-  }
-  if (!dir.exists(log_dir)) {
-    dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
-  }
+  # NOTE: log_dir init and dir.create() already happened above (before the
+  # signature); nothing to do here. The old duplicate block was removed so
+  # the fingerprint probes and the debug_wsl() output share the same folder.
 
   if (isTRUE(run_predictors)) {
     message("Checking external predictor tool availability...")

@@ -489,9 +489,16 @@
       p <- params_ok()
       if (is.null(p) || is.null(p$out_dir)) NULL else expressom_targets_dir(p$out_dir)
     })
+    # The full pipeline run log lives under <out_dir>/Log/targets/ (not
+    # under .expressom_targets/) so every diagnostic of a run is reachable
+    # from the same Log/ folder as SessionInfo.txt, Warnings.txt,
+    # DGE_params_*.json and WSL/predictor logs.
     log_file <- shiny::reactive({
-      d <- pipe_dir()
-      if (is.null(d)) NULL else file.path(d, "last_run.log")
+      p <- params_ok()
+      if (is.null(p) || is.null(p$out_dir)) {
+        return(NULL)
+      }
+      file.path(p$out_dir, "Log", "targets", "last_run.log")
     })
 
     refresh_status <- function() {
@@ -569,7 +576,11 @@
         return(invisible(FALSE))
       }
       dir.create(d, recursive = TRUE, showWarnings = FALSE)
-      log <- file.path(normalizePath(d, winslash = "/"), "last_run.log")
+      # targets store stays in .expressom_targets/, but the human-facing
+      # run log goes to Log/targets/ next to the rest of the diagnostics.
+      targets_log_dir <- file.path(p$out_dir, "Log", "targets")
+      dir.create(targets_log_dir, recursive = TRUE, showWarnings = FALSE)
+      log <- file.path(normalizePath(targets_log_dir, winslash = "/"), "last_run.log")
       pr <- callr::r_bg(
         runner,
         args = list(params = p, dir = d, stages = stages, force = force),

@@ -183,13 +183,18 @@ expressom <- function(
   p$isoform_test_engine <- if (length(p$isoform_test_engine)) p$isoform_test_engine[[1L]] else "DEXSeq"
 
   old_warn <- getOption("nwarnings")
+  old_wsl_log <- getOption("expressom.wsl_log_dir")
   options(nwarnings = 10000)
+  # Every WSL/predictor command issued during this run must land under
+  # Log/WSL/ instead of the process working directory.
+  options(expressom.wsl_log_dir = file.path(out_dir, "Log", "WSL"))
 
   run_warnings <- character(0)
 
   on.exit(
     {
       options(nwarnings = old_warn)
+      options(expressom.wsl_log_dir = old_wsl_log)
 
       log_dir <- file.path(out_dir, "Log")
       dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)

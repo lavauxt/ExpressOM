@@ -402,6 +402,18 @@ expressom_pipeline <- function(params_file, overrides = list()) {
   p0 <- readRDS(params_file)
   flags <- .pipeline_flags(p0)
 
+  # Every WSL/predictor log must land under <out_dir>/Log/WSL/ instead of the
+  # targets working directory. Set it here (in the child process that
+  # tar_make() spins up) so all downstream .wsl_exec_script() calls -- target
+  # code AND .predictor_environment_fingerprint() probes -- write to Log/WSL.
+  if (!is.null(p0$out_dir) && nzchar(p0$out_dir)) {
+    wsl_log_dir <- file.path(p0$out_dir, "Log", "WSL")
+    if (!dir.exists(wsl_log_dir)) {
+      dir.create(wsl_log_dir, recursive = TRUE, showWarnings = FALSE)
+    }
+    options(expressom.wsl_log_dir = wsl_log_dir)
+  }
+
   targets::tar_option_set(
     envir = .pipeline_env(overrides),
     packages = character(0),
@@ -476,13 +488,18 @@ expressom_pipeline <- function(params_file, overrides = list()) {
     # `predictor_env` now being part of `.stage_isoform()`'s checkpoint
     # signature, this is what makes "install a tool → re-run → predictor
     # results appear" work end-to-end.
+    #
+    # The explicit log_dir makes the WSL commands it issues land under
+    # Log/WSL/ (matching the option set at the top of expressom_pipeline()),
+    # so the fingerprint probe shows up in the report's WSL log section.
     if (isTRUE(p0$run_predictors)) {
       isoform_deps <- c(isoform_deps, list(
         tgt(
           "fp_predictors",
           quote(.predictor_environment_fingerprint(
             wsl_distro = params$wsl_distro,
-            use_wsl    = params$use_wsl
+            use_wsl    = params$use_wsl,
+            log_dir    = file.path(params$out_dir, "Log", "WSL")
           )),
           cue = always
         )
@@ -668,6 +685,14 @@ run_expressom_targets <- function(
 
   paths <- write_expressom_targets(params, dir, script_lines)
   params <- readRDS(paths$params_file)
+
+  # The child process that runs tar_make() inherits this option only if it
+  # was set inside expressom_pipeline() (which is what actually matters for
+  # the targets DAG). Setting it here too covers edge cases where a target
+  # shells out before expressom_pipeline() has run (e.g. custom _targets.R).
+  old_wsl_log <- getOption("expressom.wsl_log_dir")
+  options(expressom.wsl_log_dir = file.path(params$out_dir, "Log", "WSL"))
+  on.exit(options(expressom.wsl_log_dir = old_wsl_log), add = TRUE)
 
   args <- list(
     script = paths$script,

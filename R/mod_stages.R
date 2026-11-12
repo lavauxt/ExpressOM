@@ -74,12 +74,11 @@
     p$isoform_test_engine, c("DEXSeq", "DRIMSeq", "satuRn")
   )
 
-  # All WSL/predictor tool logs land in <out_dir>/Log/WSL/ so Log/ remains
-  # the single folder holding every run diagnostic. Restored on exit so we
-  # don't pollute the caller's session.
-  old_log_opt <- getOption("expressom.wsl_log_dir")
-  options(expressom.wsl_log_dir = file.path(p$out_dir, "Log", "WSL"))
-  on.exit(options(expressom.wsl_log_dir = old_log_opt), add = TRUE)
+  # NOTE: the `expressom.wsl_log_dir` option is deliberately NOT set here.
+  # on.exit() at this level fires when .expressom_prepare() returns, which
+  # would immediately revert the option before any WSL call runs. The option
+  # is set for the duration of the whole pipeline in expressom() (main.R) and
+  # in expressom_pipeline() (mod_targets.R, inside the targets child process).
 
   p$sample_labels <- .read_sample_labels(p$sample_labels)
   p$deg_padj_cutoffs <- .validate_deg_cutoffs(p$deg_padj_cutoffs)
@@ -552,6 +551,14 @@
   iso_save_dir <- file.path(iso_dir, "saved")
   dir.create(iso_save_dir, recursive = TRUE, showWarnings = FALSE)
 
+  # Every WSL/predictor log -- wsl_commands.log, wsl_debug.json,
+  # predictor_status.log, per-tool CPAT/SignalP/Pfam logs, DEXSeq step
+  # checkpoints side-effects -- goes under <out_dir>/Log/WSL/ so the report
+  # finds them in its "External-predictor (WSL) logs" section and Log/
+  # remains the single folder holding every run diagnostic.
+  wsl_log_dir <- file.path(out_dir, "Log", "WSL")
+  dir.create(wsl_log_dir, recursive = TRUE, showWarnings = FALSE)
+
   .iso_ckpt_exists <- function(nm) file.exists(file.path(iso_save_dir, nm))
   .iso_ckpt_save <- function(obj, nm) {
     .checkpoint_save(obj, file.path(iso_save_dir, nm), iso_checkpoint_signature)
@@ -600,8 +607,12 @@
     go_pvalue_cutoff = go_pvalue_cutoff, go_qvalue_cutoff = go_qvalue_cutoff,
     run_predictors = run_predictors,
     predictor_env = if (isTRUE(run_predictors)) {
+      # Pass log_dir explicitly so the WSL commands issued by the probe land
+      # in Log/WSL/wsl_commands.log instead of <cwd>/expressom_wsl_logs/.
       .predictor_environment_fingerprint(
-        wsl_distro = wsl_distro, use_wsl = use_wsl
+        wsl_distro = wsl_distro,
+        use_wsl    = use_wsl,
+        log_dir    = wsl_log_dir
       )
     } else NULL,
     predictor_cpu = predictor_cpu, use_wsl = use_wsl,
@@ -768,7 +779,9 @@
     use_wsl = use_wsl, wsl_distro = wsl_distro,
     save_dir = iso_save_dir, resume_from = resume_isoform_from,
     predictor_cpu = predictor_cpu,
-    log_dir = file.path(out_dir, "Log", "Isoform"),
+    # All WSL/predictor logs (wsl_commands.log, wsl_debug.json,
+    # predictor_status.log, per-tool CPAT/SignalP/Pfam) go under Log/WSL/.
+    log_dir = wsl_log_dir,
     custom_transcript_id_map = custom_transcript_id_map,
     skip_fasta_filter = skip_fasta_filter,
     test_engine = isoform_test_engine,

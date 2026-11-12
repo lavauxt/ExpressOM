@@ -34,10 +34,10 @@
 #' log_dir explicitly.
 #'
 #' Priority:
-#'   1. `options(expressom.wsl_log_dir)` -- set by `.expressom_prepare()` to
-#'      `<out_dir>/Log/WSL`, so every WSL command a pipeline run issues lands
-#'      under the run's `Log/` folder next to SessionInfo.txt, Warnings.txt,
-#'      the DGE/isoform logs, etc.
+#'   1. `options(expressom.wsl_log_dir)` -- set by `expressom()` /
+#'      `run_expressom_targets()` to `<out_dir>/Log/WSL`, so every WSL command
+#'      a pipeline run issues lands under the run's `Log/` folder next to
+#'      SessionInfo.txt, Warnings.txt, the DGE/isoform logs, etc.
 #'   2. `<getwd()>/expressom_wsl_logs` -- fallback when the installer
 #'      functions are called outside any pipeline run (e.g. a one-off
 #'      `install_wsl_isoform_tools()`).
@@ -367,18 +367,23 @@
 }
 
 #' Fingerprint of the external predictor environment
+#'
+#' @param log_dir Directory for the WSL command log; `NULL` falls back to
+#'   `getOption("expressom.wsl_log_dir")` or `<cwd>/expressom_wsl_logs`. The
+#'   pipeline always passes `<out_dir>/Log/WSL`.
 #' @keywords internal
 .predictor_environment_fingerprint <- function(
   wsl_distro = "Ubuntu",
   use_wsl    = (.Platform$OS.type == "windows"),
-  conda_env  = "isoform_tools"
+  conda_env  = "isoform_tools",
+  log_dir    = NULL
 ) {
   if (is.null(wsl_distro) || !nzchar(wsl_distro)) wsl_distro <- "Ubuntu"
   if (is.null(use_wsl)) use_wsl <- (.Platform$OS.type == "windows")
   if (is.null(conda_env) || !nzchar(conda_env)) conda_env <- "isoform_tools"
 
   conda_sh <- tryCatch(
-    .find_conda_sh(wsl_distro = wsl_distro, use_wsl = use_wsl),
+    .find_conda_sh(wsl_distro = wsl_distro, use_wsl = use_wsl, log_dir = log_dir),
     error = function(e) NULL
   )
 
@@ -410,6 +415,7 @@
       conda_env     = conda_env,
       intern        = TRUE,
       ignore_stderr = TRUE,
+      log_dir       = log_dir,
       verbose       = FALSE
     ),
     error = function(e) character(0)
