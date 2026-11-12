@@ -557,6 +557,21 @@ expressom_report_settings <- function(
         tbl, top_n = st$top_terms, padj_cutoff = co$padj,
         title = paste0("TF activity \u2013 ", resource)
       ),
+      .xp_note(
+        htmltools::tags$strong("How to read this plot. "),
+        "Each bar is one transcription factor (or pathway, for PROGENy) and ",
+        "the bar length is its inferred activity score, a t-like statistic ",
+        "computed from the signed gene-level statistics of the source's ",
+        "target genes (its \"regulon\"). A positive score means the source ",
+        "behaves as more active than chance given the observed changes in ",
+        "its targets: activating targets are upregulated and/or repressing ",
+        "targets are downregulated. A negative score means the opposite ",
+        "(net repressive footprint). Only sources with p < ", co$padj,
+        " are shown, sorted by |score|. Bar colour follows the sign ",
+        "(red = positive, blue = negative); the hover text gives the ",
+        "score and p-value; the table below lists every tested source, ",
+        "including those that did not reach the cut-off."
+      ),
       itable(tbl[order(if (!is.na(pcol)) .rep_num(tbl[[pcol]]) else rep(0, nrow(tbl))), , drop = FALSE],
              page_length = 15L, max_rows = st$table_rows,
              filename = paste0("decouple_", resource))
@@ -577,8 +592,8 @@ expressom_report_settings <- function(
       return(.xp_note("No regulon data for ", tf, "."))
     }
 
-    n_act <- sum(as.character(regulon$Regulation) == "Activé (attendu)")
-    n_rep <- sum(as.character(regulon$Regulation) == "Réprimé (attendu)")
+    n_act <- sum(as.character(regulon$Regulation) == "Activated (expected)")
+    n_rep <- sum(as.character(regulon$Regulation) == "Repressed (expected)")
 
     htmltools::tagList(
       .xp_two_col(
@@ -587,6 +602,35 @@ expressom_report_settings <- function(
         if (!is.null(le)) {
           iplot_tf_leading_edge(le, res$dge$results, tf, test_type)
         }
+      ),
+      .xp_note(
+        htmltools::tags$strong("Volcano \u2014 how to read it. "),
+        "Only the direct targets of ", tf, " in the network (CollecTRI/DoRothEA) ",
+        "are plotted, coloured by whether their observed change matches the ",
+        "TF's known regulatory role (the network's 'mor' sign): ",
+        htmltools::tags$em("Activated (expected)"),
+        " = target goes up and the TF is an activator (mor > 0); ",
+        htmltools::tags$em("Repressed (expected)"),
+        " = target goes down and the TF is a repressor (mor < 0); ",
+        htmltools::tags$em("Other change"),
+        " = significant change opposite to the network's expectation; ",
+        htmltools::tags$em("Not significant"),
+        " = no significant change at the current cut-offs. A predominance of ",
+        "expected-direction points is coherent with a non-zero activity ",
+        "score for ", tf, "."
+      ),
+      .xp_note(
+        htmltools::tags$strong("Leading edge \u2014 how to read it. "),
+        "All genes are ranked by their signed statistic (Wald z-score, or the ",
+        "contrast statistic when the DGE test is LRT). The blue curve is a ",
+        "GSEA-style running enrichment score that rises each time a target ",
+        "of ", tf, " is encountered and falls otherwise; red tick marks ",
+        "show the position of each target in that ranking. A peak near the ",
+        "left (positive statistics) means the TF's targets are concentrated ",
+        "among upregulated genes \u2014 consistent with an activating role; ",
+        "a trough near the right means they are concentrated among ",
+        "downregulated genes \u2014 consistent with a repressing role. The ",
+        "dotted vertical line marks the rank of maximum |running ES|."
       ),
       .xp_note(sprintf(
         "%d targets matched in the DGE table, of which %d behave as expected ",
@@ -1041,7 +1085,7 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
       as.character(.xp_file_link(file.path(res$out_dir, p), res$out_dir, text = p)),
       character(1))
     htmltools::tagList(
-      .xp_note("Tous les fichiers produits dans le dossier de résultats."),
+      .xp_note("All files produced in the results folder."),
       itable(df, page_length = 25L, max_rows = st$table_rows,
              filename = "file_inventory", escape = FALSE)
     )

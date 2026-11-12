@@ -796,8 +796,8 @@ iplot_decouple_activity <- function(
 #' Interactive targeted volcano for one TF's regulon
 #'
 #' Points are colored by whether the gene behaves as predicted by the network
-#' (mor direction), exactly as the static PDF: "Activé (attendu)",
-#' "Réprimé (attendu)", "Autre variation", "Non significatif".
+#' (mor direction), exactly as the static PDF: "Activated (expected)",
+#' "Repressed (expected)", "Other change", "Not significant".
 #'
 #' @param regulon_df Regulon table (`target`, `log2FoldChange`, `padj`, `mor`,
 #'   `Regulation`) written by `.run_decouple_tf_regulon_plots()`.
@@ -817,13 +817,13 @@ iplot_tf_regulon_volcano <- function(
   d$.mor    <- .rep_num(d$mor)
 
   cols <- c(
-    "Non significatif"  = "#BDBDBD",
-    "Autre variation"   = "#ff7f00",
-    "Activé (attendu)"  = "#1f78b4",
-    "Réprimé (attendu)" = "#e31a1c"
+    "Not significant"      = "#BDBDBD",
+    "Other change"         = "#ff7f00",
+    "Activated (expected)" = "#1f78b4",
+    "Repressed (expected)" = "#e31a1c"
   )
-  ord <- c("Non significatif", "Autre variation",
-           "Activé (attendu)", "Réprimé (attendu)")
+  ord <- c("Not significant", "Other change",
+           "Activated (expected)", "Repressed (expected)")
 
   p <- plotly::plot_ly()
   for (cat in ord) {
@@ -835,8 +835,8 @@ iplot_tf_regulon_volcano <- function(
       name = paste0(cat, " (", nrow(dd), ")"),
       marker = list(
         color   = cols[[cat]],
-        size    = if (cat == "Non significatif") 6 else 9,
-        opacity = if (cat == "Non significatif") 0.55 else 0.9
+        size    = if (cat == "Not significant") 6 else 9,
+        opacity = if (cat == "Not significant") 0.55 else 0.9
       ),
       text = paste0(
         "<b>", dd$target, "</b><br>log2FC: ", signif(dd$.lfc, 3),
