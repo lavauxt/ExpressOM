@@ -21,23 +21,172 @@
 # iplot_tf_leading_edge() in mod_report_plots.R, and displayed per-resource /
 # per-TF in the "TF regulon plots" tab of the unified report.
 
+# =============================================================================
+# OmniPath / decoupleR network helpers
+# =============================================================================
+#
+# decoupleR fetches all three networks through OmnipathR. OmnipathR's own
+# design:
+#   * CollecTRI  -> falls back to a copy bundled with decoupleR when the API
+#                   is unreachable (may be older, but always returns data);
+#   * DoRothEA   -> same fallback behaviour;
+#   * PROGENy    -> has NO offline fallback; if OmniPath is down, get_progeny()
+#                   returns NULL and decoupleR's wrapper silently produces an
+#                   empty network. This is why PROGENy used to disappear from
+#                   the outputs with only vague warnings in the console.
+#
+# The helpers below:
+#   * configure OmnipathR once per session (retry count, timeout, quieter
+#     logging) so transient network hiccups do not abort the whole stage;
+#   * retry each network fetch with exponential back-off;
+#   * stop() with a clear, actionable message when PROGENy fails;
+#   * probe OmniPath once at the start of the stage and tell the user upfront
+#     which resources will fall back.
+
+#' Configure OmnipathR for robust operation
+#'
+#' Sets OmnipathR options once per R session: more retries, longer HTTP
+#' timeout, and quieter logging (this package reports fallbacks explicitly
+#' instead). Never overrides values the user has set themselves.
+#' @keywords internal
+.configure_decouple_omnipathr <- function() {
+  if (isTRUE(getOption("ExpressOM.omnipathr_configured"))) {
+    return(invisible(TRUE))
+  }
+  if (!requireNamespace("OmnipathR", quietly = TRUE)) {
+    return(invisible(FALSE))
+  }
+
+  defaults <- list(
+    omnipath.max_retries      = 3L,
+    omnipath.retry_in_seconds = 2L,
+    omnipath.log_level        = "error",
+    omnipath.print_messages   = FALSE
+  )
+  for (opt in names(defaults)) {
+    if (is.null(getOption(opt))) {
+      options(setNames(list(defaults[[opt]]), opt))
+    }
+  }
+
+  # Give OmnipathR at least 60 s to answer (some users lower R's default).
+  if (is.null(getOption("timeout")) || getOption("timeout") < 60) {
+    options(timeout = 60)
+  }
+
+  # logger (used by OmnipathR for the "[WARN] ..." lines) - best effort,
+  # harmless if logger is not installed.
+  if (requireNamespace("logger", quietly = TRUE)) {
+    try(logger::log_threshold(logger::ERROR, namespace = "OmnipathR"),
+        silent = TRUE)
+  }
+
+  options(ExpressOM.omnipathr_configured = TRUE)
+  invisible(TRUE)
+}
+
+#' Probe whether the OmniPath API is currently reachable
+#'
+#' Returns `list(available, n_resources, reason)`. `available = NA` when
+#' OmnipathR itself is not installed. This is a **network** probe: a working
+#' cache alone does not make it return `TRUE`, which is exactly the intent --
+#' the caller wants to know whether live data will be fetched.
+#' @keywords internal
+.decouple_omnipath_probe <- function(timeout = 15) {
+  .configure_decouple_omnipathr()
+  if (!requireNamespace("OmnipathR", quietly = TRUE)) {
+    return(list(available = NA, n_resources = NA_integer_,
+                reason = "OmnipathR not installed"))
+  }
+  old_to <- getOption("timeout")
+  on.exit(options(timeout = old_to), add = TRUE)
+  options(timeout = max(old_to, timeout))
+
+  tryCatch(
+    {
+      # Live HTTP call (do not pass cache = TRUE); this is the API index,
+      # not a resource payload.
+      res <- OmnipathR::omnipath_resources()
+      list(available = TRUE, n_resources = length(res), reason = NULL)
+    },
+    error = function(e) {
+      list(available = FALSE, n_resources = NA_integer_,
+           reason = conditionMessage(e))
+    }
+  )
+}
+
+#' Retry an expression N times with exponential back-off
+#' @keywords internal
+.decouple_retry <- function(fn, label = "fetch", attempts = 3L,
+                            base_sleep = 2) {
+  last_err <- NULL
+  for (i in seq_len(attempts)) {
+    result <- tryCatch(fn(), error = function(e) { last_err <<- e; NULL })
+    if (!is.null(result)) return(result)
+    if (i < attempts) {
+      message(
+        "   -> ", label, ": attempt ", i, "/", attempts, " failed",
+        if (!is.null(last_err)) paste0(" (", conditionMessage(last_err), ")") else "",
+        "; retrying in ", base_sleep * i, "s"
+      )
+      Sys.sleep(base_sleep * i)
+    }
+  }
+  message(
+    "   -> ", label, ": all ", attempts, " attempt(s) failed",
+    if (!is.null(last_err)) paste0(": ", conditionMessage(last_err)) else "."
+  )
+  NULL
+}
+
 #' Fetch a decoupleR network for one of the supported resources.
+#'
+#' Collectri and dorothea silently fall back to decoupleR's bundled static
+#' tables when OmniPath is unreachable (may be older). PROGENy has **no**
+#' offline fallback: if the fetch fails, this function raises an error so the
+#' caller can record a "failed" status and warn the user instead of quietly
+#' dropping the resource.
 #' @keywords internal
 .decouple_get_net <- function(resource, organism) {
   if (!requireNamespace("decoupleR", quietly = TRUE)) {
     stop("Package 'decoupleR' is required. Install with BiocManager::install('decoupleR').")
   }
+  .configure_decouple_omnipathr()
   org <- if (grepl("mus|mouse", organism, ignore.case = TRUE)) "mouse" else "human"
+
   net <- switch(
     resource,
     collectri = {
-      n <- decoupleR::get_collectri(organism = org, split_complexes = FALSE)
+      n <- .decouple_retry(
+        function() decoupleR::get_collectri(organism = org, split_complexes = FALSE),
+        label = "CollecTRI (OmniPath)"
+      )
+      if (is.null(n) || nrow(n) == 0L) {
+        stop(
+          "CollecTRI network unavailable: OmniPath could not be reached and ",
+          "decoupleR's bundled fallback also failed.",
+          call. = FALSE
+        )
+      }
       n <- as.data.frame(n)
       if (!"mor" %in% colnames(n)) n$mor <- 1
       n[, c("source", "target", "mor")]
     },
     progeny = {
-      n <- decoupleR::get_progeny(organism = org)
+      n <- .decouple_retry(
+        function() decoupleR::get_progeny(organism = org),
+        label = "PROGENy (OmniPath)"
+      )
+      if (is.null(n) || nrow(n) == 0L) {
+        stop(
+          "PROGENy network unavailable: OmniPath could not be reached and ",
+          "PROGENy ships NO offline fallback, so it must be fetched live.\n",
+          "   Fix network / proxy and call rerun_decouple_only() to redo ",
+          "only this stage.",
+          call. = FALSE
+        )
+      }
       n <- as.data.frame(n)
       data.frame(
         source = as.character(n$source),
@@ -47,7 +196,17 @@
       )
     },
     dorothea = {
-      n <- decoupleR::get_dorothea(organism = org, levels = c("A", "B", "C"))
+      n <- .decouple_retry(
+        function() decoupleR::get_dorothea(organism = org, levels = c("A", "B", "C")),
+        label = "DoRothEA (OmniPath)"
+      )
+      if (is.null(n) || nrow(n) == 0L) {
+        stop(
+          "DoRothEA network unavailable: OmniPath could not be reached and ",
+          "decoupleR's bundled fallback also failed.",
+          call. = FALSE
+        )
+      }
       n <- as.data.frame(n)
       if (!"mor" %in% colnames(n)) n$mor <- 1
       n$mor[n$mor == 0] <- 1
@@ -55,10 +214,35 @@
     },
     stop("Unknown decoupleR resource: ", resource, call. = FALSE)
   )
+
   net <- net[!is.na(net$mor) & net$mor != 0 &
              nzchar(net$source) & nzchar(net$target), , drop = FALSE]
   unique(net)
 }
+
+# =============================================================================
+# TF regulon plots: targeted volcano + leading edge, per significant source
+# =============================================================================
+#
+# Called from run_decouple_analysis() once per resource, AFTER the activity
+# table is written. For every source with p < padj_cutoff (top N by |score|):
+#
+#   * regulon_<TF>.csv       : matched targets + mor + padj + LFC + category
+#   * leading_edge_<TF>.csv  : rank + target + stat (sorted by rank)
+#   * tf_volcano_<TF>.pdf    : volcano limited to the TF's regulon
+#   * tf_leading_edge_<TF>.pdf : barcode plot over all genes ranked by stat
+#   * tf_regulon_summary.csv : per-source counts (targets / up / down / ns)
+#
+# The category assigned to each target follows the user's rule:
+#   mor > 0 & LFC >  lfc_cutoff & padj < padj_cutoff  -> "Activated (expected)"
+#   mor < 0 & LFC < -lfc_cutoff & padj < padj_cutoff  -> "Repressed (expected)"
+#   padj < padj_cutoff & |LFC| > lfc_cutoff           -> "Other change"
+#   else                                              -> "Not significant"
+#
+# Under test = "LRT", the DGE results table's `stat` column is the unsigned
+# OMNIBUS statistic; the signed contrast Wald statistic lives in
+# `contrast_stat` and is used for ranking instead (see run_decouple_analysis()
+# for the same fallback on the activity table side).
 
 #' Run decoupleR TF/pathway activity inference
 #'
@@ -77,7 +261,8 @@
 #' @param lfc_cutoff Absolute log2 fold-change floor used to categorize regulon
 #'   targets (activated/repressed/other) in the targeted volcano and the summary
 #'   table. Default 1.
-#' @return list(results = named list per resource, files = manifest)
+#' @return list(results = named list per resource, files = manifest,
+#'   network_status = data.frame of per-resource fetch status)
 #' @export
 run_decouple_analysis <- function(
   res_tbl,
@@ -98,6 +283,27 @@ run_decouple_analysis <- function(
   res_tbl <- as.data.frame(res_tbl)
   if (nrow(res_tbl) == 0L) return(NULL)
 
+  .configure_decouple_omnipathr()
+
+  # ---- Pre-flight network probe -------------------------------------------
+  probe <- .decouple_omnipath_probe()
+  network_available <- isTRUE(probe$available)
+  if (isFALSE(probe$available)) {
+    message(
+      "   -> [decoupleR] OmniPath is NOT reachable: ", probe$reason, "\n",
+      "      - collectri, dorothea: will use decoupleR's bundled static tables ",
+      "(may be older)\n",
+      "      - progeny:              will be skipped (no offline fallback exists)\n",
+      "      After fixing network/proxy, call rerun_decouple_only(out_dir) to ",
+      "redo only this stage."
+    )
+  } else if (isTRUE(probe$available)) {
+    message(
+      "   -> [decoupleR] OmniPath reachable (",
+      probe$n_resources, " resources)."
+    )
+  }
+
   # Resolve the score column ------------------------------------------------
   if (!stat_col %in% colnames(res_tbl)) {
     if (all(c("log2FoldChange", "padj") %in% colnames(res_tbl))) {
@@ -108,17 +314,7 @@ run_decouple_analysis <- function(
     }
   }
 
-  # ---- FIX: LRT fallback ----------------------------------------------------
-  # Under test = "LRT", run_deseq2_analysis() stores the OMNIBUS LRT
-  # statistic in `res_shrunken$stat`. That statistic is unsigned (a
-  # likelihood-ratio chi-square: always >= 0), so feeding it to decoupleR
-  # would silently kill all directional information: every TF / pathway
-  # would look "activated" (positive score) regardless of whether it is
-  # actually activated or repressed. The contrast-specific Wald statistic
-  # is stored in `contrast_stat`; use it whenever it is available.
-  #
-  # Wald runs (the default) are unaffected: test_type == "Wald", so the
-  # block is skipped.
+  # ---- FIX: LRT fallback --------------------------------------------------
   if (identical(stat_col, "stat") &&
       "test_type" %in% colnames(res_tbl) &&
       any(toupper(as.character(res_tbl$test_type)) == "LRT", na.rm = TRUE) &&
@@ -139,8 +335,6 @@ run_decouple_analysis <- function(
   d <- res_tbl[keep, c(gene_col, stat_col), drop = FALSE]
   if (nrow(d) == 0L) return(NULL)
 
-  # One row per symbol, keeping the most extreme |stat| (matches pipeline
-  # convention elsewhere: GSEA and ORA input use the same rule).
   d$.abs <- abs(d[[stat_col]])
   d <- d[order(-d$.abs), , drop = FALSE]
   d <- d[!duplicated(d[[gene_col]]), , drop = FALSE]
@@ -149,19 +343,33 @@ run_decouple_analysis <- function(
                 dimnames = list(as.character(d[[gene_col]]), comp_name))
 
   out <- list()
+  network_status_rows <- list()
+
   for (resource in resources) {
     message("   -> decoupleR / ", resource, " (", method, ")")
-    net <- tryCatch(.decouple_get_net(resource, organism),
-                    error = function(e) {
-                      message("      ", conditionMessage(e))
-                      NULL
-                    })
-    if (is.null(net) || nrow(net) == 0L) next
+    net <- tryCatch(
+      .decouple_get_net(resource, organism),
+      error = function(e) {
+        message("      ", conditionMessage(e))
+        NULL
+      }
+    )
+    if (is.null(net) || nrow(net) == 0L) {
+      network_status_rows[[resource]] <- data.frame(
+        resource = resource, status = "failed (network)",
+        n_edges = 0L, stringsAsFactors = FALSE
+      )
+      next
+    }
 
     net <- net[net$target %in% rownames(mat), , drop = FALSE]
     if (nrow(net) < min_size) {
       message("      ", resource, ": only ", nrow(net),
               " overlapping gene(s). Skipping.")
+      network_status_rows[[resource]] <- data.frame(
+        resource = resource, status = "skipped (insufficient overlap)",
+        n_edges = nrow(net), stringsAsFactors = FALSE
+      )
       next
     }
 
@@ -183,11 +391,32 @@ run_decouple_analysis <- function(
         NULL
       }
     )
-    if (is.null(act) || nrow(act) == 0L) next
+    if (is.null(act) || nrow(act) == 0L) {
+      network_status_rows[[resource]] <- data.frame(
+        resource = resource, status = "failed (decoupleR)",
+        n_edges = nrow(net), stringsAsFactors = FALSE
+      )
+      next
+    }
 
     act_df <- as.data.frame(act)
     act_df$resource   <- resource
     act_df$comparison <- comp_name
+
+    # Source used for the network: live vs static fallback
+    net_source_label <- if (
+      isFALSE(network_available) && resource %in% c("collectri", "dorothea")
+    ) {
+      "static fallback (OmniPath unreachable)"
+    } else {
+      "network (live)"
+    }
+    network_status_rows[[resource]] <- data.frame(
+      resource = resource, status = net_source_label,
+      n_edges = nrow(net), stringsAsFactors = FALSE
+    )
+    message("      ", resource, ": ", nrow(net), " network edge(s) [",
+            net_source_label, "]")
 
     dir_res <- safe_dir(file.path(out_dir, "DecoupleR", resource))
     utils::write.csv(
@@ -221,34 +450,40 @@ run_decouple_analysis <- function(
     )
   }
 
-  if (length(out) == 0L) return(NULL)
-  list(results = out,
-       files   = .out_manifest(out_dir, "DecoupleR"))
-}
+  # ---- Save per-resource network status ----------------------------------
+  # Written next to the DecoupleR/ tables (not under Log/) because it is a
+  # result: the report reads it to tell the user which resources were
+  # fetched live, which fell back to a static table, and which failed.
+  network_status <- if (length(network_status_rows)) {
+    do.call(rbind, network_status_rows)
+  } else {
+    data.frame(resource = character(), status = character(),
+               n_edges = integer(), stringsAsFactors = FALSE)
+  }
+  if (nrow(network_status)) {
+    utils::write.csv(
+      network_status,
+      file.path(out_dir, "DecoupleR",
+                paste0("decoupleR_network_status_", comp_name, ".csv")),
+      row.names = FALSE
+    )
+  }
 
-# =============================================================================
-# TF regulon plots: targeted volcano + leading edge, per significant source
-# =============================================================================
-#
-# Called from run_decouple_analysis() once per resource, AFTER the activity
-# table is written. For every source with p < padj_cutoff (top N by |score|):
-#
-#   * regulon_<TF>.csv       : matched targets + mor + padj + LFC + category
-#   * leading_edge_<TF>.csv  : rank + target + stat (sorted by rank)
-#   * tf_volcano_<TF>.pdf    : volcano limited to the TF's regulon
-#   * tf_leading_edge_<TF>.pdf : barcode plot over all genes ranked by stat
-#   * tf_regulon_summary.csv : per-source counts (targets / up / down / ns)
-#
-# The category assigned to each target follows the user's rule:
-#   mor > 0 & LFC >  lfc_cutoff & padj < padj_cutoff  -> "Activated (expected)"
-#   mor < 0 & LFC < -lfc_cutoff & padj < padj_cutoff  -> "Repressed (expected)"
-#   padj < padj_cutoff & |LFC| > lfc_cutoff           -> "Other change"
-#   else                                              -> "Not significant"
-#
-# Under test = "LRT", the DGE results table's `stat` column is the unsigned
-# OMNIBUS statistic; the signed contrast Wald statistic lives in
-# `contrast_stat` and is used for ranking instead (see run_decouple_analysis()
-# for the same fallback on the activity table side).
+  if (length(out) == 0L) {
+    message(
+      "   -> [decoupleR] no resource could be tested (all fetches failed ",
+      "or returned networks with too little overlap)."
+    )
+    return(list(results = NULL, files = .out_manifest(out_dir, "DecoupleR"),
+                network_status = network_status))
+  }
+
+  list(
+    results        = out,
+    files          = .out_manifest(out_dir, "DecoupleR"),
+    network_status = network_status
+  )
+}
 
 #' Build per-TF regulon plots for the significant sources of one resource
 #'
