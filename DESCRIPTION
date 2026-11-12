@@ -56,7 +56,8 @@ Imports:
     tidyverse,
     tximport,
     withr,
-    decoupleR
+    decoupleR,
+    OmnipathR
 Suggests:
     Biostrings,
     DRIMSeq,
