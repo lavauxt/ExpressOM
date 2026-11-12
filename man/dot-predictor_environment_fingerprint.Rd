@@ -11,22 +11,6 @@
 )
 }
 \description{
-Cheap hash of the tool / database inventory the isoform predictors depend
-on. Included in the checkpoint signatures of `.stage_isoform()` and
-`run_isoform_switch()`, so installing (or removing) a predictor or
-database invalidates the cached predictor / switch results -- otherwise a
-checkpoint saved when SignalP / cpat / hmmscan were missing keeps being
-reused forever, even after those tools have been installed.
-}
-\details{
-The output is stable when the environment is unchanged and different as
-soon as anything material changes:
-  * which predictor binaries are reachable on PATH / in `isoform_tools`
-    (cpat, signalp6, hmmscan, interproscan.sh, biolib, run_cpat.py);
-  * whether the Pfam-A.hmm database is present;
-  * which species' CPAT logit models are present.
-
-Implemented as a single WSL round-trip (~1-2s) so it is cheap enough to
-call from `targets` on every run.
+Fingerprint of the external predictor environment
 }
 \keyword{internal}

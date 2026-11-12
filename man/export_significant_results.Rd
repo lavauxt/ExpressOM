@@ -37,8 +37,8 @@ export_significant_results(
 
 \item{padj_cutoffs}{Optional numeric vector of extra adjusted p-value cutoffs (the app default is
 `c(0.01, 0.05)`). For each of them, and for `padj_cutoff`, a DEG list
-`DEgenes_pval_<cutoff>_<level>_vs_<base>.txt` is written, and the number of DEGs (total / up / down,
-with and without the log2FC filter) is summarised in `DEG_counts_<level>_vs_<base>.txt`.
+`DEgenes_pval_<cutoff>_<level>_vs_<base>.tsv` is written, and the number of DEGs (total / up / down,
+with and without the log2FC filter) is summarised in `DEG_counts_<level>_vs_<base>.tsv`.
 `NULL` (default here) writes only the list for `padj_cutoff`.}
 
 \item{lfc_cutoff}{Absolute log2 fold-change threshold for the `*_lfc` columns of the count table (default 1)}
@@ -47,5 +47,12 @@ with and without the log2FC filter) is summarised in `DEG_counts_<level>_vs_<bas
 List of processed dataframes (including `deg_counts`, NULL unless `padj_cutoffs` is given)
 }
 \description{
-Export Significant Results
+All result tables are written as TAB-separated `.tsv` files:
+\itemize{
+  \item `DESeq_Normalized_Counts_<level>_vs_<base>.tsv`
+  \item `DESeq_Raw_Counts_<level>_vs_<base>.tsv`
+  \item `DEgenes_raw_<level>_vs_<base>.tsv`
+  \item `DEgenes_pval_<cutoff>_<level>_vs_<base>.tsv`
+  \item `DEG_counts_<level>_vs_<base>.tsv` (when `padj_cutoffs` is given)
+}
 }

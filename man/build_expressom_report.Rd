@@ -17,7 +17,7 @@ build_expressom_report(
 \item{out_dir}{Output directory of [expressom()] (its `out_dir` argument).}
 
 \item{output_file}{Path of the HTML file to write. Default:
-`<out_dir>/Report/ExpressOM_report_<comparison>.html`.}
+`<out_dir>/ExpressOM_report_<comparison>.html`.}
 
 \item{comparison}{Comparison to report (`<level>_vs_<base>`); see
 [list_expressom_comparisons()]. `NULL` uses the most recent one.}
@@ -34,16 +34,18 @@ The path of the HTML report (invisibly).
 \description{
 Regroups every result of an ExpressOM run -- sample QC / PCA, differential
 expression (volcano, MA, heatmap, searchable tables), functional enrichment
-(ORA, GSEA, FGSEA, SPIA, transcription factors), isoform analysis (DTE, DTU,
-DEXSeq, isoform-switch plots), static figures and run logs -- in one
-interactive HTML file with plotly figures and DT tables in tabs. The
-report only reads what the pipeline already wrote; it never recomputes an
-analysis, so it can be rebuilt in seconds (for instance with other cut-offs).
+(ORA, GSEA, FGSEA, SPIA, transcription factors, decoupleR), isoform analysis
+(DTE, DTU, DEXSeq, isoform-switch plots), static figures and run logs -- in
+one interactive HTML file with plotly figures and DT tables in tabs.
 }
 \details{
 By default the report is rendered with `rmarkdown` + pandoc as a single
-self-contained `.html` file: every plotly/DT asset, every static figure and
-every table is inlined, so the file can be opened or emailed on its own.
+self-contained `.html` file written **at the root of `<out_dir>`** (i.e.
+`<out_dir>/ExpressOM_report_<comparison>.html`), so it sits right next to
+`Log/`, `Plots/`, `DE_raw_results/` and every other result folder, and the
+relative links it contains (`Log/…`, `Plots/…`, `DE_raw_results/…`) resolve
+without any further setup when the file is opened from its own directory.
+
 Pass `settings = expressom_report_settings(self_contained = FALSE)` for the
 legacy mode that writes a folder with `lib/` and `figures/` next to the
 HTML.

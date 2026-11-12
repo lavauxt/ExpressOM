@@ -17,42 +17,47 @@
   x <- gsub('"', '\\\"', x, fixed = TRUE)
   x <- gsub('`', '\\`', x, fixed = TRUE)
   x <- gsub("$", "\\$", x, fixed = TRUE)
-
   sprintf('"%s"', x)
 }
 
 .dq_home <- function(x) {
   x <- as.character(x)
-  if (
-    length(x) != 1L ||
-      !(identical(x, "$HOME") || startsWith(x, "$HOME/"))
-  ) {
+  if (length(x) != 1L || !(identical(x, "$HOME") || startsWith(x, "$HOME/"))) {
     return(.dq(x))
   }
   suffix <- substring(x, 6L)
-  if (startsWith(suffix, "/")) {
-    suffix <- substring(suffix, 2L)
-  }
-  # Split the intentional HOME expansion from the literal path suffix.
+  if (startsWith(suffix, "/")) suffix <- substring(suffix, 2L)
   paste0('"${HOME}"', if (nzchar(suffix)) paste0("/", .dq(suffix)) else "")
 }
 
 #' Resolve where WSL command logs are written when a caller doesn't specify
 #' log_dir explicitly.
 #'
-#' Overridable globally via options(expressom.wsl_log_dir = "/some/path") so
-#' a whole pipeline run can point every WSL command at one place; otherwise
-#' falls back to a fixed, discoverable folder so command logging is never
-#' silently dropped just because a caller left log_dir at its default.
+#' Priority:
+#'   1. `options(expressom.wsl_log_dir)` -- set by `.expressom_prepare()` to
+#'      `<out_dir>/Log/WSL`, so every WSL command a pipeline run issues lands
+#'      under the run's `Log/` folder next to SessionInfo.txt, Warnings.txt,
+#'      the DGE/isoform logs, etc.
+#'   2. `<getwd()>/expressom_wsl_logs` -- fallback when the installer
+#'      functions are called outside any pipeline run (e.g. a one-off
+#'      `install_wsl_isoform_tools()`).
 #' @keywords internal
 .default_wsl_log_dir <- function() {
-  getOption("expressom.wsl_log_dir", file.path(getwd(), "expressom_wsl_logs"))
+  opt <- getOption("expressom.wsl_log_dir")
+  if (!is.null(opt) && length(opt) == 1L && nzchar(opt)) {
+    if (!dir.exists(opt)) {
+      dir.create(opt, recursive = TRUE, showWarnings = FALSE)
+    }
+    return(opt)
+  }
+  d <- file.path(getwd(), "expressom_wsl_logs")
+  if (!dir.exists(d)) {
+    dir.create(d, recursive = TRUE, showWarnings = FALSE)
+  }
+  d
 }
 
 #' Persist an environment variable for later predictor runs
-#'
-#' Appends or replaces an `export VAR="value"` line in the dedicated env file
-#' sourced by `.wsl_exec_script()` on every invocation.
 #' @keywords internal
 .wsl_write_env_var <- function(
   var,
@@ -102,23 +107,15 @@
   ok <- isTRUE(status == 0L)
 
   if (ok) {
-    message(
-      "  -> Persisted ",
-      var,
-      " for future predictor runs (",
-      .ISOFORM_ENV_FILE,
-      ")"
-    )
+    message("  -> Persisted ", var, " for future predictor runs (",
+            .ISOFORM_ENV_FILE, ")")
   } else {
     message(
-      "  ! Could not persist ",
-      var,
-      " to ",
-      .ISOFORM_ENV_FILE,
-      " (non-fatal; export it manually inside the execution environment if predictors can't find it)"
+      "  ! Could not persist ", var, " to ", .ISOFORM_ENV_FILE,
+      " (non-fatal; export it manually inside the execution environment if ",
+      "predictors can't find it)"
     )
   }
-
   invisible(ok)
 }
 
@@ -159,46 +156,30 @@
     ignore_stderr = TRUE,
     log_dir = log_dir
   )
-
   csh <- trimws(csh[nzchar(trimws(csh))])
-
   if (length(csh) > 0) csh[1] else NULL
 }
 
 #' Convert a Windows file path to a WSL-compatible Unix path
 #' @keywords internal
 .to_wsl_path <- function(win_path, distro = "Ubuntu") {
-  if (.Platform$OS.type != "windows") {
-    return(win_path)
-  }
-  if (is.null(win_path) || !nzchar(trimws(as.character(win_path)))) {
-    return(win_path)
-  }
-
+  if (.Platform$OS.type != "windows") return(win_path)
+  if (is.null(win_path) || !nzchar(trimws(as.character(win_path)))) return(win_path)
   p <- normalizePath(win_path, winslash = "/", mustWork = FALSE)
 
   r <- tryCatch(
     suppressWarnings(
-      system2(
-        "wsl",
-        c("-d", distro, "wslpath", "-u", p),
-        stdout = TRUE,
-        stderr = FALSE,
-        timeout = 15
-      )
+      system2("wsl", c("-d", distro, "wslpath", "-u", p),
+              stdout = TRUE, stderr = FALSE, timeout = 15)
     ),
     error = function(e) character(0)
   )
 
   r <- trimws(r[nzchar(trimws(r))])
-  if (length(r) > 0) {
-    return(r[1])
-  }
-
+  if (length(r) > 0) return(r[1])
   if (grepl("^[A-Za-z]:/", p)) {
     return(paste0("/mnt/", tolower(substr(p, 1, 1)), substring(p, 3)))
   }
-
   p
 }
 
@@ -214,42 +195,23 @@
   if (!dir.exists(log_dir)) {
     dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
   }
-
   log_file <- file.path(log_dir, "wsl_commands.log")
   timestamp <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-
   entry <- c(
     paste0("[", timestamp, "]"),
     paste0("  CMD: ", cmd),
     paste0("  EXIT: ", exit_code)
   )
-
   if (!is.null(stdout) && length(stdout) > 0) {
     entry <- c(entry, paste0("  STDOUT: ", paste(stdout, collapse = "\n     ")))
   }
-
   if (!is.null(stderr) && length(stderr) > 0) {
     entry <- c(entry, paste0("  STDERR: ", paste(stderr, collapse = "\n     ")))
   }
-
   write(entry, file = log_file, append = TRUE)
 }
 
 #' Write bash commands to a temp script and execute via WSL or natively
-#'
-#' Every call is written to wsl_commands.log as it happens -- one entry per
-#' invocation, appended immediately after that command finishes -- regardless
-#' of what the caller passes for log_dir (see .default_wsl_log_dir()). Set
-#' verbose = FALSE to suppress the live console trace for callers (like
-#' run_tool() in mod_isoform_predictors.R) that already print their own
-#' equivalent summary; the file log is unaffected by verbose either way.
-#'
-#' `ignore_stderr` only controls whether a non-zero exit raises an R
-#' warning() -- it no longer hides the command's actual output. Previously,
-#' because ignore_stderr defaulted to TRUE and every "does this exist" probe
-#' hardcoded it to TRUE too, a genuine failure (as opposed to a routine
-#' "not found") printed nothing but an exit code: the one piece of text that
-#' would explain *why* was thrown away.
 #' @keywords internal
 .wsl_exec_script <- function(
   bash_body,
@@ -262,54 +224,38 @@
   log_dir = NULL,
   verbose = TRUE
 ) {
-  effective_log_dir <- if (!is.null(log_dir)) {
-    log_dir
-  } else {
-    .default_wsl_log_dir()
-  }
+  effective_log_dir <- if (!is.null(log_dir)) log_dir else .default_wsl_log_dir()
   cmd_preview <- paste(bash_body, collapse = "; ")
 
   if (isTRUE(verbose)) {
-    message(
-      "  [wsl] $ ",
-      if (nchar(cmd_preview) > 200) {
-        paste0(substr(cmd_preview, 1, 200), " ...")
-      } else {
-        cmd_preview
-      }
-    )
+    message("  [wsl] $ ",
+      if (nchar(cmd_preview) > 200) paste0(substr(cmd_preview, 1, 200), " ...")
+      else cmd_preview)
   }
 
   env_file_source <- sprintf(
     '[ -f %s ] && . %s 2>/dev/null || true',
-    .dq_home(.ISOFORM_ENV_FILE),
-    .dq_home(.ISOFORM_ENV_FILE)
+    .dq_home(.ISOFORM_ENV_FILE), .dq_home(.ISOFORM_ENV_FILE)
   )
-
   activate <- env_file_source
 
   if (!is.null(conda_sh) && nzchar(conda_sh)) {
     activate <- c(
       activate,
       sprintf('. %s 2>/dev/null || true', .dq(conda_sh)),
-      sprintf(
-        "conda activate %s 2>/dev/null || true",
-        shQuote(conda_env, type = "sh")
-      )
+      sprintf("conda activate %s 2>/dev/null || true",
+              shQuote(conda_env, type = "sh"))
     )
   }
 
   script <- c("#!/bin/bash", "set -e", activate, bash_body)
-
   tmp <- tempfile(fileext = ".sh")
   on.exit(unlink(tmp), add = TRUE)
-
   con <- file(tmp, "wb")
   writeLines(script, con, sep = "\n")
   close(con)
 
   via_wsl <- (.Platform$OS.type == "windows") && isTRUE(use_wsl)
-
   run_status <- 127L
   out <- character(0)
   missing_exe_msg <- NULL
@@ -319,9 +265,7 @@
       {
         o <- suppressWarnings(system2(cmd, args, stdout = TRUE, stderr = TRUE))
         st <- attr(o, "status")
-        if (is.null(st)) {
-          st <- 0L
-        }
+        if (is.null(st)) st <- 0L
         list(out = o, status = as.integer(st))
       },
       error = function(e) {
@@ -332,7 +276,6 @@
 
   if (via_wsl) {
     wsl_bin <- unname(Sys.which("wsl"))
-
     if (!nzchar(wsl_bin)) {
       missing_exe_msg <- paste0(
         "'wsl' executable not found on PATH. Install WSL (`wsl --install -d ",
@@ -342,18 +285,13 @@
     } else {
       wsl_sh <- .to_wsl_path(tmp, wsl_distro)
       args <- c("-d", wsl_distro, "bash", wsl_sh)
-
       res <- run_capture(wsl_bin, args)
       out <- res$out
       run_status <- res$status
-
-      if (!is.null(res$error)) {
-        missing_exe_msg <- res$error
-      }
+      if (!is.null(res$error)) missing_exe_msg <- res$error
     }
   } else {
     bash_bin <- unname(Sys.which("bash"))
-
     if (!nzchar(bash_bin)) {
       missing_exe_msg <- paste0(
         "'bash' executable not found on PATH. External predictor tools ",
@@ -364,10 +302,7 @@
       res <- run_capture(bash_bin, tmp)
       out <- res$out
       run_status <- res$status
-
-      if (!is.null(res$error)) {
-        missing_exe_msg <- res$error
-      }
+      if (!is.null(res$error)) missing_exe_msg <- res$error
     }
   }
 
@@ -377,25 +312,14 @@
     run_status <- 127L
   } else if (run_status != 0L) {
     if (!isTRUE(ignore_stderr)) {
-      warning(
-        "WSL/shell command exited with status ",
-        run_status,
-        call. = FALSE
-      )
+      warning("WSL/shell command exited with status ", run_status, call. = FALSE)
     }
-
     if (isTRUE(verbose) && length(out) > 0) {
       message("  [wsl] exit ", run_status, " -- output:")
       message(paste(utils::head(out, 30), collapse = "\n"))
-
       if (length(out) > 30) {
-        message(
-          "  ... (",
-          length(out) - 30,
-          " more lines in ",
-          file.path(effective_log_dir, "wsl_commands.log"),
-          ")"
-        )
+        message("  ... (", length(out) - 30, " more lines in ",
+                file.path(effective_log_dir, "wsl_commands.log"), ")")
       }
     }
   } else if (isTRUE(verbose)) {
@@ -412,12 +336,9 @@
 
   if (intern) {
     attr(out, "status") <- run_status
-    if (!is.null(missing_exe_msg)) {
-      attr(out, "error") <- missing_exe_msg
-    }
+    if (!is.null(missing_exe_msg)) attr(out, "error") <- missing_exe_msg
     return(out)
   }
-
   run_status
 }
 
@@ -432,10 +353,8 @@
   log_dir = NULL
 ) {
   status <- .wsl_exec_script(
-    bash_body = sprintf(
-      "command -v %s >/dev/null 2>&1",
-      shQuote(tool_name, type = "sh")
-    ),
+    bash_body = sprintf("command -v %s >/dev/null 2>&1",
+                        shQuote(tool_name, type = "sh")),
     wsl_distro = wsl_distro,
     use_wsl = use_wsl,
     conda_sh = conda_sh,
@@ -444,29 +363,10 @@
     ignore_stderr = TRUE,
     log_dir = log_dir
   )
-
   isTRUE(status == 0L)
 }
 
 #' Fingerprint of the external predictor environment
-#'
-#' Cheap hash of the tool / database inventory the isoform predictors depend
-#' on. Included in the checkpoint signatures of `.stage_isoform()` and
-#' `run_isoform_switch()`, so installing (or removing) a predictor or
-#' database invalidates the cached predictor / switch results -- otherwise a
-#' checkpoint saved when SignalP / cpat / hmmscan were missing keeps being
-#' reused forever, even after those tools have been installed.
-#'
-#' The output is stable when the environment is unchanged and different as
-#' soon as anything material changes:
-#'   * which predictor binaries are reachable on PATH / in `isoform_tools`
-#'     (cpat, signalp6, hmmscan, interproscan.sh, biolib, run_cpat.py);
-#'   * whether the Pfam-A.hmm database is present;
-#'   * which species' CPAT logit models are present.
-#'
-#' Implemented as a single WSL round-trip (~1-2s) so it is cheap enough to
-#' call from `targets` on every run.
-#'
 #' @keywords internal
 .predictor_environment_fingerprint <- function(
   wsl_distro = "Ubuntu",
@@ -482,8 +382,6 @@
     error = function(e) NULL
   )
 
-  # One shell script does all the checks; the previous per-tool approach
-  # made 10+ WSL round-trips, which is too slow to run on every tar_make().
   script <- c(
     'for t in cpat run_cpat.py signalp6 hmmscan interproscan.sh biolib; do',
     '  command -v "$t" >/dev/null 2>&1 && echo "TOOL:$t"',

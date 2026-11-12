@@ -13,7 +13,6 @@
 )
 }
 \description{
-Appends or replaces an `export VAR="value"` line in the dedicated env file
-sourced by `.wsl_exec_script()` on every invocation.
+Persist an environment variable for later predictor runs
 }
 \keyword{internal}

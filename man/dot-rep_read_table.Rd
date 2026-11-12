@@ -6,14 +6,6 @@
 \usage{
 .rep_read_table(path, max_rows = Inf)
 }
-\arguments{
-\item{path}{File path.}
-
-\item{max_rows}{Maximum number of rows to read (`Inf` = all).}
-}
-\value{
-A data.frame, or NULL if the file is missing, empty or unreadable.
-}
 \description{
 Read a delimited result table (TSV/CSV/TXT) tolerantly
 }

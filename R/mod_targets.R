@@ -11,6 +11,9 @@
 #    `padj_cutoff` / `deg_lfc_cutoff` ARE part of the `dge` group (they set the
 #    DESeq2 `alpha` and the DEG lists), so changing them re-runs the DESeq2
 #    stage and everything downstream of it -- but not the import or the EDA;
+#    `deg_lfc_cutoff` is also part of the `decouple` group, so the per-TF
+#    regulon plots (volcano / leading edge) use the same |log2FC| floor as
+#    the rest of the pipeline;
 #  * code changes are only tracked for the stage *wrapper* functions of
 #    mod_stages.R (they are copied into the targets environment, see
 #    .pipeline_env()). Targets does not follow the functions they call
@@ -175,11 +178,6 @@ expressom_params_from_run <- function(out_dir) {
 }
 
 # ---- which stage uses which parameter ----------------------------------------------------------------
-#
-# A stage only ever sees the parameters listed here (.stage_ctx() drops the
-# rest), so a change to any other parameter leaves its inputs -- and its cached
-# result -- untouched. The unit tests walk the code of every stage and fail if
-# it reads a parameter that is missing from its group.
 
 .stage_param_groups <- function() {
   common <- c("out_dir", "ensembl_package_name")
@@ -208,6 +206,16 @@ expressom_params_from_run <- function(out_dir) {
       "ora_min_genes", "ora_lfc_cutoff", "run_spia"
     ),
     fgsea = c(common, "gmt_file", "padj_cutoff", "gsea_metric", "test"),
+    decouple = c(
+      common, "level", "base", "padj_cutoff",
+      "run_decouple", "decouple_resources", "decouple_method",
+      "decouple_min_size",
+      # NEW: |log2FC| floor used by the per-TF regulon volcano and the
+      # "Activé / Réprimé / Autre" categorisation in tf_regulon_summary.csv.
+      # Adding it here means changing deg_lfc_cutoff invalidates the
+      # decouple stage and regenerates those plots with the new floor.
+      "deg_lfc_cutoff"
+    ),
     isoform = c(
       common, "data_dir", "sample_table", "count_type", "matrix_file",
       "subset_sample", "remove_sample", "custom_tx2gene", "custom_gene_map",
@@ -236,15 +244,16 @@ expressom_params_from_run <- function(out_dir) {
 # the import stage (comp_name) and needlessly re-import the counts.
 .stage_derived_values <- function() {
   list(
-    import = character(),
-    eda = c("main_condition", "model_eda"),
-    dge = character(),
+    import   = character(),
+    eda      = c("main_condition", "model_eda"),
+    dge      = character(),
     dge_plots = "main_condition",
     functional = character(),
-    fgsea = "comp_name",
-    isoform = "main_condition",
-    report = character(),
-    rdata = c("main_condition", "comp_name")
+    fgsea    = "comp_name",
+    decouple = "comp_name",
+    isoform  = "main_condition",
+    report   = character(),
+    rdata    = c("main_condition", "comp_name")
   )
 }
 
@@ -268,16 +277,17 @@ expressom_params_from_run <- function(out_dir) {
 expressom_pipeline_stages <- function() {
   data.frame(
     stage = c("setup", "import", "eda", "dge", "dge_plots", "functional",
-              "fgsea", "isoform", "report", "rdata"),
+              "fgsea", "decouple", "isoform", "report", "rdata"),
     label = c("Validate parameters", "Import counts", "EDA / PCA",
               "DESeq2 differential expression", "DGE figures",
-              "ORA / GSEA / SPIA", "FGSEA", "Isoforms (DTE / DTU / switch)",
+              "ORA / GSEA / SPIA", "FGSEA",
+              "TF activity (decoupleR)", "Isoforms (DTE / DTU / switch)",
               "Interactive report", "Save .RData"),
     target = c("setup", "import", "eda", "dge", "dge_plots", "functional",
-               "fgsea", "isoform", "report", "rdata"),
-    upstream = c("", "setup", "import", "import", "dge", "dge", "dge",
-                 "setup", "eda dge_plots functional fgsea isoform",
-                 "import dge functional isoform"),
+               "fgsea", "decouple", "isoform", "report", "rdata"),
+    upstream = c("", "setup", "import", "import", "dge", "dge", "dge", "dge",
+                 "setup", "eda dge_plots functional fgsea decouple isoform",
+                 "import dge functional decouple isoform"),
     stringsAsFactors = FALSE
   )
 }
@@ -287,9 +297,10 @@ expressom_pipeline_stages <- function() {
   full <- !isTRUE(p$eda_only) && !is.null(p$model) && !is.null(p$level) &&
     !is.null(p$base)
   list(
-    run_dge = full && isTRUE(p$run_dge),
-    run_isoform = full && isTRUE(p$run_isoform),
-    make_report = isTRUE(p$make_report)
+    run_dge      = full && isTRUE(p$run_dge),
+    run_decouple = full && isTRUE(p$run_dge) && isTRUE(p$run_decouple),
+    run_isoform  = full && isTRUE(p$run_isoform),
+    make_report  = isTRUE(p$make_report)
   )
 }
 
@@ -347,8 +358,8 @@ expressom_pipeline_stages <- function() {
     ".stage_ctx", ".fp_counts", ".fp_labels", ".fp_isoform", ".pipeline_setup",
     ".predictor_environment_fingerprint",
     ".stage_import", ".stage_eda", ".stage_dge", ".stage_dge_plots",
-    ".stage_functional", ".stage_fgsea", ".stage_isoform", ".stage_report",
-    ".stage_save_rdata"
+    ".stage_functional", ".stage_fgsea", ".stage_decouple",
+    ".stage_isoform", ".stage_report", ".stage_save_rdata"
   )
 }
 
@@ -371,13 +382,13 @@ expressom_pipeline_stages <- function() {
 #' yourself -- use [run_expressom_targets()] or [run_expressom_app()].
 #'
 #' The stages form a DAG: `setup` -> `import` -> `eda` / `dge` -> `dge_plots`,
-#' `functional`, `fgsea`; `isoform` is independent of `dge`; `report` and
-#' `rdata` close the graph. Each stage target depends on a small context target
-#' (`ctx_<stage>`) holding only the parameters it uses, so a parameter that
-#' concerns one stage leaves the cached results of the others untouched. When
-#' `run_predictors = TRUE`, the `isoform` target additionally depends on
-#' `fp_predictors` (the external predictor environment fingerprint), so it
-#' re-runs when a predictor tool or database is installed or removed even
+#' `functional`, `fgsea`, `decouple`; `isoform` is independent of `dge`;
+#' `report` and `rdata` close the graph. Each stage target depends on a small
+#' context target (`ctx_<stage>`) holding only the parameters it uses, so a
+#' parameter that concerns one stage leaves the cached results of the others
+#' untouched. When `run_predictors = TRUE`, the `isoform` target additionally
+#' depends on `fp_predictors` (the external predictor environment fingerprint),
+#' so it re-runs when a predictor tool or database is installed or removed even
 #' though no parameter or input file changed.
 #'
 #' @param params_file Path to the `params.rds` written by
@@ -444,6 +455,15 @@ expressom_pipeline <- function(params_file, overrides = list()) {
     manifests <- c(manifests, "m_dge", "m_dge_plots", "m_functional", "m_fgsea")
   }
 
+  if (isTRUE(flags$run_decouple)) {
+    out <- c(out, list(
+      ctx_target("decouple"),
+      tgt("decouple", quote(.stage_decouple(ctx_decouple, dge))),
+      tgt("m_decouple", quote(decouple$files))
+    ))
+    manifests <- c(manifests, "m_decouple")
+  }
+
   if (flags$run_isoform) {
     isoform_deps <- list(
       tgt("fp_isoform", quote(.fp_isoform(params)), cue = always),
@@ -506,8 +526,10 @@ expressom_pipeline <- function(params_file, overrides = list()) {
     arg <- function(target, present) if (present) as.name(target) else quote(NULL)
     rdata_cmd <- call(
       ".stage_save_rdata", quote(ctx_rdata), quote(import),
-      arg("dge", flags$run_dge), arg("functional", flags$run_dge),
-      arg("isoform", flags$run_isoform)
+      arg("dge",      flags$run_dge),
+      arg("functional", flags$run_dge),
+      arg("isoform",  flags$run_isoform),
+      arg("decouple", flags$run_decouple)
     )
     out <- c(out, list(
       ctx_target("rdata"),
@@ -658,7 +680,6 @@ run_expressom_targets <- function(
   }
   args <- c(args, list(...))
 
-  # tar_make() reads `_targets.R` from the script's own directory
   # A stage that stops the pipeline (error = "stop") makes tar_make() throw --
   # but the stages that completed BEFORE it are up to date in the store. Record
   # their parameter hashes either way, otherwise the app keeps flagging them
@@ -784,9 +805,10 @@ expressom_stage_status <- function(params = NULL, dir, running = NULL) {
   # stages that do not exist for these parameters
   exists <- stats::setNames(rep(TRUE, nrow(stages)), stages$stage)
   exists[c("dge", "dge_plots", "functional", "fgsea")] <- flags$run_dge
-  exists["isoform"] <- flags$run_isoform
-  exists["report"] <- flags$make_report
-  exists["rdata"] <- flags$run_dge || flags$run_isoform
+  exists["decouple"] <- flags$run_decouple
+  exists["isoform"]  <- flags$run_isoform
+  exists["report"]   <- flags$make_report
+  exists["rdata"]    <- flags$run_dge || flags$run_isoform
   stages <- stages[exists[stages$stage], , drop = FALSE]
 
   last <- .read_rds_safe(file.path(dir, "stage_hashes.rds"), default = list())

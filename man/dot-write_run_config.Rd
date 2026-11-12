@@ -6,17 +6,7 @@
 \usage{
 .write_run_config(out_dir, params)
 }
-\arguments{
-\item{out_dir}{Output directory of the run.}
-
-\item{params}{Named list of the arguments of [expressom()].}
-}
-\value{
-The path of the JSON file (invisibly).
-}
 \description{
-Called by [expressom()] and by the `targets` pipeline. The snapshot lets the
-report reproduce the colours/cut-offs of the PDF figures and lets the Shiny
-app pre-fill its parameter panel from a previous run.
+Write the run-configuration snapshot read back by the report and the app
 }
 \keyword{internal}

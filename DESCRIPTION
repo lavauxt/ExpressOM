@@ -55,7 +55,8 @@ Imports:
     tidyr,
     tidyverse,
     tximport,
-    withr
+    withr,
+    decoupleR
 Suggests:
     Biostrings,
     DRIMSeq,

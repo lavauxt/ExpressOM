@@ -12,7 +12,7 @@ expressom_report_tabs(res, settings = expressom_report_settings())
 \item{settings}{A list from [expressom_report_settings()].}
 }
 \value{
-A list of nodes (see the file header of `mod_report_tabs.R`).
+A list of nodes.
 }
 \description{
 Build the tab tree of the report / Shiny viewer

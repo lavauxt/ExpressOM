@@ -14,23 +14,6 @@ iplot_pca(
   title = NULL
 )
 }
-\arguments{
-\item{scores}{PCA score table (`sample_label`, grouping columns, `PC1..PCn`).}
-
-\item{variance}{Named numeric vector of percent variance per PC (or NULL).}
-
-\item{x, y}{Principal components to plot.}
-
-\item{group_col}{Column used to colour the samples (`NA` = single colour).}
-
-\item{group_colors}{Named colour vector (values of `group_col`); missing
-groups get a colour-blind friendly palette.}
-
-\item{title}{Plot title.}
-}
-\value{
-A plotly htmlwidget.
-}
 \description{
 Interactive PCA
 }

@@ -6,11 +6,6 @@
 \usage{
 iplot_pvalue_hist(p, title = "p-value distribution")
 }
-\arguments{
-\item{p}{Numeric vector of p-values.}
-
-\item{title}{Plot title.}
-}
 \description{
 Interactive p-value histogram
 }

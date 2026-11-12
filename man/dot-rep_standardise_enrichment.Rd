@@ -6,18 +6,7 @@
 \usage{
 .rep_standardise_enrichment(df, kind = "ora")
 }
-\arguments{
-\item{df}{An enrichment result table.}
-
-\item{kind}{One of "ora", "gsea", "spia", "tf".}
-}
-\value{
-A data.frame with columns `term`, `padj`, `size` and `score`
-  (NES / tA / Combined score, NA when the method has none), or NULL when
-  the table has no recognisable term / p-value columns.
-}
 \description{
-Maps the column names of clusterProfiler/DOSE (ORA, GSEA), fgsea, SPIA and
-EnrichR tables to a common `term / padj / size / score / direction` layout.
+Standardise an enrichment table for plotting
 }
 \keyword{internal}

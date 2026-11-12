@@ -8,9 +8,13 @@ log_dir explicitly.}
 .default_wsl_log_dir()
 }
 \description{
-Overridable globally via options(expressom.wsl_log_dir = "/some/path") so
-a whole pipeline run can point every WSL command at one place; otherwise
-falls back to a fixed, discoverable folder so command logging is never
-silently dropped just because a caller left log_dir at its default.
+Priority:
+  1. `options(expressom.wsl_log_dir)` -- set by `.expressom_prepare()` to
+     `<out_dir>/Log/WSL`, so every WSL command a pipeline run issues lands
+     under the run's `Log/` folder next to SessionInfo.txt, Warnings.txt,
+     the DGE/isoform logs, etc.
+  2. `<getwd()>/expressom_wsl_logs` -- fallback when the installer
+     functions are called outside any pipeline run (e.g. a one-off
+     `install_wsl_isoform_tools()`).
 }
 \keyword{internal}

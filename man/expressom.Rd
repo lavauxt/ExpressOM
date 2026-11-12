@@ -61,6 +61,10 @@ expressom(
   isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
   plot_topology = TRUE,
   run_spia = FALSE,
+  run_decouple = TRUE,
+  decouple_resources = c("collectri", "progeny", "dorothea"),
+  decouple_method = "ulm",
+  decouple_min_size = 5,
   sample_labels = NULL,
   pca_colors = c(level = "red2", base = "royalblue"),
   volcano_colors = c(up = "red2", down = "royalblue", ns = "grey"),
@@ -126,6 +130,10 @@ run_bulk_pipeline(
   isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
   plot_topology = TRUE,
   run_spia = FALSE,
+  run_decouple = TRUE,
+  decouple_resources = c("collectri", "progeny", "dorothea"),
+  decouple_method = "ulm",
+  decouple_min_size = 5,
   sample_labels = NULL,
   pca_colors = c(level = "red2", base = "royalblue"),
   volcano_colors = c(up = "red2", down = "royalblue", ns = "grey"),
@@ -199,8 +207,7 @@ uniformly to GO/Reactome/DO ORA input. `NULL` (default) applies none.}
 
 \item{gsea_metric}{Metric to rank genes for GSEA ("stat", "signed_pval", or "log2FoldChange")}
 
-\item{nBest}{Deprecated and ignored. It only controlled the RegionReport
-report, which was replaced by the unified interactive report.}
+\item{nBest}{Deprecated and ignored.}
 
 \item{zscore_genes}{Optional character vector of gene names for targeted Z-score expression plotting}
 
@@ -250,43 +257,36 @@ Default TRUE.}
 
 \item{isoform_test_engine}{Which DTU test engine to use in IsoformSwitchAnalyzeR}
 
-\item{plot_topology}{Logical: include the topology (DeepTMHMM) track in switch plots.
-Set FALSE to silence "Omitting topology visualization..." when DeepTMHMM hasn't been run.}
+\item{plot_topology}{Logical: include the topology (DeepTMHMM) track in switch plots.}
 
-\item{run_spia}{Logical: also run SPIA (pathway impact analysis). Off by default --
-its bootstrap permutation testing is slow and less commonly needed than GSEA/ORA.}
+\item{run_spia}{Logical: also run SPIA (pathway impact analysis). Off by default.}
 
-\item{sample_labels}{Optional relabelling of the samples printed on the PCA plots: a named
-character vector (names = sample IDs as in the sample table, values = new labels), a
-data.frame, or the path to a CSV/TSV file with a sample-ID column and a label column
-(headers such as `sample`/`sample_id` and `label`/`new_label` are recognised, otherwise the
-first two columns are used). Samples without an entry keep their name. Default NULL.}
+\item{run_decouple}{Logical: run decoupleR TF/pathway activity inference on
+the gene-level results (CollecTRI + PROGENy + DoRothEA). Default TRUE.}
 
-\item{pca_colors}{Named vector `c(level = ..., base = ...)` with the PCA colours of the `level`
-and `base` groups. Default `c(level = "red2", base = "royalblue")`; either name may be omitted.}
+\item{decouple_resources}{decoupleR resources to run; any of `"collectri"`,
+`"progeny"`, `"dorothea"`. Default: all three.}
 
-\item{volcano_colors}{Named vector with the volcano colours of `up`, `down` and `ns` (not
-significant) genes. Default `c(up = "red2", down = "royalblue", ns = "grey")`.}
+\item{decouple_method}{decoupleR statistical method: `"ulm"` (default),
+`"mlm"`, or `"wsum"`.}
 
-\item{deg_padj_cutoffs}{Numeric vector of adjusted p-value cutoffs for which the number of DEGs
-(total / up / down, with and without the log2FC filter) is saved to
-`DE_raw_results/DEG_counts_<level>_vs_<base>.txt`, together with one DEG list per cutoff
-(`DEgenes_pval_<cutoff>_<level>_vs_<base>.txt`). `padj_cutoff` is always included.
-Default `c(0.01, 0.05)`; `NULL` writes only the list for `padj_cutoff`.}
+\item{decouple_min_size}{Minimum number of target genes a source must have
+to be tested. Default 5.}
 
-\item{deg_lfc_cutoff}{Absolute log2 fold-change threshold used by the volcano plot (lines,
-colouring and the up/down counts in its caption) and by the DEG count table. Default 1.}
+\item{sample_labels}{Optional relabelling of the samples printed on the PCA plots.}
 
-\item{make_report}{Logical: build the unified interactive HTML report in
-`<out_dir>/Report/` once the analyses are done (default `TRUE`). It needs
-plotly, DT, rmarkdown and Pandoc; if they are missing the analysis still
-completes and a warning explains how to build the report later with
-[build_expressom_report()]. When `FALSE`, the legacy stand-alone
-`DTU_DTE_report.html` of the isoform module is rendered instead.}
+\item{pca_colors}{Named vector `c(level = ..., base = ...)` with the PCA colours.}
+
+\item{volcano_colors}{Named vector with the volcano colours of `up`, `down` and `ns`.}
+
+\item{deg_padj_cutoffs}{Numeric vector of adjusted p-value cutoffs.}
+
+\item{deg_lfc_cutoff}{Absolute log2 fold-change threshold.}
+
+\item{make_report}{Logical: build the unified interactive HTML report.}
 
 \item{report_settings}{Optional named list overriding defaults of
-[expressom_report_settings()] (e.g. `list(title = "My study",
-highlight_genes = c("TP53", "MYC"))`).}
+[expressom_report_settings()].}
 }
 \value{
 NULL invisibly

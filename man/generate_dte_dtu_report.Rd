@@ -34,9 +34,5 @@ generate_dte_dtu_report(
 report is enabled (`make_report = TRUE`).}
 }
 \description{
-Writes the annotated DTE / DTU / DEXSeq tables, the PDF + PNG plots, the plot
-manifest and the methods notes under `<out_dir>/IsoformSwitch/DTU_DTE_report/`.
-These files are what the isoform tab of the unified report
-([build_expressom_report()]) displays. The legacy stand-alone
-`DTU_DTE_report.html` is only rendered when `render_html = TRUE`.
+Generate the DTE/DTU tables and plots (and, optionally, a stand-alone HTML report)
 }

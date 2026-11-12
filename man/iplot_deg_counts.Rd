@@ -11,16 +11,6 @@ iplot_deg_counts(
   use_lfc = TRUE
 )
 }
-\arguments{
-\item{deg_counts}{Table written by `export_significant_results()`
-(`DEG_counts_<comparison>.txt`).}
-
-\item{colors}{Named vector with `up` / `down` colours.}
-
-\item{test_type}{"Wald" or "LRT".}
-
-\item{use_lfc}{Count genes passing the log2FC filter (default) or not.}
-}
 \description{
 Interactive DEG-count bar chart
 }

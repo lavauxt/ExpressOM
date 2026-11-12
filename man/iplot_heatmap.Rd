@@ -12,17 +12,6 @@ iplot_heatmap(
   title = NULL
 )
 }
-\arguments{
-\item{mat}{Matrix of normalised counts (genes x samples).}
-
-\item{groups}{Optional group of each column (used to order and label samples).}
-
-\item{colors}{Named vector with `up` / `down` colours for the diverging scale.}
-
-\item{max_genes}{Number of genes shown.}
-
-\item{title}{Plot title.}
-}
 \description{
 Interactive heatmap of normalised counts (row z-scores)
 }

@@ -6,13 +6,6 @@
 \usage{
 iplot_dtu(dtu, top_n = 30L, padj_cutoff = 0.05)
 }
-\arguments{
-\item{dtu}{DTU result table (annotated CSV of the isoform report).}
-
-\item{top_n}{Number of features shown.}
-
-\item{padj_cutoff}{Adjusted p-value cut-off (dotted line).}
-}
 \description{
 Interactive DTU bar chart: strongest differential transcript usage features
 }

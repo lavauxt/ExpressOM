@@ -1,18 +1,4 @@
 # mod_shiny.R -- the ExpressOM Shiny application.
-#
-# One app, three jobs:
-#   * Pipeline : edit the parameters, see which stages are out of date, launch
-#                the `targets` pipeline in a background R process (live log,
-#                cancel, per-stage force re-run);
-#   * Results  : the same tab tree as the HTML report, rendered live
-#                (plotly / DT) from the files the pipeline wrote -- no analysis
-#                is recomputed to look at results;
-#   * Report   : rebuild / preview / download the self-contained HTML report.
-#
-# "Same UI, precomputed backend" (ShinyCell2, SCHNAPPs-lite): the analyses are
-# the targets stages, the app only orchestrates them and reads their outputs.
-# The app is split into modules (parameters, pipeline, results, report) so each
-# can be tested with shiny::testServer().
 
 # ---- parameter panel -----------------------------------------------------------------------------------
 
@@ -20,8 +6,6 @@
   list(name = name, label = label, type = type, group = group, choices = choices, help = help)
 }
 
-# The parameters exposed as widgets; every other argument of expressom() can
-# still be set through the "other parameters" JSON box.
 .app_param_spec <- function() {
   list(
     .app_spec("data_dir", "Quantification directory", "text", "Input", help = "Folder with one sub-folder per sample (quant.sf, abundance.tsv, ...)."),
@@ -57,6 +41,9 @@
     .app_spec("ora_lfc_cutoff", "ORA |log2FC| floor", "number", "Functional analysis"),
     .app_spec("ora_min_genes", "ORA minimum genes", "number", "Functional analysis"),
     .app_spec("run_spia", "SPIA pathway impact (slow)", "check", "Functional analysis"),
+    .app_spec("run_decouple", "decoupleR TF / pathway activity", "check", "Functional analysis"),
+    .app_spec("decouple_method", "decoupleR method", "select", "Functional analysis", c("ulm", "mlm", "wsum")),
+    .app_spec("decouple_min_size", "decoupleR minimum targets", "number", "Functional analysis"),
 
     .app_spec("run_isoform", "Isoform analysis (DTE / DTU / switches)", "check", "Isoforms"),
     .app_spec("isoform_test_engine", "DTU engine", "select", "Isoforms", c("DEXSeq", "DRIMSeq", "satuRn")),
@@ -70,7 +57,6 @@
   )
 }
 
-# widget value <- parameter value
 .app_to_input <- function(spec, value) {
   switch(
     spec$type,
@@ -82,11 +68,8 @@
   )
 }
 
-# parameter value <- widget value (`default` when the widget does not exist yet)
 .app_from_input <- function(spec, x, default) {
-  if (is.null(x)) {
-    return(default)
-  }
+  if (is.null(x)) return(default)
   switch(
     spec$type,
     text = {
@@ -141,9 +124,7 @@
 
 .app_parse_extra <- function(text) {
   text <- trimws(text %||% "")
-  if (!nzchar(text)) {
-    return(list())
-  }
+  if (!nzchar(text)) return(list())
   out <- tryCatch(
     jsonlite::fromJSON(text, simplifyVector = TRUE),
     error = function(e) {
@@ -156,7 +137,6 @@
   out
 }
 
-# Assemble a parameter list from the widget values (prefix `p_` removed).
 .app_build_params <- function(values, base, extra = "", spec = .app_param_spec()) {
   p <- base
   for (s in spec) {
@@ -183,7 +163,6 @@
   .absolutize_paths(p)
 }
 
-# Problems that would make the run fail at once (checked before launching).
 .app_validate_params <- function(p) {
   bad <- character()
   need <- function(nm, label = nm) {
@@ -225,17 +204,11 @@
   bad
 }
 
-# Parameters saved for an output directory: the exact set the pipeline last
-# ran with, otherwise the snapshot written by expressom().
 .app_params_for_dir <- function(out_dir) {
-  if (is.null(out_dir) || !nzchar(out_dir)) {
-    return(NULL)
-  }
+  if (is.null(out_dir) || !nzchar(out_dir)) return(NULL)
   pf <- file.path(expressom_targets_dir(out_dir), "params.rds")
   saved <- .read_rds_safe(pf)
-  if (is.list(saved)) {
-    return(saved)
-  }
+  if (is.list(saved)) return(saved)
   tryCatch(expressom_params_from_run(out_dir), error = function(e) NULL)
 }
 
@@ -349,18 +322,12 @@
   )
 }
 
-# Returns list(params = reactive, reload = function(p)).
 .app_params_server <- function(id, init) {
   shiny::moduleServer(id, function(input, output, session) {
     spec <- .app_param_spec()
     base <- shiny::reactiveVal(init)
     loaded_msg <- shiny::reactiveVal("")
 
-    # Read each input by name. reactiveValuesToList(input) would also depend on
-    # the *set* of input keys, which grows whenever any output is rendered
-    # (shiny adds a `.clientdata_output_*_hidden` key per output): re-rendering
-    # the results tabs would then invalidate the parameters, which reload the
-    # results, which re-render the tabs...
     params <- shiny::reactive({
       vals <- list()
       for (s in spec) {
@@ -420,7 +387,7 @@
   })
 }
 
-# ---- pipeline tab ----------------------------------------------------------------------------------------------------
+# ---- pipeline tab -------------------------------------------------------------------------------------
 
 .app_default_runner <- function(params, dir, stages, force) {
   if (length(force)) {
@@ -429,7 +396,6 @@
   status <- ExpressOM::run_expressom_targets(
     params, dir = dir, stages = stages, callr = FALSE, reporter = "verbose"
   )
-  # labels of the stages that failed without stopping the pipeline
   as.character(status$label[status$state == "errored"])
 }
 
@@ -505,9 +471,6 @@
   )
 }
 
-# Returns list(version = reactive, running = reactive, status = reactive).
-# `runner` is the function executed in the background R process
-# (function(params, dir, stages, force)); the default runs the targets pipeline.
 .app_pipeline_server <- function(id, params, runner = NULL, poll_ms = 1000L) {
   runner <- runner %||% .app_default_runner
   shiny::moduleServer(id, function(input, output, session) {
@@ -547,7 +510,6 @@
       }
     }
 
-    # parameters edited / run finished -> recompute which stages are stale
     shiny::observe({
       params_ok()
       version()
@@ -694,10 +656,8 @@
   })
 }
 
-# ---- results tab -------------------------------------------------------------------------------------------------
+# ---- results tab --------------------------------------------------------------------------------------
 
-# Turn the tab tree into nested shiny tabsets. Leaves become uiOutput()
-# placeholders, rendered lazily (shiny skips outputs of hidden tabs).
 .app_tree_ui <- function(nodes, prefix, ns = shiny::NS(NULL)) {
   leaves <- list()
   n <- 0L
@@ -761,8 +721,6 @@
   )
 }
 
-# out_dir: reactive character; version: reactive integer bumped after each run.
-# Returns list(comparison = reactive, results = reactive).
 .app_results_server <- function(id, out_dir, version = function() 0L) {
   shiny::moduleServer(id, function(input, output, session) {
     ns <- session$ns
@@ -788,7 +746,7 @@
       cmp <- comparisons()
       sel <- input$comparison
       if (length(cmp) && !(isTRUE(nzchar(sel)) && sel %in% cmp)) {
-        shiny::req(FALSE) # wait for the selector to be filled in
+        shiny::req(FALSE)
       }
       if (length(cmp)) sel else NULL
     })
@@ -846,21 +804,19 @@
   })
 }
 
-# ---- report tab ------------------------------------------------------------------------------------------------------
+# ---- report tab -------------------------------------------------------------------------------------
 
+# The report now lives at the ROOT of out_dir (ExpressOM_report_*.html), not
+# under Report/. This finds the most recent one, optionally filtered by
+# comparison.
 .app_latest_report <- function(out_dir, comparison = NULL) {
-  if (is.null(out_dir) || !dir.exists(file.path(out_dir, "Report"))) {
-    return(NULL)
-  }
-  files <- list.files(file.path(out_dir, "Report"), pattern = "\\.html$", full.names = TRUE)
-  if (!length(files)) {
-    return(NULL)
-  }
+  if (is.null(out_dir) || !dir.exists(out_dir)) return(NULL)
+  files <- list.files(out_dir, pattern = "^ExpressOM_report.*\\.html$",
+                      full.names = TRUE)
+  if (!length(files)) return(NULL)
   if (!is.null(comparison)) {
     mine <- files[grepl(comparison, basename(files), fixed = TRUE)]
-    if (length(mine)) {
-      files <- mine
-    }
+    if (length(mine)) files <- mine
   }
   files[which.max(file.mtime(files))]
 }
@@ -877,7 +833,7 @@
     ),
     tg$p(
       class = "xp-note",
-      "The report is a single self-contained HTML file. Rebuilding only re-reads the results already on disk (title, point limits... are set in the 'Report' section of the parameters); it never re-runs an analysis."
+      "The report is a single self-contained HTML file written at the root of the output directory. Rebuilding only re-reads the results already on disk; it never re-runs an analysis."
     ),
     shiny::uiOutput(ns("frame"))
   )
@@ -973,7 +929,7 @@
   })
 }
 
-# ---- the app --------------------------------------------------------------------------------------------------------------
+# ---- the app ----------------------------------------------------------------------------------------
 
 .app_css <- function() {
   paste0(
@@ -1008,6 +964,7 @@ table.xp-stages td { padding:5px 10px; border-bottom:1px solid #e4ebf1; }
 .xp-viewer-bar .form-group { margin-bottom: 4px; }
 .xp-leaf { min-height: 120px; }
 iframe.xp-frame { width:100%; height: 82vh; border: 1px solid #d9e2ec; border-radius: 8px; }
+a.xp-file-link { color: var(--xp-accent); text-decoration: underline; word-break: break-all; }
 "
   )
 }
@@ -1056,8 +1013,6 @@ expressom_app <- function(out_dir = NULL, params = NULL, runner = NULL, poll_ms 
   server <- function(input, output, session) {
     pr <- .app_params_server("params", init)
     pl <- .app_pipeline_server("pipe", pr$params, runner = runner, poll_ms = poll_ms)
-    # a reactiveVal only notifies when the folder really changes, so editing
-    # any other parameter does not reload the results
     out_dir_v <- shiny::reactiveVal(init$out_dir)
     shiny::observe({
       p <- pr$params()
@@ -1093,7 +1048,7 @@ expressom_app <- function(out_dir = NULL, params = NULL, runner = NULL, poll_ms 
 #' @export
 #' @examples
 #' \dontrun{
-#' run_expressom_app("results")   # explore / re-run an existing run
+#' run_expressom_app("results")
 #' run_expressom_app(params = list(data_dir = "data", sample_table = "samples.csv",
 #'                                 out_dir = "results", level = "treated", base = "control"))
 #' }

@@ -66,43 +66,31 @@
 #'   before `run_isoform_switch()`. See `run_isoform_functional_analysis()`.
 #'   Default TRUE.
 #' @param isoform_plot_top_n Number of top isoform switches to render automatically
-#' @param nBest Deprecated and ignored. It only controlled the RegionReport
-#'   report, which was replaced by the unified interactive report.
+#' @param nBest Deprecated and ignored.
 #' @param eda_only Logical: if TRUE, run only import + EDA then stop
 #' @param group_col Optional column name in metadata for colouring PCA/heatmap when no model is given
 #' @param custom_transcript_id_map Path to a TSV/CSV with columns `count_id` and `fasta_id`
 #' @param skip_fasta_filter Logical: if TRUE, skip FASTA pre-filtering in isoform import
 #' @param isoform_test_engine Which DTU test engine to use in IsoformSwitchAnalyzeR
 #' @param plot_topology Logical: include the topology (DeepTMHMM) track in switch plots.
-#'   Set FALSE to silence "Omitting topology visualization..." when DeepTMHMM hasn't been run.
-#' @param run_spia Logical: also run SPIA (pathway impact analysis). Off by default --
-#'   its bootstrap permutation testing is slow and less commonly needed than GSEA/ORA.
+#' @param run_spia Logical: also run SPIA (pathway impact analysis). Off by default.
+#' @param run_decouple Logical: run decoupleR TF/pathway activity inference on
+#'   the gene-level results (CollecTRI + PROGENy + DoRothEA). Default TRUE.
+#' @param decouple_resources decoupleR resources to run; any of `"collectri"`,
+#'   `"progeny"`, `"dorothea"`. Default: all three.
+#' @param decouple_method decoupleR statistical method: `"ulm"` (default),
+#'   `"mlm"`, or `"wsum"`.
+#' @param decouple_min_size Minimum number of target genes a source must have
+#'   to be tested. Default 5.
 #' @param pca_ntop Number of most variable genes used for the PCA plots (default 500; NULL uses all)
-#' @param sample_labels Optional relabelling of the samples printed on the PCA plots: a named
-#'   character vector (names = sample IDs as in the sample table, values = new labels), a
-#'   data.frame, or the path to a CSV/TSV file with a sample-ID column and a label column
-#'   (headers such as `sample`/`sample_id` and `label`/`new_label` are recognised, otherwise the
-#'   first two columns are used). Samples without an entry keep their name. Default NULL.
-#' @param pca_colors Named vector `c(level = ..., base = ...)` with the PCA colours of the `level`
-#'   and `base` groups. Default `c(level = "red2", base = "royalblue")`; either name may be omitted.
-#' @param volcano_colors Named vector with the volcano colours of `up`, `down` and `ns` (not
-#'   significant) genes. Default `c(up = "red2", down = "royalblue", ns = "grey")`.
-#' @param deg_padj_cutoffs Numeric vector of adjusted p-value cutoffs for which the number of DEGs
-#'   (total / up / down, with and without the log2FC filter) is saved to
-#'   `DE_raw_results/DEG_counts_<level>_vs_<base>.txt`, together with one DEG list per cutoff
-#'   (`DEgenes_pval_<cutoff>_<level>_vs_<base>.txt`). `padj_cutoff` is always included.
-#'   Default `c(0.01, 0.05)`; `NULL` writes only the list for `padj_cutoff`.
-#' @param deg_lfc_cutoff Absolute log2 fold-change threshold used by the volcano plot (lines,
-#'   colouring and the up/down counts in its caption) and by the DEG count table. Default 1.
-#' @param make_report Logical: build the unified interactive HTML report in
-#'   `<out_dir>/Report/` once the analyses are done (default `TRUE`). It needs
-#'   plotly, DT, rmarkdown and Pandoc; if they are missing the analysis still
-#'   completes and a warning explains how to build the report later with
-#'   [build_expressom_report()]. When `FALSE`, the legacy stand-alone
-#'   `DTU_DTE_report.html` of the isoform module is rendered instead.
+#' @param sample_labels Optional relabelling of the samples printed on the PCA plots.
+#' @param pca_colors Named vector `c(level = ..., base = ...)` with the PCA colours.
+#' @param volcano_colors Named vector with the volcano colours of `up`, `down` and `ns`.
+#' @param deg_padj_cutoffs Numeric vector of adjusted p-value cutoffs.
+#' @param deg_lfc_cutoff Absolute log2 fold-change threshold.
+#' @param make_report Logical: build the unified interactive HTML report.
 #' @param report_settings Optional named list overriding defaults of
-#'   [expressom_report_settings()] (e.g. `list(title = "My study",
-#'   highlight_genes = c("TP53", "MYC"))`).
+#'   [expressom_report_settings()].
 #' @return NULL invisibly
 expressom <- function(
   count_type = "salmon",
@@ -170,6 +158,10 @@ expressom <- function(
   isoform_test_engine = c("DEXSeq", "DRIMSeq", "satuRn"),
   plot_topology = TRUE,
   run_spia = FALSE,
+  run_decouple = TRUE,
+  decouple_resources = c("collectri", "progeny", "dorothea"),
+  decouple_method = "ulm",
+  decouple_min_size = 5,
   sample_labels = NULL,
   pca_colors = c(level = "red2", base = "royalblue"),
   volcano_colors = c(up = "red2", down = "royalblue", ns = "grey"),
@@ -186,24 +178,13 @@ expressom <- function(
   p <- ctx$p
   out_dir <- p$out_dir
 
-  # Normalise vector defaults that are single choices: the `p <- as.list(environment())`
-  # above captures the evaluated length-2 default of execution_order (and of
-  # isoform_test_engine), and a length-2 value turns
-  # `p$execution_order == "dge_first"` into a length-2 logical -- an error
-  # inside if() on R >= 4.2, a silent first-element pick on older versions.
-  # Taking the first element keeps the documented default; if
-  # .expressom_prepare() already normalised them this is a harmless no-op.
+  # Normalise vector defaults that are single choices.
   p$execution_order <- if (length(p$execution_order)) p$execution_order[[1L]] else "dge_first"
   p$isoform_test_engine <- if (length(p$isoform_test_engine)) p$isoform_test_engine[[1L]] else "DEXSeq"
 
   old_warn <- getOption("nwarnings")
   options(nwarnings = 10000)
 
-  # Warnings of THIS run. base::warnings() only returns the warnings of the
-  # previous *top-level* call (last.warning is set when a top-level call
-  # finishes), so inside on.exit() it reported the preceding command's warnings
-  # -- or nothing -- and Log/Warnings.txt (shown in the report's "Logs" tab) was
-  # wrong. A calling handler records them as they are raised, without muffling.
   run_warnings <- character(0)
 
   on.exit(
@@ -258,6 +239,7 @@ expressom <- function(
 
       dge <- NULL
       func <- NULL
+      decouple <- NULL
       isoform <- NULL
 
       for (step in pipeline_steps) {
@@ -266,6 +248,7 @@ expressom <- function(
           .stage_dge_plots(ctx, tx_data, dge)
           func <- .stage_functional(ctx, dge)
           .stage_fgsea(ctx, dge)
+          decouple <- .stage_decouple(ctx, dge)
         }
 
         if (step == "isoform" && p$run_isoform) {
@@ -273,7 +256,7 @@ expressom <- function(
         }
       }
 
-      .stage_save_rdata(ctx, tx_data, dge, func, isoform)
+      .stage_save_rdata(ctx, tx_data, dge, func, isoform, decouple)
 
       if (isTRUE(p$make_report)) {
         safe_run(.stage_report(ctx), label = "Interactive report")

@@ -1,13 +1,13 @@
 # mod_isoform_report.R -- DTE/DTU HTML report generation
 #
+# Writes the annotated DTE/DTU/DEXSeq tables, the PDF + PNG plots, the plot
+# manifest, the isoform-switch features table (for interactive plotting in
+# the unified report) and the methods notes under
+# `<out_dir>/IsoformSwitch/DTU_DTE_report/`. These files are what the isoform
+# tab of the unified report displays. The legacy stand-alone
+# `DTU_DTE_report.html` is only rendered when `render_html = TRUE`.
 
 #' Generate the DTE/DTU tables and plots (and, optionally, a stand-alone HTML report)
-#'
-#' Writes the annotated DTE / DTU / DEXSeq tables, the PDF + PNG plots, the plot
-#' manifest and the methods notes under `<out_dir>/IsoformSwitch/DTU_DTE_report/`.
-#' These files are what the isoform tab of the unified report
-#' ([build_expressom_report()]) displays. The legacy stand-alone
-#' `DTU_DTE_report.html` is only rendered when `render_html = TRUE`.
 #'
 #' @param render_html Logical: also render the legacy stand-alone
 #'   `DTU_DTE_report.html`. [expressom()] sets this to `FALSE` when the unified
@@ -116,6 +116,22 @@ generate_dte_dtu_report <- function(dte_results,
       file.path(report_dir, "DEXSeq_results_annotated.csv"),
       row.names = FALSE
     )
+  }
+
+  # NEW: export the raw isoformFeatures table so the unified report can build
+  # an interactive dIF vs -log10(q) scatter without reloading the (large)
+  # SwitchList object.
+  has_switch <- !is.null(switch_list) &&
+    !is.null(switch_list$isoformFeatures) &&
+    nrow(switch_list$isoformFeatures) > 0
+
+  if (has_switch) {
+    feat <- tryCatch(switch_list$isoformFeatures, error = function(e) NULL)
+    if (!is.null(feat) && nrow(feat) > 0) {
+      utils::write.csv(feat,
+        file.path(report_dir, "switch_features.csv"),
+        row.names = FALSE)
+    }
   }
 
   plot_dir <- file.path(report_dir, "plots")
@@ -405,10 +421,6 @@ generate_dte_dtu_report <- function(dte_results,
       )
     }
   }
-
-  has_switch <- !is.null(switch_list) &&
-    !is.null(switch_list$isoformFeatures) &&
-    nrow(switch_list$isoformFeatures) > 0
 
   if (has_switch) {
     feat_sw <- switch_list$isoformFeatures
@@ -938,4 +950,4 @@ generate_dte_dtu_report <- function(dte_results,
   gc()
   message("DTE/DTU report generated in: ", report_dir)
   invisible(NULL)
-}
+}

@@ -36,7 +36,7 @@ report.
 }
 \examples{
 \dontrun{
-run_expressom_app("results")   # explore / re-run an existing run
+run_expressom_app("results")
 run_expressom_app(params = list(data_dir = "data", sample_table = "samples.csv",
                                 out_dir = "results", level = "treated", base = "control"))
 }

@@ -26,61 +26,6 @@ expressom_report_settings(
   slim_tables = TRUE
 )
 }
-\arguments{
-\item{title}{Report title.}
-
-\item{max_points}{Points drawn in the volcano / MA plots.}
-
-\item{heatmap_genes}{Genes in the expression heatmap.}
-
-\item{top_terms}{Terms drawn in each enrichment plot.}
-
-\item{table_rows}{Rows shown in each interactive table.}
-
-\item{static_figures}{Embed the PDF figures of the run (needs `pdftools`).}
-
-\item{max_static_figures}{Maximum number of embedded static figures per group.}
-
-\item{static_dpi}{Resolution of the embedded static figures.}
-
-\item{static_max_px}{Embedded PNG figures wider than about this many pixels
-(the isoform plots are written at 200 dpi, ~0.5 MB each once base64
-encoded) are reduced by an integer factor before being inlined in the
-single-file report. Needs the `png` package; the files on disk are never
-touched. `0` embeds the PNGs as they are.}
-
-\item{max_isoform_plots}{Maximum number of isoform-gallery PNGs.}
-
-\item{plotly_enrichment_max}{Number of enrichment files that get an
-interactive plotly widget (the rest show the table only).}
-
-\item{merge_enrichment_threshold}{Merge the tables of a method into a single
-interactive table when it has more than this many collections.}
-
-\item{plotly_pca_max}{Number of PCA entries rendered as widgets (the extra
-ones are shown as tables only).}
-
-\item{highlight_genes}{Genes to mark on the volcano plot.}
-
-\item{padj_cutoff, lfc_cutoff}{Override the run's cut-offs.}
-
-\item{theme}{"auto", "light" or "dark".}
-
-\item{self_contained}{`TRUE` (default) renders with `rmarkdown` + pandoc
-for a single self-contained HTML file (every plotly / DT asset and every
-static figure inlined). `FALSE` falls back to `htmltools` and produces a
-folder with `lib/` and `figures/` next to the HTML (legacy).}
-
-\item{slim_tables}{`TRUE` (default) drops helper columns that bloat the
-embedded tables (`lfcSE`, `stat`, `entrezid`, ORA `geneID`, GSEA
-`core_enrichment`, ...); the CSV/TSV files keep every column.}
-}
-\value{
-A named list.
-}
 \description{
-Defaults aim for a fast-opening report: the values cap how many points,
-rows and widgets are embedded, while the complete data always remains in
-the CSV/TSV files of the run directory. Raise any value to trade
-size/speed for content.
+Settings of the interactive report
 }

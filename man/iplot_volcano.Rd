@@ -16,27 +16,6 @@ iplot_volcano(
   title = NULL
 )
 }
-\arguments{
-\item{res_tbl}{DE result table (`log2FoldChange`, `padj`, a label column).}
-
-\item{padj_cutoff, lfc_cutoff}{Significance thresholds (drawn as dashed lines).}
-
-\item{colors}{Named vector with `up`, `down`, `ns` colours.}
-
-\item{test_type}{"Wald" or "LRT" (LRT p-values are omnibus: no direction).}
-
-\item{label_col}{Column used for hover labels and highlighting.}
-
-\item{max_points}{Cap on the points drawn; all significant genes are kept,
-only the non-significant cloud is thinned.}
-
-\item{highlight}{Optional gene labels to mark and name on the plot.}
-
-\item{title}{Plot title.}
-}
-\value{
-A plotly htmlwidget.
-}
 \description{
 Interactive volcano plot
 }

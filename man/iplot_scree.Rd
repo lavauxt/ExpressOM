@@ -2,15 +2,10 @@
 % Please edit documentation in R/mod_report_plots.R
 \name{iplot_scree}
 \alias{iplot_scree}
-\title{Interactive scree plot (percent variance per principal component)}
+\title{Interactive scree plot}
 \usage{
 iplot_scree(variance, max_pcs = 10L)
 }
-\arguments{
-\item{variance}{Named numeric vector of percent variance per PC.}
-
-\item{max_pcs}{Number of components shown.}
-}
 \description{
-Interactive scree plot (percent variance per principal component)
+Interactive scree plot
 }

@@ -2,22 +2,24 @@
 #'
 #' Regroups every result of an ExpressOM run -- sample QC / PCA, differential
 #' expression (volcano, MA, heatmap, searchable tables), functional enrichment
-#' (ORA, GSEA, FGSEA, SPIA, transcription factors), isoform analysis (DTE, DTU,
-#' DEXSeq, isoform-switch plots), static figures and run logs -- in one
-#' interactive HTML file with plotly figures and DT tables in tabs. The
-#' report only reads what the pipeline already wrote; it never recomputes an
-#' analysis, so it can be rebuilt in seconds (for instance with other cut-offs).
+#' (ORA, GSEA, FGSEA, SPIA, transcription factors, decoupleR), isoform analysis
+#' (DTE, DTU, DEXSeq, isoform-switch plots), static figures and run logs -- in
+#' one interactive HTML file with plotly figures and DT tables in tabs.
 #'
 #' By default the report is rendered with `rmarkdown` + pandoc as a single
-#' self-contained `.html` file: every plotly/DT asset, every static figure and
-#' every table is inlined, so the file can be opened or emailed on its own.
+#' self-contained `.html` file written **at the root of `<out_dir>`** (i.e.
+#' `<out_dir>/ExpressOM_report_<comparison>.html`), so it sits right next to
+#' `Log/`, `Plots/`, `DE_raw_results/` and every other result folder, and the
+#' relative links it contains (`Log/…`, `Plots/…`, `DE_raw_results/…`) resolve
+#' without any further setup when the file is opened from its own directory.
+#'
 #' Pass `settings = expressom_report_settings(self_contained = FALSE)` for the
 #' legacy mode that writes a folder with `lib/` and `figures/` next to the
 #' HTML.
 #'
 #' @param out_dir Output directory of [expressom()] (its `out_dir` argument).
 #' @param output_file Path of the HTML file to write. Default:
-#'   `<out_dir>/Report/ExpressOM_report_<comparison>.html`.
+#'   `<out_dir>/ExpressOM_report_<comparison>.html`.
 #' @param comparison Comparison to report (`<level>_vs_<base>`); see
 #'   [list_expressom_comparisons()]. `NULL` uses the most recent one.
 #' @param settings List from [expressom_report_settings()].
@@ -33,7 +35,6 @@ build_expressom_report <- function(
   results = NULL,
   quiet = TRUE
 ) {
-  # Core packages used by both engines
   for (pkg in c("htmltools", "htmlwidgets")) {
     .rep_require(pkg, "to build the interactive report")
   }
@@ -63,13 +64,15 @@ build_expressom_report <- function(
     stop("`results` must come from load_expressom_results().", call. = FALSE)
   }
   out_dir <- results$out_dir
+
+  # ---- report path: HTML now lives at the ROOT of out_dir ---------------
   if (is.null(output_file)) {
     stem <- if (is.na(results$comparison)) {
       "ExpressOM_report"
     } else {
       paste0("ExpressOM_report_", results$comparison)
     }
-    output_file <- file.path(out_dir, "Report", paste0(stem, ".html"))
+    output_file <- file.path(out_dir, paste0(stem, ".html"))
   }
   report_dir <- dirname(output_file)
   dir.create(report_dir, recursive = TRUE, showWarnings = FALSE)
@@ -86,7 +89,6 @@ build_expressom_report <- function(
   }
 
   if (pandoc_mode) {
-    # ------- pandoc engine: single-file, self-contained HTML -------
     work <- tempfile("expressom_report_")
     dir.create(work)
     on.exit(unlink(work, recursive = TRUE), add = TRUE)
@@ -96,8 +98,6 @@ build_expressom_report <- function(
 
     results_rds  <- file.path(work, "results.rds")
     settings_rds <- file.path(work, "settings.rds")
-    # temporary hand-over to the Rmd: skip compression (gzip of the result
-    # tables is pure wasted CPU for a file that lives a few seconds)
     saveRDS(results, results_rds, compress = FALSE)
     saveRDS(settings, settings_rds, compress = FALSE)
 
@@ -113,8 +113,6 @@ build_expressom_report <- function(
       quiet = quiet
     )
   } else {
-    # ------- htmltools engine: external `lib/` and `figures/` -------
-    # (the pandoc engine rebuilds the tab tree itself inside the Rmd)
     tabs <- expressom_report_tabs(results, st)
     ui <- .xp_build_html(tabs, results, st)
     htmltools::save_html(ui, file = output_file, libdir = "lib", lang = "en")
@@ -128,4 +126,4 @@ build_expressom_report <- function(
     ")"
   )
   invisible(normalizePath(output_file, winslash = "/"))
-}
+}

@@ -1,3 +1,11 @@
+# mod_dge.R -- gene-level differential expression: import, DESeq2, export.
+#
+# All result tables are written as TAB-separated `.tsv` files (they used to be
+# `.txt`, which made their links harder to open in Excel / pandas and made the
+# report loader need an extension-blind fallback). The report loader and the
+# Shiny app accept both `.tsv` and `.txt` for backward compatibility with
+# result folders produced by older versions of ExpressOM.
+
 #' Validate the adjusted p-value cutoffs used for the DEG count summary
 #' @param cutoffs NULL or numbers in (0, 1]
 #' @return NULL, or a sorted vector of unique cutoffs
@@ -655,6 +663,16 @@ run_deseq2_analysis <- function(
 }
 
 #' Export Significant Results
+#'
+#' All result tables are written as TAB-separated `.tsv` files:
+#' \itemize{
+#'   \item `DESeq_Normalized_Counts_<level>_vs_<base>.tsv`
+#'   \item `DESeq_Raw_Counts_<level>_vs_<base>.tsv`
+#'   \item `DEgenes_raw_<level>_vs_<base>.tsv`
+#'   \item `DEgenes_pval_<cutoff>_<level>_vs_<base>.tsv`
+#'   \item `DEG_counts_<level>_vs_<base>.tsv` (when `padj_cutoffs` is given)
+#' }
+#'
 #' @param res_shrunken Shrunken DESeq results
 #' @param res_unshrunken Unshrunken DESeq results
 #' @param dds DESeqDataSet object
@@ -665,8 +683,8 @@ run_deseq2_analysis <- function(
 #' @param padj_cutoff Adjusted p-value cutoff
 #' @param padj_cutoffs Optional numeric vector of extra adjusted p-value cutoffs (the app default is
 #'   `c(0.01, 0.05)`). For each of them, and for `padj_cutoff`, a DEG list
-#'   `DEgenes_pval_<cutoff>_<level>_vs_<base>.txt` is written, and the number of DEGs (total / up / down,
-#'   with and without the log2FC filter) is summarised in `DEG_counts_<level>_vs_<base>.txt`.
+#'   `DEgenes_pval_<cutoff>_<level>_vs_<base>.tsv` is written, and the number of DEGs (total / up / down,
+#'   with and without the log2FC filter) is summarised in `DEG_counts_<level>_vs_<base>.tsv`.
 #'   `NULL` (default here) writes only the list for `padj_cutoff`.
 #' @param lfc_cutoff Absolute log2 fold-change threshold for the `*_lfc` columns of the count table (default 1)
 #' @return List of processed dataframes (including `deg_counts`, NULL unless `padj_cutoffs` is given)
@@ -793,7 +811,7 @@ export_significant_results <- function(
       counts_df,
       file.path(
         fc_dir,
-        paste0("DESeq_Normalized_Counts_", level, "_vs_", base, ".txt")
+        paste0("DESeq_Normalized_Counts_", level, "_vs_", base, ".tsv")
       ),
       sep = "\t",
       quote = FALSE,
@@ -818,7 +836,7 @@ export_significant_results <- function(
       raw_counts,
       file.path(
         fc_dir,
-        paste0("DESeq_Raw_Counts_", level, "_vs_", base, ".txt")
+        paste0("DESeq_Raw_Counts_", level, "_vs_", base, ".tsv")
       ),
       sep = "\t",
       quote = FALSE,
@@ -850,7 +868,7 @@ export_significant_results <- function(
 
   utils::write.table(
     res_tbl,
-    file.path(fc_dir, paste0("DEgenes_raw_", level, "_vs_", base, ".txt")),
+    file.path(fc_dir, paste0("DEgenes_raw_", level, "_vs_", base, ".tsv")),
     sep = "\t",
     quote = FALSE,
     row.names = FALSE
@@ -863,7 +881,7 @@ export_significant_results <- function(
     )
     utils::write.table(
       df,
-      paste0(prefix, ".txt"),
+      paste0(prefix, ".tsv"),
       sep = "\t",
       quote = FALSE,
       row.names = FALSE
@@ -895,7 +913,7 @@ export_significant_results <- function(
     )
     counts_file <- file.path(
       fc_dir,
-      paste0("DEG_counts_", level, "_vs_", base, ".txt")
+      paste0("DEG_counts_", level, "_vs_", base, ".tsv")
     )
 
     utils::write.table(

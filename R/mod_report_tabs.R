@@ -2,43 +2,6 @@
 # the Shiny app ("same UI, precomputed backend").
 
 #' Settings of the interactive report
-#'
-#' Defaults aim for a fast-opening report: the values cap how many points,
-#' rows and widgets are embedded, while the complete data always remains in
-#' the CSV/TSV files of the run directory. Raise any value to trade
-#' size/speed for content.
-#'
-#' @param title Report title.
-#' @param max_points Points drawn in the volcano / MA plots.
-#' @param heatmap_genes Genes in the expression heatmap.
-#' @param top_terms Terms drawn in each enrichment plot.
-#' @param table_rows Rows shown in each interactive table.
-#' @param static_figures Embed the PDF figures of the run (needs `pdftools`).
-#' @param max_static_figures Maximum number of embedded static figures per group.
-#' @param static_dpi Resolution of the embedded static figures.
-#' @param static_max_px Embedded PNG figures wider than about this many pixels
-#'   (the isoform plots are written at 200 dpi, ~0.5 MB each once base64
-#'   encoded) are reduced by an integer factor before being inlined in the
-#'   single-file report. Needs the `png` package; the files on disk are never
-#'   touched. `0` embeds the PNGs as they are.
-#' @param max_isoform_plots Maximum number of isoform-gallery PNGs.
-#' @param plotly_enrichment_max Number of enrichment files that get an
-#'   interactive plotly widget (the rest show the table only).
-#' @param merge_enrichment_threshold Merge the tables of a method into a single
-#'   interactive table when it has more than this many collections.
-#' @param plotly_pca_max Number of PCA entries rendered as widgets (the extra
-#'   ones are shown as tables only).
-#' @param highlight_genes Genes to mark on the volcano plot.
-#' @param padj_cutoff,lfc_cutoff Override the run's cut-offs.
-#' @param theme "auto", "light" or "dark".
-#' @param slim_tables `TRUE` (default) drops helper columns that bloat the
-#'   embedded tables (`lfcSE`, `stat`, `entrezid`, ORA `geneID`, GSEA
-#'   `core_enrichment`, ...); the CSV/TSV files keep every column.
-#' @param self_contained `TRUE` (default) renders with `rmarkdown` + pandoc
-#'   for a single self-contained HTML file (every plotly / DT asset and every
-#'   static figure inlined). `FALSE` falls back to `htmltools` and produces a
-#'   folder with `lib/` and `figures/` next to the HTML (legacy).
-#' @return A named list.
 #' @export
 expressom_report_settings <- function(
   title = "ExpressOM report",
@@ -100,6 +63,25 @@ expressom_report_settings <- function(
 
 .xp_note <- function(...) htmltools::tags$p(class = "xp-note", ...)
 
+.xp_file_link <- function(path, root, text = NULL, class = "xp-file-link") {
+  if (is.null(path) || !length(path) || is.na(path) || !nzchar(path)) {
+    return(NULL)
+  }
+  rel <- .rep_rel(path, root)
+  if (!nzchar(rel) || rel == path) {
+    rel <- basename(path)
+  }
+  if (is.null(text)) text <- basename(path)
+  htmltools::tags$a(
+    href   = rel,
+    target = "_blank",
+    rel    = "noopener",
+    class  = class,
+    title  = path,
+    text
+  )
+}
+
 .xp_box <- function(label, value, sub = NULL) {
   tg <- htmltools::tags
   tg$div(
@@ -125,13 +107,6 @@ expressom_report_settings <- function(
   )
 }
 
-# Reduce a PNG by an integer block-average factor so that it ends up close to
-# `max_px` wide. Base64 PNGs are the bulk of a single-file report (the isoform
-# plots are 2000+ px wide, ~0.5 MB each) and a gallery tile / click-to-zoom
-# never needs more than ~1000 px. Returns the path of the file to embed: a new
-# temporary PNG when the image was reduced (the caller deletes it), otherwise
-# `path` itself -- also when the 'png' package is missing or the file cannot
-# be read, so this can only ever make the report smaller, never fail it.
 .xp_shrink_png <- function(path, max_px = 1000L) {
   max_px <- suppressWarnings(as.integer(max_px))
   if (length(max_px) != 1L || is.na(max_px) || max_px < 100L) return(path)
@@ -140,7 +115,7 @@ expressom_report_settings <- function(
   if (is.null(img)) return(path)
 
   d <- dim(img)
-  if (length(d) == 2L) dim(img) <- c(d, 1L)            # grey-scale: one channel
+  if (length(d) == 2L) dim(img) <- c(d, 1L)
   d <- dim(img)
   k <- max(1L, as.integer(round(d[[2L]] / max_px)))
   if (k < 2L) return(path)
@@ -148,11 +123,9 @@ expressom_report_settings <- function(
   w2 <- d[[2L]] %/% k
   if (h2 < 1L || w2 < 1L) return(path)
 
-  # an alpha channel that is fully opaque only costs bytes
   if (d[[3L]] == 4L && all(img[, , 4L] == 1)) img <- img[, , 1:3, drop = FALSE]
 
   out <- tryCatch({
-    # k x k block mean = sum of the k^2 strided sub-grids / k^2
     pick <- function(i, n) seq.int(i, by = k, length.out = n)
     acc <- 0
     for (i in seq_len(k)) {
@@ -161,14 +134,13 @@ expressom_report_settings <- function(
       }
     }
     acc <- acc / (k * k)
-    if (dim(acc)[[3L]] == 1L) acc <- acc[, , 1L]       # writePNG: matrix = grey
+    if (dim(acc)[[3L]] == 1L) acc <- acc[, , 1L]
     tmp <- tempfile("xp_small_", fileext = ".png")
     png::writePNG(acc, tmp)
     tmp
   }, error = function(e) NULL)
 
   if (is.null(out) || !file.exists(out)) return(path)
-  # keep the original if reducing did not actually save anything
   if (file.size(out) >= file.size(path)) {
     unlink(out)
     return(path)
@@ -176,10 +148,6 @@ expressom_report_settings <- function(
   out
 }
 
-# Returns either a data-URI string (figures_dir = NULL) or a list with a `src`
-# pointing to "figures/<basename>" (figures_dir set, external mode).
-# `max_px` (inline mode only) caps the width of embedded PNGs, see
-# .xp_shrink_png().
 .xp_img_uri <- function(path, figures_dir = NULL, max_px = NULL) {
   if (!is.null(figures_dir)) {
     dest <- file.path(figures_dir, basename(path))
@@ -194,7 +162,6 @@ expressom_report_settings <- function(
   tryCatch(knitr::image_uri(src), error = function(e) NULL)
 }
 
-# Same contract as .xp_img_uri.
 .xp_pdf_uri <- function(pdf, dpi = 100, figures_dir = NULL) {
   if (!requireNamespace("pdftools", quietly = TRUE)) return(NULL)
   stem <- tempfile("xp_pdf_")
@@ -217,7 +184,6 @@ expressom_report_settings <- function(
   .xp_img_uri(tmp)
 }
 
-# `uris` may contain data-URI strings, list(src = ...), or NULL entries.
 .xp_gallery <- function(uris, captions) {
   tg <- htmltools::tags
   figures <- lapply(seq_along(uris), function(i) {
@@ -329,17 +295,25 @@ expressom_report_settings <- function(
     }
     if (length(res$pca)) add("Samples", .xp_fmt(nrow(res$pca[[1L]]$scores)), "in the PCA")
     inv <- res$functional$inventory
-    if (nrow(inv)) add("Enrichment tables", .xp_fmt(nrow(inv)), paste(unique(inv$source), collapse = " / "))
+    if (nrow(inv)) add("Enrichment tables", .xp_fmt(nrow(inv)),
+                        paste(unique(inv$source), collapse = " / "))
+    if (!is.null(res$decouple)) {
+      add("decoupleR resources", .xp_fmt(length(res$decouple)),
+          paste(unique(vapply(res$decouple, `[[`, character(1), "resource")),
+                collapse = " / "))
+    }
     iso <- res$isoform
     if (!is.null(iso$dte)) {
       p <- .rep_num(iso$dte$padj)
-      add("DTE transcripts", .xp_fmt(sum(!is.na(p) & p < .xp_cutoffs(res, st)$padj)), "significant")
+      add("DTE transcripts", .xp_fmt(sum(!is.na(p) & p < .xp_cutoffs(res, st)$padj)),
+          "significant")
     }
     if (!is.null(iso$dtu)) {
       pc <- .rep_first_col(iso$dtu, c("adj_pvalue", "padj", "FDR"))
       if (!is.na(pc)) {
         p <- .rep_num(iso$dtu[[pc]])
-        add("DTU features", .xp_fmt(sum(!is.na(p) & p < .xp_cutoffs(res, st)$padj)), "significant")
+        add("DTU features", .xp_fmt(sum(!is.na(p) & p < .xp_cutoffs(res, st)$padj)),
+            "significant")
       }
     }
 
@@ -363,6 +337,11 @@ expressom_report_settings <- function(
               if (length(res$pca)) paste(length(res$pca), "plot(s)")),
         avail(nrow(inv) > 0L, "Functional enrichment (ORA / GSEA / FGSEA / SPIA / TF)",
               if (nrow(inv)) paste(nrow(inv), "table(s)")),
+        avail(!is.null(res$decouple), "decoupleR TF/pathway activity",
+              if (!is.null(res$decouple)) paste(length(res$decouple), "resource(s)")),
+        avail(!is.null(res$decouple_regulons), "decoupleR TF regulon plots",
+              if (!is.null(res$decouple_regulons))
+                paste(length(res$decouple_regulons$by_resource), "resource(s)")),
         avail(!is.null(iso), "Isoform analysis (DTE / DTU / switches)"),
         avail(nrow(res$figures) > 0L, "Static figures",
               if (nrow(res$figures)) paste(nrow(res$figures), "file(s)"))
@@ -419,7 +398,8 @@ expressom_report_settings <- function(
       res$dge$results, padj_cutoff = co$padj, lfc_cutoff = co$lfc,
       colors = res$config$volcano_colors, test_type = res$config$test,
       max_points = st$max_points, highlight = st$highlight_genes,
-      title = paste0("Volcano plot: ", res$config$level %||% "", " vs ", res$config$base %||% "")
+      title = paste0("Volcano plot: ", res$config$level %||% "", " vs ",
+                     res$config$base %||% "")
     )
   }
 }
@@ -446,13 +426,6 @@ expressom_report_settings <- function(
 }
 
 # ---- table slimming (report open-speed) ---------------------------------------
-#
-# The DE / DTE tables carry helper statistics (lfcSE, stat, entrezid, ...) and
-# the enrichment tables carry the ORA `geneID` and GSEA `core_enrichment` /
-# `leadingEdge` columns, each a comma-separated list of EVERY gene of the
-# term -- typically the second biggest chunk of the embedded HTML after the
-# row count itself. They are useless for interactive browsing (the CSV export
-# keeps them) and are dropped when slim_tables is TRUE (the default).
 
 .xp_table_drop_cols <- c(
   "lfcSE", "stat", "contrast_stat", "contrast_pvalue",
@@ -488,8 +461,12 @@ expressom_report_settings <- function(
     f <- res$dge$sig_lists
     if (!length(f)) return(.xp_note("No per-cut-off DEG lists were found."))
     tg$div(
-      .xp_note("DEG lists written by the pipeline (in `DE_raw_results/`):"),
-      tg$ul(lapply(f, function(x) tg$li(tg$code(x))))
+      .xp_note("DEG lists written by the pipeline (in ",
+               tg$code("DE_raw_results/"), "):"),
+      tg$ul(lapply(f, function(x) {
+        full <- file.path(res$out_dir, "DE_raw_results", x)
+        tg$li(.xp_file_link(full, res$out_dir, text = x))
+      }))
     )
   }
 }
@@ -517,7 +494,7 @@ expressom_report_settings <- function(
           if (!is.na(n_sig)) paste0("; ", .xp_fmt(n_sig), " with adjusted p < ", co$padj),
           ". Source file: "
         ),
-        htmltools::tags$code(path)
+        .xp_file_link(file.path(res$out_dir, path), res$out_dir, text = path)
       ),
       if (isTRUE(show_plot) && !is.null(std)) {
         iplot_enrichment(
@@ -538,8 +515,6 @@ expressom_report_settings <- function(
   }
 }
 
-# Merge every collection of a method into one table. `paths`/`collections`
-# are parallel vectors; a `collection` column is added.
 .xp_leaf_enrichment_merged <- function(res, st, paths, collections, kind) {
   function() {
     merged <- do.call(rbind, lapply(seq_along(paths), function(i) {
@@ -559,6 +534,79 @@ expressom_report_settings <- function(
     )
   }
 }
+
+# ---- decoupleR -----------------------------------------------------------------
+
+.xp_leaf_decouple <- function(res, st, entry) {
+  function() {
+    co <- .xp_cutoffs(res, st)
+    tbl <- entry$table
+    resource <- entry$resource
+    pcol <- .rep_first_col(tbl, c("p_value", "padj", "pval", "p.value"))
+    n_sig <- if (is.na(pcol)) NA_integer_ else sum(.rep_num(tbl[[pcol]]) < co$padj, na.rm = TRUE)
+
+    htmltools::tagList(
+      .xp_note(
+        "decoupleR / ", resource, " \u2014 ",
+        .xp_fmt(nrow(tbl)), " source(s) tested",
+        if (!is.na(n_sig)) paste0("; ", .xp_fmt(n_sig), " with p < ", co$padj) else "",
+        ". Source file: ",
+        .xp_file_link(file.path(res$out_dir, entry$path), res$out_dir, text = entry$path)
+      ),
+      iplot_decouple_activity(
+        tbl, top_n = st$top_terms, padj_cutoff = co$padj,
+        title = paste0("TF activity \u2013 ", resource)
+      ),
+      itable(tbl[order(if (!is.na(pcol)) .rep_num(tbl[[pcol]]) else rep(0, nrow(tbl))), , drop = FALSE],
+             page_length = 15L, max_rows = st$table_rows,
+             filename = paste0("decouple_", resource))
+    )
+  }
+}
+
+# NEW: interactive regulon view for one TF: volcano + leading edge + two tables.
+.xp_leaf_tf_regulon <- function(res, st, resource_data, tf) {
+  function() {
+    co <- .xp_cutoffs(res, st)
+    regulon <- resource_data$regulons[[tf]]
+    le      <- resource_data$leading_edges[[tf]]
+    test_type <- if ("test_type" %in% colnames(res$dge$results))
+      as.character(res$dge$results$test_type[[1]]) else "Wald"
+
+    if (is.null(regulon)) {
+      return(.xp_note("No regulon data for ", tf, "."))
+    }
+
+    n_act <- sum(as.character(regulon$Regulation) == "Activé (attendu)")
+    n_rep <- sum(as.character(regulon$Regulation) == "Réprimé (attendu)")
+
+    htmltools::tagList(
+      .xp_two_col(
+        iplot_tf_regulon_volcano(regulon, tf,
+                                  padj_cutoff = co$padj, lfc_cutoff = co$lfc),
+        if (!is.null(le)) {
+          iplot_tf_leading_edge(le, res$dge$results, tf, test_type)
+        }
+      ),
+      .xp_note(sprintf(
+        "%d targets matched in the DGE table, of which %d behave as expected ",
+        nrow(regulon), n_act + n_rep
+      ), sprintf("(%d activated, %d repressed).", n_act, n_rep)),
+      htmltools::tags$h4("Regulon targets"),
+      itable(regulon, page_length = 15L, max_rows = st$table_rows,
+             filename = paste0("regulon_", tf)),
+      if (!is.null(le)) {
+        htmltools::tagList(
+          htmltools::tags$h4("Leading edge (genes contributing most to the score)"),
+          itable(le, page_length = 15L, max_rows = st$table_rows,
+                 filename = paste0("leading_edge_", tf))
+        )
+      }
+    )
+  }
+}
+
+# ---- isoform leaves ------------------------------------------------------------
 
 .xp_leaf_dte <- function(res, st) {
   function() {
@@ -596,6 +644,33 @@ expressom_report_settings <- function(
       ),
       itable(.xp_prune_table(dtu[ord, , drop = FALSE], st), page_length = 15L,
              max_rows = st$table_rows, filename = "DTU_results")
+    )
+  }
+}
+
+.xp_leaf_switch <- function(res, st) {
+  function() {
+    co <- .xp_cutoffs(res, st)
+    feat <- res$isoform$switch_features
+    if (is.null(feat)) {
+      return(.xp_note(
+        "No switch features table (switch_features.csv) found in the isoform ",
+        "report folder \u2014 the switch analysis may have been skipped."
+      ))
+    }
+    dIF <- .rep_num(feat$dIF)
+    q   <- .rep_num(feat$isoform_switch_q_value)
+    n_sig <- sum(!is.na(dIF) & !is.na(q) & q < co$padj & abs(dIF) > 0.1, na.rm = TRUE)
+    htmltools::tagList(
+      iplot_isoform_switch(feat, padj_cutoff = co$padj, dIF_cutoff = 0.1),
+      .xp_note(sprintf(
+        "%s isoform(s) in the switch features table, of which %s have ",
+        .xp_fmt(nrow(feat)), .xp_fmt(n_sig)),
+        "|dIF| > 0.1 and q < ", co$padj, "."
+      ),
+      itable(.xp_prune_table(feat, st),
+             page_length = 15L, max_rows = st$table_rows,
+             filename = "isoform_switch_features")
     )
   }
 }
@@ -698,11 +773,18 @@ expressom_report_settings <- function(
         }
       }
     }
-    listing <- itable(
-      data.frame(file = .rep_rel(fig$path, res$out_dir), type = fig$type,
-                 size_kb = round(fig$size / 1024, 1), stringsAsFactors = FALSE),
-      page_length = 10L, filename = paste0("figures_", group)
+
+    file_links <- vapply(fig$path, function(p)
+      as.character(.xp_file_link(p, res$out_dir)), character(1))
+    files_df <- data.frame(
+      file = file_links,
+      type = fig$type,
+      size_kb = round(fig$size / 1024, 1),
+      stringsAsFactors = FALSE
     )
+    listing <- itable(files_df, page_length = 15L,
+                     filename = paste0("figures_", group),
+                     escape = FALSE)
     htmltools::tagList(
       if (length(items)) {
         .xp_gallery(lapply(items, `[[`, "uri"),
@@ -741,8 +823,19 @@ expressom_report_settings <- function(
     if (length(res$logs$isoform_logs)) {
       blocks <- c(blocks, list(
         tg$h4("Isoform logs"),
-        tg$ul(lapply(.rep_rel(res$logs$isoform_logs, res$out_dir),
-                     function(x) tg$li(tg$code(x))))
+        tg$ul(lapply(res$logs$isoform_logs, function(p) {
+          rel <- .rep_rel(p, res$out_dir)
+          tg$li(.xp_file_link(p, res$out_dir, text = rel))
+        }))
+      ))
+    }
+    if (length(res$logs$wsl_logs)) {
+      blocks <- c(blocks, list(
+        tg$h4("External-predictor (WSL) logs"),
+        tg$ul(lapply(res$logs$wsl_logs, function(p) {
+          rel <- .rep_rel(p, res$out_dir)
+          tg$li(.xp_file_link(p, res$out_dir, text = rel))
+        }))
       ))
     }
     if (length(blocks) == 0L) return(.xp_note("No log files were found in Log/."))
@@ -756,7 +849,7 @@ expressom_report_settings <- function(
 #'
 #' @param res An `expressom_results` object ([load_expressom_results()]).
 #' @param settings A list from [expressom_report_settings()].
-#' @return A list of nodes (see the file header of `mod_report_tabs.R`).
+#' @return A list of nodes.
 #' @export
 expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   stopifnot(inherits(res, "expressom_results"))
@@ -812,7 +905,7 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
     )
   }
 
-  # -- functional
+  # -- functional (ORA / GSEA / SPIA / TF) + decoupleR subtree
   inv <- res$functional$inventory
   func <- NULL
   if (nrow(inv)) {
@@ -831,7 +924,7 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
                        content = .xp_leaf_enrichment(
                          res, st, mi$path[[k]], mi$kind[[k]],
                          show_plot = take_plotly(),
-                         show_table = FALSE))   # rows live in the merged table
+                         show_table = FALSE))
             ))
           }
           do.call(.xp_node, c(list(unique(mi$method)), children))
@@ -864,12 +957,53 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
     }
   }
 
+  if (!is.null(res$decouple)) {
+    dec_nodes <- lapply(names(res$decouple), function(rel) {
+      entry <- res$decouple[[rel]]
+      .xp_node(toupper(entry$resource),
+               content = .xp_leaf_decouple(res, st, entry))
+    })
+    dec_root <- do.call(.xp_node, c(list("decoupleR (TF / pathway activity)"), dec_nodes))
+    if (is.null(func)) {
+      func <- dec_root
+    } else {
+      func$children <- c(func$children, list(dec_root))
+    }
+  }
+
+  # -- decoupleR regulon plots (per-TF volcanoes + leading edges)
+  if (!is.null(res$decouple_regulons) &&
+      length(res$decouple_regulons$by_resource)) {
+    rr <- res$decouple_regulons$by_resource
+    res_nodes <- lapply(names(rr), function(rname) {
+      entry <- rr[[rname]]
+      tf_names <- names(entry$regulons)
+      if (!length(tf_names)) return(NULL)
+      tf_nodes <- lapply(tf_names, function(tf) {
+        .xp_node(tf, content = .xp_leaf_tf_regulon(res, st, entry, tf))
+      })
+      do.call(.xp_node, c(list(toupper(rname)), tf_nodes))
+    })
+    res_nodes <- res_nodes[!vapply(res_nodes, is.null, logical(1))]
+    if (length(res_nodes)) {
+      regulon_root <- do.call(.xp_node,
+        c(list("TF regulon plots (volcano + leading edge)"), res_nodes))
+      if (is.null(func)) {
+        func <- regulon_root
+      } else {
+        func$children <- c(func$children, list(regulon_root))
+      }
+    }
+  }
+
   # -- isoform
   iso <- res$isoform
   isoform <- NULL
   if (!is.null(iso)) {
     isoform <- .xp_node(
       "Isoforms",
+      if (!is.null(iso$switch_features))
+        .xp_node("Switch overview", content = .xp_leaf_switch(res, st)),
       if (!is.null(iso$dte)) .xp_node("DTE", content = .xp_leaf_dte(res, st)),
       if (!is.null(iso$dtu)) .xp_node("DTU", content = .xp_leaf_dtu(res, st)),
       if (!is.null(iso$dexseq)) {
@@ -901,14 +1035,23 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   }
 
   # -- run info
+  files_leaf <- function() {
+    df <- res$files
+    df$path <- vapply(df$path, function(p)
+      as.character(.xp_file_link(file.path(res$out_dir, p), res$out_dir, text = p)),
+      character(1))
+    htmltools::tagList(
+      .xp_note("Tous les fichiers produits dans le dossier de résultats."),
+      itable(df, page_length = 25L, max_rows = st$table_rows,
+             filename = "file_inventory", escape = FALSE)
+    )
+  }
   info <- .xp_node(
     "Run info",
     .xp_node("Parameters", content = .xp_leaf_table(
       .xp_params_table(res), "parameters", NULL, st)),
     .xp_node("Logs", content = .xp_leaf_logs(res)),
-    .xp_node("Files", content = .xp_leaf_table(
-      res$files, "file_inventory",
-      "Every file written to the output directory.", st))
+    .xp_node("Files", content = files_leaf)
   )
 
   tree <- list(
@@ -935,8 +1078,6 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   }
 }
 
-# Build one tabset (nav + content) from a list of nodes; returns a list of
-# `nav` and `content` tag objects. Ids are made unique per call.
 .xp_render_tabset <- function(nodes, classes = "nav-pills", counter = NULL) {
   tg <- htmltools::tags
   if (is.null(counter)) counter <- new.env(parent = emptyenv())
@@ -955,10 +1096,7 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
       .xp_safe_leaf(nd$content)()
     } else {
       nested <- .xp_render_tabset(nd$children, classes, counter)
-      tg$div(
-        nested$nav,
-        nested$content
-      )
+      tg$div(nested$nav, nested$content)
     }
     navs[[i]] <- tg$li(
       role = "presentation",
@@ -984,13 +1122,10 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   )
 }
 
-# Full standalone HTML page for the htmltools engine. Bootstrap 3 is pulled
-# from CDN, plotly/DT widget dependencies are handled by htmltools::save_html().
 .xp_build_html <- function(nodes, res, st) {
   tg <- htmltools::tags
   counter <- new.env(parent = emptyenv()); counter$n <- 0L
 
-  # Top-level tabsets are pills (matches the pandoc template)
   top <- .xp_render_tabset(nodes, classes = "nav-pills xp-top", counter = counter)
 
   tg$html(
@@ -1014,14 +1149,12 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
         top$nav,
         top$content
       ),
-      # lazy tab widgets -- must be the last element of <body> so that it runs
-      # during parsing, before htmlwidgets scans the document at DOM ready
       tg$script(htmltools::HTML(.xp_lazy_js_text()))
     )
   )
 }
 
-# ---- rendering: pandoc engine (legacy, used when self_contained = TRUE) ------
+# ---- rendering: pandoc engine --------------------------------------------------
 
 .xp_emit_tabs <- function(nodes, level = 2L) {
   counter <- 0L
@@ -1129,13 +1262,12 @@ img.xp-zoom { position: fixed; inset: 2%; width: 96%; height: 96%; object-fit: c
 details { margin: 8px 0; } details > summary { cursor: pointer; font-weight: 600; }
 pre { max-height: 420px; overflow:auto; font-size: 12px; }
 table.dataTable { font-size: 13px; }
+a.xp-file-link { color: var(--xp-accent); text-decoration: underline; word-break: break-all; }
+a.xp-file-link:hover { color: var(--xp-heading); }
 "
   )
 }
 
-# Embedded stylesheet/script (no disk lookup needed). Legacy fallback to
-# .expressom_rmd_path() is kept only for the two .Rmd templates, which do exist
-# on disk if the caller overrides them.
 .xp_asset_text <- function(file) {
   if (identical(file, "expressom_dark.css"))  return(.xp_dark_css_text())
   if (identical(file, "expressom_theme.js")) return(.xp_theme_js_text())
@@ -1181,4 +1313,4 @@ table.dataTable { font-size: 13px; }
     ),
     tg$script(htmltools::HTML(.xp_theme_js_text(.xp_theme_setting(st))))
   )
-}
+}

@@ -15,22 +15,6 @@ iplot_ma(
   title = NULL
 )
 }
-\arguments{
-\item{res_tbl}{DE result table (`log2FoldChange`, `padj`, a label column).}
-
-\item{padj_cutoff, lfc_cutoff}{Significance thresholds (drawn as dashed lines).}
-
-\item{colors}{Named vector with `up`, `down`, `ns` colours.}
-
-\item{test_type}{"Wald" or "LRT" (LRT p-values are omnibus: no direction).}
-
-\item{label_col}{Column used for hover labels and highlighting.}
-
-\item{max_points}{Cap on the points drawn; all significant genes are kept,
-only the non-significant cloud is thinned.}
-
-\item{title}{Plot title.}
-}
 \description{
 Interactive MA plot
 }

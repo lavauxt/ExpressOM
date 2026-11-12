@@ -12,20 +12,6 @@ iplot_enrichment(
   title = NULL
 )
 }
-\arguments{
-\item{std}{Output of the enrichment standardiser (`term`, `padj`, `size`, `score`).}
-
-\item{top_n}{Number of terms shown.}
-
-\item{padj_cutoff}{Terms above this adjusted p-value are greyed out in the
-hover but still listed (so near-misses stay visible).}
-
-\item{colors}{Named vector with `up` / `down` colours.}
-
-\item{title}{Plot title.}
-}
 \description{
-Bar chart of the top terms of an ORA / GSEA / SPIA / TF table. GSEA tables
-(with a normalised enrichment score) are drawn as NES bars coloured by
-direction; the others as -log10(adjusted p) bars coloured by gene count.
+Interactive enrichment plot
 }

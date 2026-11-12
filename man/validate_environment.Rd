@@ -7,7 +7,8 @@
 validate_environment(
   run_isoform = TRUE,
   run_functional = TRUE,
-  run_report = FALSE
+  run_report = FALSE,
+  run_decouple = FALSE
 )
 }
 \arguments{
@@ -18,6 +19,12 @@ validate_environment(
 \item{run_report}{Check the packages needed by the unified interactive HTML
 report ([build_expressom_report()]): plotly, DT, rmarkdown, htmlwidgets and
 a Pandoc installation.}
+
+\item{run_decouple}{Check the decoupleR package when TF/pathway activity
+inference is enabled. Default `FALSE` keeps every existing caller
+backward-compatible: the check is opt-in. To activate it from the pipeline,
+`.expressom_prepare()` should pass
+`run_decouple = isTRUE(p$run_dge) && isTRUE(p$run_decouple)`.}
 }
 \value{
 `TRUE` (stops with an error if a core package is missing).

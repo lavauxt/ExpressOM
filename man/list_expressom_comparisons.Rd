@@ -10,9 +10,7 @@ list_expressom_comparisons(out_dir)
 \item{out_dir}{Output directory of [expressom()].}
 }
 \value{
-Character vector of comparison names (`<level>_vs_<base>`), most
-  recently written first. `character(0)` if no differential expression
-  results are present.
+Character vector of comparison names (`<level>_vs_<base>`).
 }
 \description{
 List the comparisons available in an ExpressOM output directory

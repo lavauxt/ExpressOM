@@ -23,12 +23,12 @@ yourself -- use [run_expressom_targets()] or [run_expressom_app()].
 }
 \details{
 The stages form a DAG: `setup` -> `import` -> `eda` / `dge` -> `dge_plots`,
-`functional`, `fgsea`; `isoform` is independent of `dge`; `report` and
-`rdata` close the graph. Each stage target depends on a small context target
-(`ctx_<stage>`) holding only the parameters it uses, so a parameter that
-concerns one stage leaves the cached results of the others untouched. When
-`run_predictors = TRUE`, the `isoform` target additionally depends on
-`fp_predictors` (the external predictor environment fingerprint), so it
-re-runs when a predictor tool or database is installed or removed even
+`functional`, `fgsea`, `decouple`; `isoform` is independent of `dge`;
+`report` and `rdata` close the graph. Each stage target depends on a small
+context target (`ctx_<stage>`) holding only the parameters it uses, so a
+parameter that concerns one stage leaves the cached results of the others
+untouched. When `run_predictors = TRUE`, the `isoform` target additionally
+depends on `fp_predictors` (the external predictor environment fingerprint),
+so it re-runs when a predictor tool or database is installed or removed even
 though no parameter or input file changed.
 }

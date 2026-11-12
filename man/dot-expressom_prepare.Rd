@@ -6,16 +6,7 @@
 \usage{
 .expressom_prepare(p)
 }
-\arguments{
-\item{p}{Named list of the arguments of [expressom()].}
-}
-\value{
-A list with `p` (normalised parameters), `main_condition`,
-  `model_eda` and `comp_name`.
-}
 \description{
-Everything `expressom()` used to do before touching any data: argument
-validation, environment checks, automatic Ensembl package build, and the
-decision between a full run and an EDA-only run.
+Validate the arguments of expressom() and resolve the contrast
 }
 \keyword{internal}

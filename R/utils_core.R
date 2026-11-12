@@ -1563,12 +1563,18 @@ download_ensembl_refs <- function(
 #' @param run_report Check the packages needed by the unified interactive HTML
 #'   report ([build_expressom_report()]): plotly, DT, rmarkdown, htmlwidgets and
 #'   a Pandoc installation.
+#' @param run_decouple Check the decoupleR package when TF/pathway activity
+#'   inference is enabled. Default `FALSE` keeps every existing caller
+#'   backward-compatible: the check is opt-in. To activate it from the pipeline,
+#'   `.expressom_prepare()` should pass
+#'   `run_decouple = isTRUE(p$run_dge) && isTRUE(p$run_decouple)`.
 #' @return `TRUE` (stops with an error if a core package is missing).
 #' @export
 validate_environment <- function(
   run_isoform = TRUE,
   run_functional = TRUE,
-  run_report = FALSE
+  run_report = FALSE,
+  run_decouple = FALSE
 ) {
   message("Checking ExpressOM environment readiness...")
 
@@ -1599,6 +1605,25 @@ validate_environment <- function(
         "))"
       ))
     }
+  }
+
+  # ---- FIX: decoupleR presence check --------------------------------------
+  # The unified pipeline ships with `run_decouple = TRUE` by default, so
+  # when the functional module runs and decoupleR is missing, the user
+  # currently only learns about it via a generic "decoupleR activity
+  # inference failed. Skipping." warning emitted deep inside
+  # .stage_decouple(). This check surfaces the missing package *before*
+  # the pipeline starts, with an explicit install command, and reminds
+  # the user they can also set `run_decouple = FALSE` if they prefer.
+  if (isTRUE(run_decouple) && !requireNamespace("decoupleR", quietly = TRUE)) {
+    warning(
+      "decoupleR activity inference is enabled (run_decouple = TRUE) but ",
+      "the package 'decoupleR' is not installed. The decoupleR stage will ",
+      "be skipped at run time. Install it with:\n",
+      "  BiocManager::install('decoupleR')\n",
+      "Or disable the stage explicitly with run_decouple = FALSE.",
+      call. = FALSE
+    )
   }
 
   if (run_isoform) {

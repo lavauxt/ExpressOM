@@ -1,65 +1,52 @@
 # mod_report_data.R -- the "result contract" shared by the unified HTML report
 # and the Shiny app.
-#
-# load_expressom_results() scans an ExpressOM output directory (the `out_dir`
-# of expressom()) and returns ONE typed list. Every consumer -- the report
-# template, the Shiny result tabs, user scripts -- reads that list, never the
-# files directly, so the file layout is only known in this one place.
-#
-# The loader is discovery based: a missing stage (no isoform analysis, no
-# functional analysis, EDA-only run ...) simply leaves the matching element
-# NULL/empty and the report omits the corresponding tab.
 
 # ---- small internal helpers -------------------------------------------------
 
 .rep_require <- function(pkg, why = "to build the interactive report") {
   if (!requireNamespace(pkg, quietly = TRUE)) {
-    stop(
-      "Package '", pkg, "' is required ", why, ". ",
-      "Install it with install.packages('", pkg, "').",
-      call. = FALSE
-    )
+    stop("Package '", pkg, "' is required ", why, ". ",
+         "Install it with install.packages('", pkg, "').",
+         call. = FALSE)
   }
   invisible(TRUE)
 }
 
 .rep_read_json <- function(path) {
-  if (is.null(path) || length(path) != 1L || !file.exists(path)) {
-    return(NULL)
-  }
-  tryCatch(
-    jsonlite::read_json(path, simplifyVector = TRUE),
-    error = function(e) NULL
-  )
+  if (is.null(path) || length(path) != 1L || !file.exists(path)) return(NULL)
+  tryCatch(jsonlite::read_json(path, simplifyVector = TRUE),
+           error = function(e) NULL)
 }
 
 #' Read a delimited result table (TSV/CSV/TXT) tolerantly
-#' @param path File path.
-#' @param max_rows Maximum number of rows to read (`Inf` = all).
-#' @return A data.frame, or NULL if the file is missing, empty or unreadable.
 #' @keywords internal
 .rep_read_table <- function(path, max_rows = Inf) {
   if (is.null(path) || length(path) != 1L || is.na(path) || !file.exists(path)) {
     return(NULL)
   }
-  if (isTRUE(file.info(path)$size == 0)) {
-    return(NULL)
-  }
+  if (isTRUE(file.info(path)$size == 0)) return(NULL)
   out <- tryCatch(
     data.table::fread(
       path,
       nrows = if (is.finite(max_rows)) as.numeric(max_rows) else Inf,
-      data.table = FALSE,
-      check.names = FALSE,
-      fill = TRUE,
+      data.table = FALSE, check.names = FALSE, fill = TRUE,
       showProgress = FALSE
     ),
     error = function(e) NULL
   )
-  if (is.null(out) || nrow(out) == 0L || ncol(out) == 0L) {
-    return(NULL)
-  }
+  if (is.null(out) || nrow(out) == 0L || ncol(out) == 0L) return(NULL)
   out
+}
+
+#' Find a table by stem name, trying .tsv then .txt then .csv.
+#' @keywords internal
+.rep_find_table <- function(dir, stem, exts = c("tsv", "txt", "csv")) {
+  if (is.null(dir) || is.null(stem) || !nzchar(stem)) return(NULL)
+  for (ext in exts) {
+    p <- file.path(dir, paste0(stem, ".", ext))
+    if (file.exists(p)) return(p)
+  }
+  NULL
 }
 
 .rep_rel <- function(paths, root) {
@@ -76,59 +63,35 @@
 .rep_num <- function(x) suppressWarnings(as.numeric(as.character(x)))
 
 .rep_named_chr <- function(x) {
-  if (is.null(x)) {
-    return(NULL)
-  }
+  if (is.null(x)) return(NULL)
   x <- unlist(x)
   if (is.null(names(x))) NULL else x
 }
 
-# Drop everything that cannot be stored as JSON (functions, S4/BiocParallel
-# objects, data.frames, connections ...). Used for the run-config snapshot.
 .rep_json_safe <- function(x, depth = 0L) {
-  if (is.null(x) || depth > 3L) {
-    return(NULL)
-  }
-  if (is.function(x) || is.environment(x) || is.data.frame(x) || isS4(x)) {
-    return(NULL)
-  }
+  if (is.null(x) || depth > 3L) return(NULL)
+  if (is.function(x) || is.environment(x) || is.data.frame(x) || isS4(x)) return(NULL)
   if (is.list(x)) {
     out <- lapply(x, .rep_json_safe, depth = depth + 1L)
     out <- out[!vapply(out, is.null, logical(1))]
-    if (length(out) == 0L) {
-      return(NULL)
-    }
+    if (length(out) == 0L) return(NULL)
     return(out)
   }
   if (is.atomic(x) && length(x) <= 200L) {
-    # keep the names of named vectors (volcano / PCA colours, sample labels):
-    # as a JSON object they survive the round trip, as an array they would not
     nm <- names(x)
-    if (!is.null(nm) && length(x) > 0L && all(nzchar(nm))) {
-      return(as.list(x))
-    }
+    if (!is.null(nm) && length(x) > 0L && all(nzchar(nm))) return(as.list(x))
     return(unname(x))
   }
   NULL
 }
 
 #' Write the run-configuration snapshot read back by the report and the app
-#'
-#' Called by [expressom()] and by the `targets` pipeline. The snapshot lets the
-#' report reproduce the colours/cut-offs of the PDF figures and lets the Shiny
-#' app pre-fill its parameter panel from a previous run.
-#'
-#' @param out_dir Output directory of the run.
-#' @param params Named list of the arguments of [expressom()].
-#' @return The path of the JSON file (invisibly).
 #' @keywords internal
 .write_run_config <- function(out_dir, params) {
   log_dir <- file.path(out_dir, "Log")
   dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
   safe <- .rep_json_safe(params)
-  if (is.null(safe)) {
-    safe <- list()
-  }
+  if (is.null(safe)) safe <- list()
   safe$written_at <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
   safe$expressom_version <- tryCatch(
     as.character(utils::packageVersion("ExpressOM")),
@@ -136,17 +99,10 @@
   )
   path <- file.path(log_dir, "expressom_run.json")
   tryCatch(
-    jsonlite::write_json(
-      safe,
-      path,
-      pretty = TRUE,
-      auto_unbox = TRUE,
-      null = "null",
-      na = "null"
-    ),
-    error = function(e) {
+    jsonlite::write_json(safe, path, pretty = TRUE, auto_unbox = TRUE,
+                         null = "null", na = "null"),
+    error = function(e)
       warning("Could not write run configuration: ", conditionMessage(e))
-    }
   )
   invisible(path)
 }
@@ -156,14 +112,13 @@
 #' List the comparisons available in an ExpressOM output directory
 #'
 #' @param out_dir Output directory of [expressom()].
-#' @return Character vector of comparison names (`<level>_vs_<base>`), most
-#'   recently written first. `character(0)` if no differential expression
-#'   results are present.
+#' @return Character vector of comparison names (`<level>_vs_<base>`).
 #' @export
 list_expressom_comparisons <- function(out_dir) {
   de_dir <- file.path(out_dir, "DE_raw_results")
   files <- if (dir.exists(de_dir)) {
-    list.files(de_dir, pattern = "^DEgenes_raw_.*\\.txt$", full.names = TRUE)
+    list.files(de_dir, pattern = "^DEgenes_raw_.*\\.(txt|tsv)$",
+               full.names = TRUE)
   } else {
     character(0)
   }
@@ -173,20 +128,16 @@ list_expressom_comparisons <- function(out_dir) {
     full.names = TRUE
   )
 
+  strip_ext <- function(basename) sub("\\.(txt|tsv)$", "", basename)
   nm <- c(
-    sub("\\.txt$", "", sub("^DEgenes_raw_", "", basename(files))),
+    strip_ext(sub("^DEgenes_raw_", "", basename(files))),
     sub("\\.json$", "", sub("^DGE_params_", "", basename(log_files)))
   )
   mt <- c(file.mtime(files), file.mtime(log_files))
-  if (length(nm) == 0L) {
-    return(character(0))
-  }
+  if (length(nm) == 0L) return(character(0))
+
   # a comparison is "available" only if its result table exists
-  has_table <- nm %in% sub(
-    "\\.txt$",
-    "",
-    sub("^DEgenes_raw_", "", basename(files))
-  )
+  has_table <- nm %in% strip_ext(sub("^DEgenes_raw_", "", basename(files)))
   nm <- nm[has_table]
   mt <- mt[has_table]
   unique(nm[order(mt, decreasing = TRUE)])
@@ -196,51 +147,42 @@ list_expressom_comparisons <- function(out_dir) {
 
 .rep_enrichment_inventory <- function(out_dir) {
   empty <- data.frame(
-    path = character(0),
-    source = character(0),
-    method = character(0),
-    collection = character(0),
-    kind = character(0),
-    stringsAsFactors = FALSE
+    path = character(0), source = character(0), method = character(0),
+    collection = character(0), kind = character(0), stringsAsFactors = FALSE
   )
-  rel <- list.files(
-    out_dir,
-    pattern = "\\.(csv|tsv)$",
-    recursive = TRUE,
-    ignore.case = TRUE
-  )
-  if (length(rel) == 0L) {
-    return(empty)
-  }
+  rel <- list.files(out_dir, pattern = "\\.(csv|tsv)$", recursive = TRUE,
+                    ignore.case = TRUE)
+  if (length(rel) == 0L) return(empty)
 
-  roots <- c("ORA", "GSEA", "SPIA", "Transcription_Factors")
+  roots <- c("ORA", "GSEA", "SPIA", "Transcription_Factors", "DecoupleR")
   rows <- lapply(rel, function(r) {
     parts <- strsplit(r, "/", fixed = TRUE)[[1L]]
     ri <- which(parts %in% roots)
-    if (length(ri) == 0L) {
-      return(NULL)
-    }
+    if (length(ri) == 0L) return(NULL)
     ri <- ri[[1L]]
     file <- parts[[length(parts)]]
-    # "significant only" companions duplicate the full FGSEA table
-    if (grepl("_significant\\.csv$", file, ignore.case = TRUE)) {
-      return(NULL)
-    }
+    if (grepl("_significant\\.csv$", file, ignore.case = TRUE)) return(NULL)
 
-    src <- if (any(grepl("^DTE_Enrichment$", parts))) {
-      "DTE"
-    } else if (any(grepl("^DTU_Enrichment$", parts))) {
-      "DTU"
-    } else {
-      "DGE"
-    }
+    # ---- FIX: exclude the per-TF regulon artefacts -------------------------
+    # The files written by .run_decouple_tf_regulon_plots() under
+    # <resource>/plots/ (regulon_<TF>.csv, leading_edge_<TF>.csv) and the
+    # top-level per-TF summary (tf_regulon_summary.csv) are NOT enrichment
+    # tables. They are loaded separately by .rep_load_decouple_regulons()
+    # and rendered under "TF regulon plots". Leaving them in the inventory
+    # produced ghost entries under "Functional analysis -> COLLECTRI" (one
+    # per significant TF) that showed as "no recognised term / adjusted
+    # p-value columns".
+    if (grepl("[/\\\\]plots[/\\\\]", r)) return(NULL)
+    if (identical(file, "tf_regulon_summary.csv")) return(NULL)
+
+    src <- if (any(grepl("^DTE_Enrichment$", parts))) "DTE"
+           else if (any(grepl("^DTU_Enrichment$", parts))) "DTU"
+           else "DGE"
 
     root <- parts[[ri]]
     sub_parts <- if (ri < length(parts) - 1L) {
       parts[(ri + 1L):(length(parts) - 1L)]
-    } else {
-      character(0)
-    }
+    } else character(0)
 
     if (root == "ORA") {
       kind <- "ora"
@@ -250,134 +192,76 @@ list_expressom_comparisons <- function(out_dir) {
       if (length(sub_parts) && sub_parts[[1L]] == "FGSEA") {
         kind <- "gsea"
         method <- "FGSEA"
-        collection <- if (length(sub_parts) > 1L) {
-          sub_parts[[2L]]
-        } else {
-          .rep_strip_comp(file)
-        }
+        collection <- if (length(sub_parts) > 1L) sub_parts[[2L]]
+                      else .rep_strip_comp(file)
       } else {
         kind <- "gsea"
-        method <- if (length(sub_parts)) {
-          paste(sub_parts[[1L]], "GSEA")
-        } else {
-          "GSEA"
-        }
+        method <- if (length(sub_parts)) paste(sub_parts[[1L]], "GSEA")
+                  else "GSEA"
         collection <- .rep_strip_comp(file)
       }
     } else if (root == "SPIA") {
-      kind <- "spia"
-      method <- "SPIA"
-      collection <- .rep_strip_comp(file)
+      kind <- "spia"; method <- "SPIA"; collection <- .rep_strip_comp(file)
+    } else if (root == "DecoupleR") {
+      kind <- "decouple"; method <- "decoupleR"
+      collection <- if (length(sub_parts)) sub_parts[[1L]]
+                    else .rep_strip_comp(file)
     } else {
-      kind <- "tf"
-      method <- "Transcription factors"
+      kind <- "tf"; method <- "Transcription factors"
       collection <- .rep_strip_comp(file)
     }
 
     data.frame(
-      path = r,
-      source = src,
-      method = method,
-      collection = collection,
-      kind = kind,
+      path = r, source = src, method = method,
+      collection = collection, kind = kind,
       stringsAsFactors = FALSE
     )
   })
   rows <- rows[!vapply(rows, is.null, logical(1))]
-  if (length(rows) == 0L) {
-    return(empty)
-  }
+  if (length(rows) == 0L) return(empty)
   inv <- do.call(rbind, rows)
   rownames(inv) <- NULL
   inv[order(inv$source, inv$method, inv$collection), , drop = FALSE]
 }
 
-# "GO_BP_treated_vs_control.csv" -> "GO_BP"
 .rep_strip_comp <- function(file) {
   x <- sub("\\.(csv|tsv)$", "", file, ignore.case = TRUE)
   sub("_[^_]+_vs_[^_]+$", "", x)
 }
 
 #' Standardise an enrichment table for plotting
-#'
-#' Maps the column names of clusterProfiler/DOSE (ORA, GSEA), fgsea, SPIA and
-#' EnrichR tables to a common `term / padj / size / score / direction` layout.
-#'
-#' @param df An enrichment result table.
-#' @param kind One of "ora", "gsea", "spia", "tf".
-#' @return A data.frame with columns `term`, `padj`, `size` and `score`
-#'   (NES / tA / Combined score, NA when the method has none), or NULL when
-#'   the table has no recognisable term / p-value columns.
 #' @keywords internal
 .rep_standardise_enrichment <- function(df, kind = "ora") {
-  if (is.null(df) || nrow(df) == 0L) {
-    return(NULL)
-  }
-  term_col <- .rep_first_col(df, c("Description", "pathway", "Name", "Term", "ID"))
-  padj_col <- .rep_first_col(
-    df,
-    c("p.adjust", "padj", "pGFdr", "Adjusted.P.value", "qvalue", "qvalues", "FDR")
-  )
-  if (is.na(term_col) || is.na(padj_col)) {
-    return(NULL)
-  }
+  if (is.null(df) || nrow(df) == 0L) return(NULL)
+  term_col <- .rep_first_col(df, c("Description", "pathway", "Name", "Term", "ID",
+                                    "source"))
+  padj_col <- .rep_first_col(df, c("p.adjust", "padj", "pGFdr", "Adjusted.P.value",
+                                    "qvalue", "qvalues", "FDR", "p_value"))
+  if (is.na(term_col) || is.na(padj_col)) return(NULL)
   size_col <- .rep_first_col(df, c("Count", "size", "setSize", "NDE", "Overlap"))
-  score_col <- .rep_first_col(df, c("NES", "enrichmentScore", "tA", "Combined.Score"))
+  score_col <- .rep_first_col(df, c("NES", "enrichmentScore", "tA",
+                                     "Combined.Score", "score"))
 
-  size <- if (is.na(size_col)) {
-    rep(NA_real_, nrow(df))
-  } else if (size_col == "Overlap") {
-    # EnrichR "3/120" -> 3
-    .rep_num(sub("/.*$", "", as.character(df[[size_col]])))
-  } else {
-    .rep_num(df[[size_col]])
-  }
+  size <- if (is.na(size_col)) rep(NA_real_, nrow(df))
+          else if (size_col == "Overlap") .rep_num(sub("/.*$", "", as.character(df[[size_col]])))
+          else .rep_num(df[[size_col]])
 
   out <- data.frame(
-    term = as.character(df[[term_col]]),
-    padj = .rep_num(df[[padj_col]]),
-    size = size,
-    score = if (is.na(score_col)) {
-      rep(NA_real_, nrow(df))
-    } else {
-      .rep_num(df[[score_col]])
-    },
+    term  = as.character(df[[term_col]]),
+    padj  = .rep_num(df[[padj_col]]),
+    size  = size,
+    score = if (is.na(score_col)) rep(NA_real_, nrow(df)) else .rep_num(df[[score_col]]),
     stringsAsFactors = FALSE
   )
   out <- out[!is.na(out$padj) & !is.na(out$term), , drop = FALSE]
-  if (nrow(out) == 0L) {
-    return(NULL)
-  }
+  if (nrow(out) == 0L) return(NULL)
   out[order(out$padj), , drop = FALSE]
 }
 
 # ---- the loader ---------------------------------------------------------------
 
 #' Load the results of an ExpressOM run into one typed list
-#'
-#' Scans `out_dir` and gathers everything the unified report and the Shiny
-#' app display: differential expression tables, PCA scores, functional
-#' enrichment tables, DTE/DTU results, run logs and a file inventory. Missing
-#' stages are simply absent (NULL / empty) -- nothing is recomputed.
-#'
-#' @param out_dir Output directory of [expressom()] (the `out_dir` argument).
-#' @param comparison Comparison to load, as returned by
-#'   [list_expressom_comparisons()] (`<level>_vs_<base>`). `NULL` picks the
-#'   most recent one.
-#' @param max_expr_genes Number of top DE genes (by adjusted p-value) whose
-#'   normalised counts are kept for the expression heatmap.
-#' @param max_table_rows Maximum number of rows read from each enrichment /
-#'   isoform table. Default `Inf` reads every row (complete tables in the
-#'   report).
-#' @return An object of class `expressom_results`: a list with elements
-#'   `out_dir`, `comparison`, `comparisons`, `config`, `dge`, `pca`,
-#'   `functional`, `isoform`, `figures`, `logs`, `files` and `notes`.
 #' @export
-#' @examples
-#' \dontrun{
-#' res <- load_expressom_results("results")
-#' res
-#' }
 load_expressom_results <- function(
   out_dir,
   comparison = NULL,
@@ -405,16 +289,14 @@ load_expressom_results <- function(
   # ---- configuration ----------------------------------------------------------
   run_cfg <- .rep_read_json(file.path(out_dir, "Log", "expressom_run.json"))
   dge_log <- if (has_cmp) {
-    .rep_read_json(file.path(
-      out_dir, "Log", "DGE", paste0("DGE_params_", comparison, ".json")
-    ))
-  } else {
-    NULL
-  }
+    .rep_read_json(file.path(out_dir, "Log", "DGE",
+                              paste0("DGE_params_", comparison, ".json")))
+  } else NULL
 
   lvl <- run_cfg$level %||% dge_log$contrast$level
   bse <- run_cfg$base %||% dge_log$contrast$base
-  if ((is.null(lvl) || is.null(bse)) && has_cmp && grepl("_vs_", comparison, fixed = TRUE)) {
+  if ((is.null(lvl) || is.null(bse)) && has_cmp &&
+      grepl("_vs_", comparison, fixed = TRUE)) {
     pieces <- strsplit(comparison, "_vs_", fixed = TRUE)[[1L]]
     lvl <- lvl %||% pieces[[1L]]
     bse <- bse %||% pieces[[2L]]
@@ -432,8 +314,7 @@ load_expressom_results <- function(
   }
 
   config <- list(
-    level = lvl,
-    base = bse,
+    level = lvl, base = bse,
     model = run_cfg$model %||% dge_log$design_formula,
     test = run_cfg$test %||% dge_log$test_type %||% "Wald",
     reduced = run_cfg$reduced %||% {
@@ -446,8 +327,7 @@ load_expressom_results <- function(
     lfc_cutoff = .rep_num(run_cfg$deg_lfc_cutoff %||% dge_log$lfc_cutoff %||% 1),
     deg_padj_cutoffs = run_cfg$deg_padj_cutoffs,
     count_type = run_cfg$count_type,
-    volcano_colors = vcols,
-    pca_colors = pcols,
+    volcano_colors = vcols, pca_colors = pcols,
     run = run_cfg
   )
   if (length(config$padj_cutoff) != 1L || is.na(config$padj_cutoff)) {
@@ -457,11 +337,13 @@ load_expressom_results <- function(
     config$lfc_cutoff <- 1
   }
 
-  # ---- differential expression --------------------------------------------------
+  # ---- differential expression ------------------------------------------------
   dge <- NULL
   if (has_cmp) {
     de_dir <- file.path(out_dir, "DE_raw_results")
-    results <- .rep_read_table(file.path(de_dir, paste0("DEgenes_raw_", comparison, ".txt")))
+    results <- .rep_read_table(
+      .rep_find_table(de_dir, paste0("DEgenes_raw_", comparison))
+    )
     if (!is.null(results)) {
       for (cn in intersect(
         c("baseMean", "log2FoldChange", "lfcSE", "pvalue", "padj", "stat",
@@ -481,10 +363,14 @@ load_expressom_results <- function(
         config$test <- as.character(results$test_type[[1L]])
       }
 
-      deg_counts <- .rep_read_table(file.path(de_dir, paste0("DEG_counts_", comparison, ".txt")))
+      deg_counts <- .rep_read_table(
+        .rep_find_table(de_dir, paste0("DEG_counts_", comparison))
+      )
       sig_lists <- list.files(
         de_dir,
-        pattern = paste0("^DEgenes_pval_.*_", gsub("([.])", "\\\\\\1", comparison), "\\.txt$")
+        pattern = paste0("^DEgenes_pval_.*_",
+                         gsub("([.])", "\\\\\\1", comparison),
+                         "\\.(txt|tsv)$")
       )
 
       dge <- list(
@@ -501,7 +387,6 @@ load_expressom_results <- function(
   # ---- PCA --------------------------------------------------------------------
   pca <- .rep_load_pca(out_dir)
 
-  # sample -> group map for the heatmap, from the first PCA that has a group
   if (!is.null(dge$expression) && length(pca)) {
     grp <- .rep_sample_groups(pca[[1L]], config$main_condition)
     if (!is.null(grp)) {
@@ -513,95 +398,67 @@ load_expressom_results <- function(
   inv <- .rep_enrichment_inventory(out_dir)
   functional <- list(inventory = inv, tables = list())
   if (nrow(inv)) {
-    # Reading the CSVs with data.table::fread() is fast; reading them in
-    # parallel with future::multisession would fail because future workers are
-    # fresh R processes that must have ExpressOM *installed* to find
-    # .rep_read_table(), which is not true for load_all() / HPC dev setups.
-    # fork-based parallel::mclapply (Unix only) inherits the namespace, so it
-    # is safe.
-    read_one <- function(p) {
-      .rep_read_table(file.path(out_dir, p), max_rows = max_table_rows)
-    }
+    read_one <- function(p) .rep_read_table(file.path(out_dir, p), max_rows = max_table_rows)
     tbl_list <- if (.Platform$OS.type != "windows" &&
                     parallel::detectCores() > 1L &&
                     length(inv$path) > 1L) {
-      # fork-safety: data.table's OpenMP threads are not fork-safe on every
-      # version/platform and can deadlock inside the mclapply() children;
-      # pinning to 1 thread before the fork is inherited by the children.
-      if (requireNamespace("data.table", quietly = TRUE)) {
-        data.table::setDTthreads(1L)
-      }
-      parallel::mclapply(
-        inv$path, read_one,
-        mc.cores = min(parallel::detectCores() - 1L, 8L)
-      )
+      if (requireNamespace("data.table", quietly = TRUE)) data.table::setDTthreads(1L)
+      parallel::mclapply(inv$path, read_one,
+                         mc.cores = min(parallel::detectCores() - 1L, 8L))
     } else {
       lapply(inv$path, read_one)
     }
     for (i in seq_along(tbl_list)) {
-      if (!is.null(tbl_list[[i]])) {
-        functional$tables[[inv$path[[i]]]] <- tbl_list[[i]]
-      }
+      if (!is.null(tbl_list[[i]])) functional$tables[[inv$path[[i]]]] <- tbl_list[[i]]
     }
     inv <- inv[inv$path %in% names(functional$tables), , drop = FALSE]
     functional$inventory <- inv
   }
+
+  # ---- decoupleR ----------------------------------------------------------------
+  decouple <- .rep_load_decouple(out_dir, max_table_rows)
+  decouple_regulons <- .rep_load_decouple_regulons(out_dir, max_table_rows)
 
   # ---- isoforms -----------------------------------------------------------------
   isoform <- .rep_load_isoform(out_dir, max_table_rows)
 
   # ---- figures, logs, files -----------------------------------------------------
   figures <- .rep_list_figures(out_dir)
-  logs <- .rep_load_logs(out_dir, dge_log)
-  files <- .rep_file_inventory(out_dir)
+  logs    <- .rep_load_logs(out_dir, dge_log)
+  files   <- .rep_file_inventory(out_dir)
 
   structure(
     list(
-      out_dir = out_dir,
-      comparison = comparison,
-      comparisons = comparisons,
-      config = config,
-      dge = dge,
-      pca = pca,
+      out_dir = out_dir, comparison = comparison, comparisons = comparisons,
+      config = config, dge = dge, pca = pca,
       functional = functional,
+      decouple = decouple,
+      decouple_regulons = decouple_regulons,
       isoform = isoform,
-      figures = figures,
-      logs = logs,
-      files = files,
-      notes = notes
+      figures = figures, logs = logs, files = files, notes = notes
     ),
     class = "expressom_results"
   )
 }
 
-# Normalised counts of the top DE genes -> list(matrix, samples, groups)
 .rep_load_expression <- function(de_dir, comparison, results, max_genes) {
-  path <- file.path(de_dir, paste0("DESeq_Normalized_Counts_", comparison, ".txt"))
-  if (!file.exists(path) || max_genes < 2L) {
-    return(NULL)
-  }
+  path <- .rep_find_table(de_dir, paste0("DESeq_Normalized_Counts_", comparison))
+  if (is.null(path) || max_genes < 2L) return(NULL)
   nc <- .rep_read_table(path)
-  if (is.null(nc) || !"gene" %in% colnames(nc)) {
-    return(NULL)
-  }
-  annot <- c(
-    "ensembl", "symbol", "entrezid", "gene", "ensembl_clean", "gene_biotype",
-    "seqnames", "start", "end", "width", "strand", "description"
-  )
+  if (is.null(nc) || !"gene" %in% colnames(nc)) return(NULL)
+  annot <- c("ensembl", "symbol", "entrezid", "gene", "ensembl_clean",
+             "gene_biotype", "seqnames", "start", "end", "width", "strand",
+             "description")
   sample_cols <- setdiff(colnames(nc), annot)
   sample_cols <- sample_cols[vapply(nc[sample_cols], is.numeric, logical(1))]
-  if (length(sample_cols) < 2L) {
-    return(NULL)
-  }
+  if (length(sample_cols) < 2L) return(NULL)
 
   ord <- results[!is.na(results$padj), , drop = FALSE]
   ord <- ord[order(ord$padj, -abs(ord$log2FoldChange)), , drop = FALSE]
   top <- unique(utils::head(ord$gene, max_genes))
   nc <- nc[nc$gene %in% top, , drop = FALSE]
   nc <- nc[!duplicated(nc$gene), , drop = FALSE]
-  if (nrow(nc) < 2L) {
-    return(NULL)
-  }
+  if (nrow(nc) < 2L) return(NULL)
   mat <- as.matrix(nc[, sample_cols, drop = FALSE])
   rownames(mat) <- nc$gene
   mat <- mat[intersect(top, rownames(mat)), , drop = FALSE]
@@ -609,12 +466,8 @@ load_expressom_results <- function(
 }
 
 .rep_load_pca <- function(out_dir) {
-  score_files <- list.files(
-    out_dir,
-    pattern = "_sample_scores\\.tsv$",
-    recursive = TRUE,
-    full.names = TRUE
-  )
+  score_files <- list.files(out_dir, pattern = "_sample_scores\\.tsv$",
+                            recursive = TRUE, full.names = TRUE)
   out <- list()
   for (f in score_files) {
     sc <- .rep_read_table(f)
@@ -622,20 +475,17 @@ load_expressom_results <- function(
     pc_cols <- grep("^PC[0-9]+$", colnames(sc), value = TRUE)
     if (length(pc_cols) < 2L) next
     stub <- sub("_sample_scores\\.tsv$", "", basename(f))
-    var_tbl <- .rep_read_table(file.path(dirname(f), paste0(stub, "_variance_explained.tsv")))
+    var_tbl <- .rep_read_table(file.path(dirname(f),
+                                          paste0(stub, "_variance_explained.tsv")))
     variance <- NULL
     if (!is.null(var_tbl) && all(c("PC", "PercentVariance") %in% colnames(var_tbl))) {
       variance <- stats::setNames(.rep_num(var_tbl$PercentVariance), var_tbl$PC)
     }
     out[[stub]] <- list(
-      name = stub,
-      scores = sc,
-      pcs = pc_cols,
-      variance = variance,
-      path = .rep_rel(f, out_dir)
+      name = stub, scores = sc, pcs = pc_cols,
+      variance = variance, path = .rep_rel(f, out_dir)
     )
   }
-  # most informative first: comparison PCA, then EDA, then the rest
   if (length(out) > 1L) {
     pri <- ifelse(grepl("ComparisonOnly", names(out)), 1L,
            ifelse(grepl("BatchCorrected", names(out)), 3L, 2L))
@@ -644,17 +494,13 @@ load_expressom_results <- function(
   out
 }
 
-# Named vector sample -> group taken from a PCA score table
 .rep_sample_groups <- function(pca_entry, main_condition = NULL) {
   sc <- pca_entry$scores
   col <- .rep_pca_group_col(sc, main_condition)
-  if (is.na(col)) {
-    return(NULL)
-  }
+  if (is.na(col)) return(NULL)
   stats::setNames(as.character(sc[[col]]), as.character(sc$sample_label))
 }
 
-# Which column of a PCA score table is the grouping factor?
 .rep_pca_group_col <- function(scores, main_condition = NULL) {
   if (!is.null(main_condition) && main_condition %in% colnames(scores)) {
     return(main_condition)
@@ -667,16 +513,91 @@ load_expressom_results <- function(
   if (length(cand)) cand[[1L]] else NA_character_
 }
 
+.rep_load_decouple <- function(out_dir, max_rows = Inf) {
+  dec_dir <- file.path(out_dir, "DecoupleR")
+  if (!dir.exists(dec_dir)) return(NULL)
+  files <- list.files(dec_dir, pattern = "\\.csv$", recursive = TRUE, full.names = TRUE)
+  # Per-TF regulon / leading-edge CSVs live under <resource>/plots/ and are
+  # loaded by .rep_load_decouple_regulons(); keep them out of the activity
+  # table index.
+  files <- files[!grepl("[/\\\\]plots[/\\\\]", files)]
+  files <- files[!grepl("^tf_regulon_summary\\.csv$", basename(files))]
+  if (!length(files)) return(NULL)
+  out <- list()
+  for (f in files) {
+    tb <- .rep_read_table(f, max_rows = max_rows)
+    if (is.null(tb) || !nrow(tb)) next
+    resource <- basename(dirname(f))
+    rel <- .rep_rel(f, out_dir)
+    out[[rel]] <- list(resource = resource, table = tb, path = rel)
+  }
+  if (!length(out)) NULL else out
+}
+
+#' Load the per-TF regulon plots data written by run_decouple_analysis()
+#'
+#' Reads `DecoupleR/<resource>/plots/regulon_<TF>.csv`,
+#' `DecoupleR/<resource>/plots/leading_edge_<TF>.csv`, and the top-level
+#' `DecoupleR/tf_regulon_summary.csv`. Returns a list with `summary` and
+#' `by_resource` (one entry per resource with `regulons` and `leading_edges`
+#' named lists).
+#' @keywords internal
+.rep_load_decouple_regulons <- function(out_dir, max_rows = Inf) {
+  dec_dir <- file.path(out_dir, "DecoupleR")
+  if (!dir.exists(dec_dir)) return(NULL)
+
+  summary_file <- list.files(
+    dec_dir, pattern = "^tf_regulon_summary\\.csv$",
+    recursive = TRUE, full.names = TRUE
+  )
+  summary <- if (length(summary_file)) {
+    .rep_read_table(summary_file[1], max_rows = max_rows)
+  } else NULL
+
+  resource_dirs <- list.dirs(dec_dir, recursive = FALSE)
+  resource_dirs <- resource_dirs[file.exists(file.path(resource_dirs, "plots"))]
+
+  by_resource <- list()
+  for (rd in resource_dirs) {
+    resource  <- basename(rd)
+    plots_dir <- file.path(rd, "plots")
+    reg_files <- list.files(plots_dir, pattern = "^regulon_.*\\.csv$", full.names = TRUE)
+    le_files  <- list.files(plots_dir, pattern = "^leading_edge_.*\\.csv$", full.names = TRUE)
+
+    regulons <- list()
+    leading_edges <- list()
+    for (f in reg_files) {
+      tf <- sub("^regulon_", "", sub("\\.csv$", "", basename(f)))
+      tb <- .rep_read_table(f, max_rows = max_rows)
+      if (!is.null(tb) && nrow(tb)) regulons[[tf]] <- tb
+    }
+    for (f in le_files) {
+      tf <- sub("^leading_edge_", "", sub("\\.csv$", "", basename(f)))
+      tb <- .rep_read_table(f, max_rows = max_rows)
+      if (!is.null(tb) && nrow(tb)) leading_edges[[tf]] <- tb
+    }
+    if (length(regulons) || length(leading_edges)) {
+      by_resource[[resource]] <- list(
+        resource      = resource,
+        regulons      = regulons,
+        leading_edges = leading_edges
+      )
+    }
+  }
+
+  if (is.null(summary) && !length(by_resource)) return(NULL)
+  list(summary = summary, by_resource = by_resource)
+}
+
 .rep_load_isoform <- function(out_dir, max_rows) {
   iso_dir <- file.path(out_dir, "IsoformSwitch")
   rep_dir <- file.path(iso_dir, "DTU_DTE_report")
-  if (!dir.exists(iso_dir)) {
-    return(NULL)
-  }
+  if (!dir.exists(iso_dir)) return(NULL)
 
   dte <- .rep_read_table(file.path(rep_dir, "DTE_results_annotated.csv"))
   dtu <- .rep_read_table(file.path(rep_dir, "DTU_results_annotated.csv"))
   dex <- .rep_read_table(file.path(rep_dir, "DEXSeq_results_annotated.csv"))
+  switch_features <- .rep_read_table(file.path(rep_dir, "switch_features.csv"))
 
   methods <- NULL
   mp <- file.path(rep_dir, "analysis_methods.txt")
@@ -685,51 +606,35 @@ load_expressom_results <- function(
   }
 
   tx_pca <- NULL
-  tp <- list.files(
-    file.path(iso_dir),
-    pattern = "^PCA_transcripts_.*\\.tsv$",
-    recursive = TRUE,
-    full.names = TRUE
-  )
-  if (length(tp)) {
-    tx_pca <- .rep_read_table(tp[[1L]], max_rows = max_rows)
-  }
+  tp <- list.files(file.path(iso_dir), pattern = "^PCA_transcripts_.*\\.tsv$",
+                   recursive = TRUE, full.names = TRUE)
+  if (length(tp)) tx_pca <- .rep_read_table(tp[[1L]], max_rows = max_rows)
 
-  plots <- list.files(
-    file.path(rep_dir, "plots"),
-    pattern = "\\.(png|jpg|jpeg)$",
-    recursive = TRUE,
-    full.names = TRUE,
-    ignore.case = TRUE
-  )
+  plots <- list.files(file.path(rep_dir, "plots"),
+                      pattern = "\\.(png|jpg|jpeg)$",
+                      recursive = TRUE, full.names = TRUE, ignore.case = TRUE)
 
   skipped <- .rep_read_table(file.path(rep_dir, "skipped_plots.csv"))
 
-  if (is.null(dte) && is.null(dtu) && is.null(dex) && length(plots) == 0L) {
+  if (is.null(dte) && is.null(dtu) && is.null(dex) &&
+      is.null(switch_features) && length(plots) == 0L) {
     return(NULL)
   }
   list(
-    dte = dte,
-    dtu = dtu,
-    dexseq = dex,
-    methods = methods,
-    transcript_pca = tx_pca,
-    plots = plots,
-    skipped_plots = skipped
+    dte = dte, dtu = dtu, dexseq = dex,
+    switch_features = switch_features,
+    methods = methods, transcript_pca = tx_pca,
+    plots = plots, skipped_plots = skipped
   )
 }
 
 .rep_list_figures <- function(out_dir) {
-  f <- list.files(
-    out_dir,
-    pattern = "\\.(pdf|png)$",
-    recursive = TRUE,
-    full.names = TRUE,
-    ignore.case = TRUE
-  )
-  # isoform switch PNGs are shown in the isoform tab, not here
+  f <- list.files(out_dir, pattern = "\\.(pdf|png)$",
+                  recursive = TRUE, full.names = TRUE, ignore.case = TRUE)
   f <- f[!grepl("/IsoformSwitch/DTU_DTE_report/plots/", f, fixed = TRUE)]
   f <- f[!grepl("/Save_rdata/|/\\.", f)]
+  # exclude the report HTML itself if it was generated here
+  f <- f[!grepl("^ExpressOM_report.*\\.html$", basename(f))]
   if (length(f) == 0L) {
     return(data.frame(
       path = character(0), name = character(0), group = character(0),
@@ -739,35 +644,31 @@ load_expressom_results <- function(
   info <- file.info(f)
   rel <- .rep_rel(f, out_dir)
   data.frame(
-    path = f,
-    name = basename(f),
+    path = f, name = basename(f),
     group = vapply(strsplit(rel, "/", fixed = TRUE), function(p) {
       if (length(p) > 1L) p[[1L]] else "."
     }, character(1)),
     type = tolower(tools::file_ext(f)),
-    size = info$size,
-    stringsAsFactors = FALSE
+    size = info$size, stringsAsFactors = FALSE
   )
 }
 
 .rep_load_logs <- function(out_dir, dge_log) {
   log_dir <- file.path(out_dir, "Log")
   read_txt <- function(p) {
-    if (!file.exists(p)) {
-      return(NULL)
-    }
+    if (!file.exists(p)) return(NULL)
     tryCatch(readLines(p, warn = FALSE), error = function(e) NULL)
   }
-  iso_logs <- list.files(
-    file.path(log_dir, "Isoform"),
-    full.names = TRUE,
-    recursive = TRUE
-  )
+  iso_logs <- list.files(file.path(log_dir, "Isoform"),
+                         full.names = TRUE, recursive = TRUE)
+  wsl_logs <- list.files(file.path(log_dir, "WSL"),
+                         full.names = TRUE, recursive = TRUE)
   list(
     dge_params = dge_log,
     session_info = read_txt(file.path(log_dir, "SessionInfo.txt")),
     warnings = read_txt(file.path(log_dir, "Warnings.txt")),
-    isoform_logs = iso_logs
+    isoform_logs = iso_logs,
+    wsl_logs = wsl_logs
   )
 }
 
@@ -796,63 +697,39 @@ load_expressom_results <- function(
 print.expressom_results <- function(x, ...) {
   cat("<expressom_results>\n")
   cat("  out_dir    :", x$out_dir, "\n")
-  cat(
-    "  comparison :",
-    if (is.na(x$comparison)) "none (EDA / isoform-only run)" else x$comparison,
-    if (length(x$comparisons) > 1L) {
-      paste0("  [", length(x$comparisons), " available]")
-    } else {
-      ""
-    },
-    "\n"
-  )
-  cat("  DGE        :", if (is.null(x$dge)) "-" else paste(nrow(x$dge$results), "genes"), "\n")
-  cat("  PCA        :", if (length(x$pca)) paste(length(x$pca), "plot(s)") else "-", "\n")
-  cat(
-    "  functional :",
-    if (nrow(x$functional$inventory)) {
-      paste(nrow(x$functional$inventory), "table(s)")
-    } else {
-      "-"
-    },
-    "\n"
-  )
-  cat(
-    "  isoform    :",
-    if (is.null(x$isoform)) {
-      "-"
-    } else {
-      paste(
-        c(
-          if (!is.null(x$isoform$dte)) "DTE",
+  cat("  comparison :",
+      if (is.na(x$comparison)) "none (EDA / isoform-only run)" else x$comparison,
+      if (length(x$comparisons) > 1L)
+        paste0("  [", length(x$comparisons), " available]") else "", "\n")
+  cat("  DGE        :",
+      if (is.null(x$dge)) "-" else paste(nrow(x$dge$results), "genes"), "\n")
+  cat("  PCA        :",
+      if (length(x$pca)) paste(length(x$pca), "plot(s)") else "-", "\n")
+  cat("  functional :",
+      if (nrow(x$functional$inventory)) paste(nrow(x$functional$inventory), "table(s)")
+      else "-", "\n")
+  cat("  decoupleR  :",
+      if (!is.null(x$decouple)) paste(length(x$decouple), "table(s)") else "-", "\n")
+  if (!is.null(x$decouple_regulons)) {
+    n_reg <- sum(vapply(
+      x$decouple_regulons$by_resource,
+      function(r) length(r$regulons),
+      integer(1)
+    ))
+    cat("  decoupleR regulons  :", n_reg, "TF(s) with regulon plots\n")
+  }
+  cat("  isoform    :",
+      if (is.null(x$isoform)) "-" else paste(
+        c(if (!is.null(x$isoform$dte)) "DTE",
           if (!is.null(x$isoform$dtu)) "DTU",
-          if (!is.null(x$isoform$dexseq)) "DEXSeq"
-        ),
-        collapse = ", "
-      )
-    },
-    "\n"
-  )
+          if (!is.null(x$isoform$dexseq)) "DEXSeq",
+          if (!is.null(x$isoform$switch_features)) "switch_features"),
+        collapse = ", "), "\n")
   invisible(x)
 }
 
-# ---- report size audit ---------------------------------------------------------
-
 #' Where are the megabytes of an ExpressOM report?
-#'
-#' Scans a rendered `ExpressOM_report_*.html` and reports its size, how many
-#' htmlwidgets it embeds and which widgets carry the largest JSON payloads --
-#' the two numbers that decide how slowly the file opens. Use it before/after
-#' applying report settings to see what actually moved.
-#'
-#' @param path Path of the HTML report.
-#' @return A data.frame of widgets and JSON sizes (KB), largest first
-#'   (invisibly); a summary is printed.
 #' @export
-#' @examples
-#' \dontrun{
-#' audit_expressom_report("results/Report/ExpressOM_report_T_vs_C.html")
-#' }
 audit_expressom_report <- function(path) {
   stopifnot(file.exists(path))
   lines <- readLines(path, warn = FALSE)

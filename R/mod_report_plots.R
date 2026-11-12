@@ -6,7 +6,6 @@
 # show the same figures. plotly and DT are only needed at report time.
 
 .rep_plotly_config <- function(p, filename = "expressom_plot") {
-  # Fill the container (a tab / grid cell) instead of knitr's fixed 672 px
   p$sizingPolicy <- htmlwidgets::sizingPolicy(
     defaultWidth = "100%",
     defaultHeight = 520,
@@ -28,9 +27,7 @@
 # plotly.js only understands CSS colour names / hex codes, while R colours such
 # as "red2" or "grey70" are R-specific: convert everything to #RRGGBB.
 .rep_hex <- function(x) {
-  if (is.null(x)) {
-    return(x)
-  }
+  if (is.null(x)) return(x)
   nm <- names(x)
   out <- vapply(as.character(x), function(col) {
     tryCatch(
@@ -78,29 +75,15 @@
   ifelse(nchar(x) > n, paste0(substr(x, 1L, n - 1L), "…"), x)
 }
 
-# A colour-blind friendly default palette for categorical groups
 .rep_palette <- function(n) {
-  if (n <= 0L) {
-    return(character(0))
-  }
-  base <- c(
-    "#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00",
-    "#56B4E9", "#F0E442", "#999999"
-  )
+  if (n <= 0L) return(character(0))
+  base <- c("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00",
+            "#56B4E9", "#F0E442", "#999999")
   if (n <= length(base)) base[seq_len(n)] else grDevices::hcl.colors(n, "Dark 3")
 }
 
 # ---- volcano / MA -------------------------------------------------------------
 
-# Shared preparation for the volcano and MA plots: classify every gene as
-# up / down / not significant and thin the non-significant cloud so that the
-# self-contained HTML stays light even for 60k-gene tables.
-#
-# max_points is a hard cap on the total number of points drawn: all
-# significant genes are kept and the non-significant cloud is thinned to
-# fill the remaining budget (the sampling is seeded, with or without withr).
-# The serialised numbers are rounded here because htmlwidgets serialises at
-# up to 16 significant digits, which dominates the size of the embedded JSON.
 .rep_de_frame <- function(
   res_tbl,
   padj_cutoff,
@@ -130,9 +113,7 @@
     base_mean = base_mean[keep],
     stringsAsFactors = FALSE
   )
-  if (nrow(df) == 0L) {
-    return(df)
-  }
+  if (nrow(df) == 0L) return(df)
   df$mlog10 <- -log10(pmax(df$padj, .Machine$double.xmin))
 
   is_lrt <- identical(test_type, "LRT")
@@ -160,12 +141,9 @@
     }
   }
 
-  # shrink the serialised payload (full-precision doubles -> 3-4 digits);
-  # invisible at plot scale and typically halves the embedded JSON
   df$lfc <- round(df$lfc, 3)
   df$padj <- signif(df$padj, 3)
   df$base_mean <- signif(df$base_mean, 4)
-
   df
 }
 
@@ -186,7 +164,8 @@
     c("Not significant", "Downregulated", "Upregulated")
   }
   cols <- if (is_lrt) {
-    c("Not significant" = unname(colors[["ns"]]), "Significant (LRT)" = unname(colors[["up"]]))
+    c("Not significant" = unname(colors[["ns"]]),
+      "Significant (LRT)" = unname(colors[["up"]]))
   } else {
     c(
       "Not significant" = unname(colors[["ns"]]),
@@ -194,14 +173,12 @@
       "Upregulated" = unname(colors[["up"]])
     )
   }
-   trace_type <- if (nrow(df) > 500L) "scattergl" else "scatter" 
+  trace_type <- if (nrow(df) > 500L) "scattergl" else "scatter"
   for (k in cls) {
     d <- df[df$class == k, , drop = FALSE]
     if (nrow(d) == 0L) next
     p <- plotly::add_trace(
-      p,
-      data = d,
-      x = ~x_val, y = ~y_val,
+      p, data = d, x = ~x_val, y = ~y_val,
       type = trace_type, mode = "markers",
       name = paste0(k, " (", nrow(d), ")"),
       text = .rep_de_hover(d), hoverinfo = "text",
@@ -216,28 +193,11 @@
 }
 
 #' Interactive volcano plot
-#'
-#' @param res_tbl DE result table (`log2FoldChange`, `padj`, a label column).
-#' @param padj_cutoff,lfc_cutoff Significance thresholds (drawn as dashed lines).
-#' @param colors Named vector with `up`, `down`, `ns` colours.
-#' @param test_type "Wald" or "LRT" (LRT p-values are omnibus: no direction).
-#' @param label_col Column used for hover labels and highlighting.
-#' @param max_points Cap on the points drawn; all significant genes are kept,
-#'   only the non-significant cloud is thinned.
-#' @param highlight Optional gene labels to mark and name on the plot.
-#' @param title Plot title.
-#' @return A plotly htmlwidget.
 #' @export
 iplot_volcano <- function(
-  res_tbl,
-  padj_cutoff = 0.05,
-  lfc_cutoff = 1,
-  colors = .de_direction_colors(),
-  test_type = "Wald",
-  label_col = "gene",
-  max_points = 5000L,
-  highlight = NULL,
-  title = NULL
+  res_tbl, padj_cutoff = 0.05, lfc_cutoff = 1,
+  colors = .de_direction_colors(), test_type = "Wald",
+  label_col = "gene", max_points = 5000L, highlight = NULL, title = NULL
 ) {
   .rep_require("plotly")
   df <- .rep_de_frame(res_tbl, padj_cutoff, lfc_cutoff, test_type, label_col, max_points)
@@ -258,8 +218,9 @@ iplot_volcano <- function(
         mode = "markers+text", text = hl$label, textposition = "top center",
         hovertext = .rep_de_hover(hl), hoverinfo = "text",
         name = paste0("Highlighted (", nrow(hl), ")"),
-        meta = "xp-contrast", # drawn near-white in the dark theme (see expressom_theme.js)
-        marker = list(color = "black", size = 9, symbol = "diamond-open", line = list(width = 2))
+        meta = "xp-contrast",
+        marker = list(color = "black", size = 9, symbol = "diamond-open",
+                      line = list(width = 2))
       )
     }
   }
@@ -285,14 +246,9 @@ iplot_volcano <- function(
 #' @inheritParams iplot_volcano
 #' @export
 iplot_ma <- function(
-  res_tbl,
-  padj_cutoff = 0.05,
-  lfc_cutoff = 1,
-  colors = .de_direction_colors(),
-  test_type = "Wald",
-  label_col = "gene",
-  max_points = 5000L,
-  title = NULL
+  res_tbl, padj_cutoff = 0.05, lfc_cutoff = 1,
+  colors = .de_direction_colors(), test_type = "Wald",
+  label_col = "gene", max_points = 5000L, title = NULL
 ) {
   .rep_require("plotly")
   df <- .rep_de_frame(res_tbl, padj_cutoff, lfc_cutoff, test_type, label_col, max_points)
@@ -322,24 +278,10 @@ iplot_ma <- function(
 # ---- PCA ------------------------------------------------------------------------
 
 #' Interactive PCA
-#'
-#' @param scores PCA score table (`sample_label`, grouping columns, `PC1..PCn`).
-#' @param variance Named numeric vector of percent variance per PC (or NULL).
-#' @param x,y Principal components to plot.
-#' @param group_col Column used to colour the samples (`NA` = single colour).
-#' @param group_colors Named colour vector (values of `group_col`); missing
-#'   groups get a colour-blind friendly palette.
-#' @param title Plot title.
-#' @return A plotly htmlwidget.
 #' @export
 iplot_pca <- function(
-  scores,
-  variance = NULL,
-  x = "PC1",
-  y = "PC2",
-  group_col = NA_character_,
-  group_colors = NULL,
-  title = NULL
+  scores, variance = NULL, x = "PC1", y = "PC2",
+  group_col = NA_character_, group_colors = NULL, title = NULL
 ) {
   .rep_require("plotly")
   group_colors <- .rep_hex(group_colors)
@@ -347,7 +289,8 @@ iplot_pca <- function(
     return(.rep_empty_plot("PCA scores not available"))
   }
   df <- scores
-  df$.id <- as.character(if ("plot_label" %in% colnames(df)) df$plot_label else df$sample_label)
+  df$.id <- as.character(if ("plot_label" %in% colnames(df))
+                         df$plot_label else df$sample_label)
   df$.grp <- if (!is.na(group_col) && group_col %in% colnames(df)) {
     as.character(df[[group_col]])
   } else {
@@ -361,11 +304,8 @@ iplot_pca <- function(
   }
 
   axis_title <- function(pc) {
-    v <- if (!is.null(variance) && pc %in% names(variance)) {
-      paste0(": ", variance[[pc]], "% variance")
-    } else {
-      ""
-    }
+    v <- if (!is.null(variance) && pc %in% names(variance))
+      paste0(": ", variance[[pc]], "% variance") else ""
     paste0(pc, v)
   }
 
@@ -378,11 +318,13 @@ iplot_pca <- function(
       text = d$.id, textposition = "top center",
       textfont = list(size = 10),
       hovertext = paste0(
-        "<b>", d$.id, "</b><br>", if (!is.na(group_col)) paste0(group_col, ": ", g, "<br>") else "",
+        "<b>", d$.id, "</b><br>",
+        if (!is.na(group_col)) paste0(group_col, ": ", g, "<br>") else "",
         x, ": ", signif(d[[x]], 4), "<br>", y, ": ", signif(d[[y]], 4)
       ),
       hoverinfo = "text", name = g,
-      marker = list(size = 11, color = cols[[g]], opacity = 0.85, line = list(width = 1, color = "white"))
+      marker = list(size = 11, color = cols[[g]], opacity = 0.85,
+                    line = list(width = 1, color = "white"))
     )
   }
   p |>
@@ -395,9 +337,7 @@ iplot_pca <- function(
     .rep_plotly_config("pca")
 }
 
-#' Interactive scree plot (percent variance per principal component)
-#' @param variance Named numeric vector of percent variance per PC.
-#' @param max_pcs Number of components shown.
+#' Interactive scree plot
 #' @export
 iplot_scree <- function(variance, max_pcs = 10L) {
   .rep_require("plotly")
@@ -420,22 +360,15 @@ iplot_scree <- function(variance, max_pcs = 10L) {
 # ---- DEG counts -----------------------------------------------------------------
 
 #' Interactive DEG-count bar chart
-#'
-#' @param deg_counts Table written by `export_significant_results()`
-#'   (`DEG_counts_<comparison>.txt`).
-#' @param colors Named vector with `up` / `down` colours.
-#' @param test_type "Wald" or "LRT".
-#' @param use_lfc Count genes passing the log2FC filter (default) or not.
 #' @export
 iplot_deg_counts <- function(
-  deg_counts,
-  colors = .de_direction_colors(),
-  test_type = "Wald",
-  use_lfc = TRUE
+  deg_counts, colors = .de_direction_colors(),
+  test_type = "Wald", use_lfc = TRUE
 ) {
   .rep_require("plotly")
   colors <- .rep_hex(colors)
-  if (is.null(deg_counts) || nrow(deg_counts) == 0L || !"padj_cutoff" %in% colnames(deg_counts)) {
+  if (is.null(deg_counts) || nrow(deg_counts) == 0L ||
+      !"padj_cutoff" %in% colnames(deg_counts)) {
     return(.rep_empty_plot("DEG counts not available"))
   }
   lab <- paste0("padj < ", deg_counts$padj_cutoff)
@@ -473,11 +406,8 @@ iplot_deg_counts <- function(
       title = list(
         text = paste0(
           "Differentially expressed genes",
-          if (use_lfc && "log2FC_cutoff" %in% colnames(deg_counts)) {
-            paste0(" (|log2FC| > ", deg_counts$log2FC_cutoff[[1L]], ")")
-          } else {
-            ""
-          }
+          if (use_lfc && "log2FC_cutoff" %in% colnames(deg_counts))
+            paste0(" (|log2FC| > ", deg_counts$log2FC_cutoff[[1L]], ")") else ""
         ),
         x = 0.02
       ),
@@ -489,19 +419,10 @@ iplot_deg_counts <- function(
 # ---- expression heatmap -----------------------------------------------------------
 
 #' Interactive heatmap of normalised counts (row z-scores)
-#'
-#' @param mat Matrix of normalised counts (genes x samples).
-#' @param groups Optional group of each column (used to order and label samples).
-#' @param colors Named vector with `up` / `down` colours for the diverging scale.
-#' @param max_genes Number of genes shown.
-#' @param title Plot title.
 #' @export
 iplot_heatmap <- function(
-  mat,
-  groups = NULL,
-  colors = .de_direction_colors(),
-  max_genes = 50L,
-  title = NULL
+  mat, groups = NULL, colors = .de_direction_colors(),
+  max_genes = 50L, title = NULL
 ) {
   .rep_require("plotly")
   colors <- .rep_hex(colors)
@@ -513,7 +434,8 @@ iplot_heatmap <- function(
   z[!is.finite(z)] <- 0
 
   if (nrow(z) >= 3L) {
-    ord <- tryCatch(stats::hclust(stats::dist(z))$order, error = function(e) seq_len(nrow(z)))
+    ord <- tryCatch(stats::hclust(stats::dist(z))$order,
+                    error = function(e) seq_len(nrow(z)))
     z <- z[ord, , drop = FALSE]
   }
   col_ord <- seq_len(ncol(z))
@@ -531,13 +453,17 @@ iplot_heatmap <- function(
     x = x_lab, y = rownames(z), z = z, type = "heatmap",
     zmin = -zmax, zmax = zmax,
     colorscale = list(
-      c(0, unname(colors[["down"]])), c(0.5, "#FFFFFF"), c(1, unname(colors[["up"]]))
+      c(0, unname(colors[["down"]])), c(0.5, "#FFFFFF"),
+      c(1, unname(colors[["up"]]))
     ),
     colorbar = list(title = "z-score"),
     hovertemplate = "%{y}<br>%{x}<br>z = %{z:.2f}<extra></extra>"
   ) |>
     plotly::layout(
-      title = list(text = title %||% "Top differentially expressed genes (row z-score of log2 normalised counts)", x = 0.02),
+      title = list(
+        text = title %||% "Top differentially expressed genes (row z-score of log2 normalised counts)",
+        x = 0.02
+      ),
       xaxis = list(title = "", tickangle = -45),
       yaxis = list(title = "", autorange = "reversed", tickfont = list(size = 9)),
       margin = list(l = 110, b = 120)
@@ -548,24 +474,10 @@ iplot_heatmap <- function(
 # ---- enrichment ---------------------------------------------------------------------
 
 #' Interactive enrichment plot
-#'
-#' Bar chart of the top terms of an ORA / GSEA / SPIA / TF table. GSEA tables
-#' (with a normalised enrichment score) are drawn as NES bars coloured by
-#' direction; the others as -log10(adjusted p) bars coloured by gene count.
-#'
-#' @param std Output of the enrichment standardiser (`term`, `padj`, `size`, `score`).
-#' @param top_n Number of terms shown.
-#' @param padj_cutoff Terms above this adjusted p-value are greyed out in the
-#'   hover but still listed (so near-misses stay visible).
-#' @param colors Named vector with `up` / `down` colours.
-#' @param title Plot title.
 #' @export
 iplot_enrichment <- function(
-  std,
-  top_n = 20L,
-  padj_cutoff = 0.05,
-  colors = .de_direction_colors(),
-  title = NULL
+  std, top_n = 20L, padj_cutoff = 0.05,
+  colors = .de_direction_colors(), title = NULL
 ) {
   .rep_require("plotly")
   colors <- .rep_hex(colors)
@@ -626,13 +538,9 @@ iplot_enrichment <- function(
     .rep_plotly_config("enrichment")
 }
 
-# ---- isoform ---------------------------------------------------------------------------
+# ---- isoform ---------------------------------------------------------------------
 
 #' Interactive DTU bar chart: strongest differential transcript usage features
-#'
-#' @param dtu DTU result table (annotated CSV of the isoform report).
-#' @param top_n Number of features shown.
-#' @param padj_cutoff Adjusted p-value cut-off (dotted line).
 #' @export
 iplot_dtu <- function(dtu, top_n = 30L, padj_cutoff = 0.05) {
   .rep_require("plotly")
@@ -652,7 +560,8 @@ iplot_dtu <- function(dtu, top_n = 30L, padj_cutoff = 0.05) {
   }
   d <- utils::head(d[order(d$.p), , drop = FALSE], top_n)
   d <- d[order(-d$.p), , drop = FALSE]
-  labels <- if (is.na(lab_col)) as.character(seq_len(nrow(d))) else as.character(d[[lab_col]])
+  labels <- if (is.na(lab_col)) as.character(seq_len(nrow(d)))
+            else as.character(d[[lab_col]])
   labels <- make.unique(.rep_trunc(labels, 50L))
   height <- max(320L, 22L * nrow(d) + 140L)
 
@@ -678,8 +587,6 @@ iplot_dtu <- function(dtu, top_n = 30L, padj_cutoff = 0.05) {
 }
 
 #' Interactive p-value histogram
-#' @param p Numeric vector of p-values.
-#' @param title Plot title.
 #' @export
 iplot_pvalue_hist <- function(p, title = "p-value distribution") {
   .rep_require("plotly")
@@ -700,7 +607,343 @@ iplot_pvalue_hist <- function(p, title = "p-value distribution") {
     .rep_plotly_config("pvalue_hist")
 }
 
-# ---- tables ----------------------------------------------------------------------------
+# ---- isoform switch ---------------------------------------------------------------
+
+#' Interactive dIF vs q-value scatter of isoform switches
+#' @export
+iplot_isoform_switch <- function(
+  feat, padj_cutoff = 0.05, dIF_cutoff = 0.1, max_points = 5000L,
+  positive_col = "#c94a4a", neutral_col = "#999999"
+) {
+  .rep_require("plotly")
+  if (is.null(feat) || !nrow(feat)) {
+    return(.rep_empty_plot("No isoform-switch features"))
+  }
+  if (!all(c("dIF", "isoform_switch_q_value") %in% colnames(feat))) {
+    return(.rep_empty_plot("dIF / isoform_switch_q_value not found"))
+  }
+  d <- feat
+  d$dIF <- .rep_num(d$dIF)
+  d$.q  <- .rep_num(d$isoform_switch_q_value)
+  d <- d[is.finite(d$dIF) & !is.na(d$.q), , drop = FALSE]
+  if (!nrow(d)) return(.rep_empty_plot("No finite switch statistics"))
+  d$.mlog10 <- -log10(pmax(d$.q, .Machine$double.xmin))
+  d$.sig <- d$.q < padj_cutoff & abs(d$dIF) > dIF_cutoff
+  d$.label <- if ("gene_name" %in% colnames(d)) d$gene_name
+              else if ("gene_id" %in% colnames(d)) d$gene_id
+              else rep("", nrow(d))
+
+  if (nrow(d) > max_points) {
+    keep_sig  <- which(d$.sig)
+    keep_rest <- setdiff(seq_len(nrow(d)), keep_sig)
+    n_rest <- max(0L, max_points - length(keep_sig))
+    if (length(keep_rest) > n_rest) {
+      keep_rest <- if (requireNamespace("withr", quietly = TRUE)) {
+        withr::with_seed(1L, sample(keep_rest, n_rest))
+      } else {
+        sample(keep_rest, n_rest)
+      }
+    }
+    d <- d[sort(c(keep_sig, keep_rest)), , drop = FALSE]
+  }
+
+  p <- plotly::plot_ly()
+  for (k in c(FALSE, TRUE)) {
+    dd <- d[d$.sig == k, , drop = FALSE]
+    if (!nrow(dd)) next
+    p <- plotly::add_trace(
+      p, data = dd, x = ~dIF, y = ~.mlog10,
+      type = "scatter", mode = "markers",
+      name = if (k) paste0("Switch (", nrow(dd), ")")
+             else paste0("Not significant (", nrow(dd), ")"),
+      marker = list(
+        color   = if (k) positive_col else neutral_col,
+        size    = if (k) 7 else 4,
+        opacity = if (k) 0.85 else 0.45
+      ),
+      text = paste0("<b>", dd$.label, "</b><br>dIF: ", signif(dd$dIF, 3),
+                    "<br>q: ", signif(dd$.q, 3)),
+      hoverinfo = "text"
+    )
+  }
+  p |>
+    plotly::layout(
+      title = list(text = "Isoform switch overview", x = 0.02),
+      xaxis = list(title = "dIF (isoform fraction change)", zeroline = TRUE),
+      yaxis = list(title = "-log10(q)"),
+      shapes = list(
+        .rep_vline(-dIF_cutoff), .rep_vline(dIF_cutoff),
+        .rep_hline(-log10(padj_cutoff))
+      ),
+      legend = list(orientation = "h", y = -0.18)
+    ) |>
+    .rep_plotly_config("isoform_switch")
+}
+
+# ---- per-gene transcript proportions ----------------------------------------------
+
+#' Interactive stacked bar of transcript proportions per sample for one gene
+#' @export
+iplot_transcript_proportions <- function(isoform_obj, gene_symbol,
+                                        condition = "condition") {
+  .rep_require("plotly")
+  if (is.null(isoform_obj) || is.null(gene_symbol) || !nzchar(gene_symbol)) {
+    return(.rep_empty_plot("No gene requested"))
+  }
+  counts <- if (identical(isoform_obj$type, "tximport")) isoform_obj$txi$counts
+            else isoform_obj$counts
+  gene_ids <- isoform_obj$gene_map$ensembl[
+    !is.na(isoform_obj$gene_map$symbol) & isoform_obj$gene_map$symbol == gene_symbol
+  ]
+  if (!length(gene_ids)) {
+    return(.rep_empty_plot(paste0("Gene not found: ", gene_symbol)))
+  }
+  tx_ids <- isoform_obj$tx2gene$tx_id[isoform_obj$tx2gene$gene_id %in% gene_ids]
+  tx_ids <- intersect(tx_ids, rownames(counts))
+  if (length(tx_ids) < 2L) {
+    return(.rep_empty_plot("Fewer than 2 quantified transcripts"))
+  }
+  sub    <- counts[tx_ids, , drop = FALSE]
+  totals <- colSums(sub)
+  props  <- sweep(sub, 2, ifelse(totals > 0, totals, NA_real_), "/")
+  props[is.na(props)] <- 0
+
+  long <- data.frame(
+    sample     = rep(colnames(props), each = nrow(props)),
+    transcript = rep(rownames(props), times = ncol(props)),
+    proportion = as.vector(props),
+    stringsAsFactors = FALSE
+  )
+  if (condition %in% colnames(isoform_obj$meta)) {
+    long$group <- as.character(
+      isoform_obj$meta[[condition]][match(long$sample, rownames(isoform_obj$meta))]
+    )
+  } else {
+    long$group <- "All"
+  }
+  long$group  <- factor(long$group, levels = unique(long$group))
+  long$sample <- factor(long$sample, levels = colnames(props))
+
+  plotly::plot_ly(
+    x = long$sample, y = long$proportion, color = long$transcript,
+    type = "bar",
+    hovertext = paste0(long$sample, "<br>", long$transcript, ": ",
+                       scales::percent(long$proportion, accuracy = 0.1)),
+    hoverinfo = "text"
+  ) |>
+    plotly::layout(
+      barmode = "stack",
+      title = list(text = paste0("Transcript proportions – ", gene_symbol), x = 0.02),
+      xaxis = list(title = "", tickangle = -45),
+      yaxis = list(title = "proportion", tickformat = ".0%"),
+      legend = list(title = list(text = "transcript"))
+    ) |>
+    .rep_plotly_config("transcript_proportions")
+}
+
+# ---- decoupleR activity ------------------------------------------------------------
+
+#' Interactive barplot of decoupleR inferred TF/pathway activities
+#' @export
+iplot_decouple_activity <- function(
+  activity_df, top_n = 25L, padj_cutoff = 0.05,
+  title = "TF activity (decoupleR)",
+  positive_col = "#c94a4a", negative_col = "#2b5c8f"
+) {
+  .rep_require("plotly")
+  if (is.null(activity_df) || !nrow(activity_df)) {
+    return(.rep_empty_plot("No decoupleR activity results"))
+  }
+  pcol <- .rep_first_col(activity_df, c("p_value", "padj", "pval", "p.value"))
+  d <- activity_df
+  if (!is.na(pcol)) {
+    d$.p <- .rep_num(d[[pcol]])
+    d <- d[!is.na(d$.p) & d$.p < padj_cutoff, , drop = FALSE]
+  } else {
+    d$.p <- NA_real_
+  }
+  if (!nrow(d)) {
+    return(.rep_empty_plot(paste0("No source with p < ", padj_cutoff)))
+  }
+  d <- utils::head(d[order(-abs(d$score)), , drop = FALSE], top_n)
+  d <- d[order(d$score), , drop = FALSE]
+  d$label <- make.unique(.rep_trunc(d$source, 40L))
+  cols <- ifelse(d$score > 0, positive_col, negative_col)
+  height <- max(320L, 22L * nrow(d) + 140L)
+
+  plotly::plot_ly(
+    x = d$score, y = factor(d$label, levels = d$label),
+    type = "bar", orientation = "h", height = height,
+    marker = list(color = cols),
+    hovertext = paste0(
+      "<b>", d$source, "</b><br>score: ", signif(d$score, 3),
+      ifelse(is.na(d$.p), "", paste0("<br>p: ", signif(d$.p, 3)))
+    ),
+    hoverinfo = "text"
+  ) |>
+    plotly::layout(
+      title = list(text = title, x = 0.02),
+      xaxis = list(title = "activity score (t-like)"),
+      yaxis = list(title = "", tickfont = list(size = 10)),
+      margin = list(l = 240),
+      shapes = list(.rep_vline(0, "#999999"))
+    ) |>
+    .rep_plotly_config("decouple")
+}
+
+# ---- TF regulon interactive plots -------------------------------------------------
+
+#' Interactive targeted volcano for one TF's regulon
+#'
+#' Points are colored by whether the gene behaves as predicted by the network
+#' (mor direction), exactly as the static PDF: "Activé (attendu)",
+#' "Réprimé (attendu)", "Autre variation", "Non significatif".
+#'
+#' @param regulon_df Regulon table (`target`, `log2FoldChange`, `padj`, `mor`,
+#'   `Regulation`) written by `.run_decouple_tf_regulon_plots()`.
+#' @param tf          TF name (for the title).
+#' @param padj_cutoff,lfc_cutoff Thresholds drawn as dashed lines.
+#' @export
+iplot_tf_regulon_volcano <- function(
+  regulon_df, tf, padj_cutoff = 0.05, lfc_cutoff = 1
+) {
+  .rep_require("plotly")
+  if (is.null(regulon_df) || !nrow(regulon_df)) {
+    return(.rep_empty_plot(paste("No regulon targets for", tf)))
+  }
+  d <- regulon_df
+  d$.mlog10 <- -log10(pmax(.rep_num(d$padj), .Machine$double.xmin))
+  d$.lfc    <- .rep_num(d$log2FoldChange)
+  d$.mor    <- .rep_num(d$mor)
+
+  cols <- c(
+    "Non significatif"  = "#BDBDBD",
+    "Autre variation"   = "#ff7f00",
+    "Activé (attendu)"  = "#1f78b4",
+    "Réprimé (attendu)" = "#e31a1c"
+  )
+  ord <- c("Non significatif", "Autre variation",
+           "Activé (attendu)", "Réprimé (attendu)")
+
+  p <- plotly::plot_ly()
+  for (cat in ord) {
+    dd <- d[as.character(d$Regulation) == cat, , drop = FALSE]
+    if (!nrow(dd)) next
+    p <- plotly::add_trace(
+      p, data = dd, x = ~.lfc, y = ~.mlog10,
+      type = "scatter", mode = "markers",
+      name = paste0(cat, " (", nrow(dd), ")"),
+      marker = list(
+        color   = cols[[cat]],
+        size    = if (cat == "Non significatif") 6 else 9,
+        opacity = if (cat == "Non significatif") 0.55 else 0.9
+      ),
+      text = paste0(
+        "<b>", dd$target, "</b><br>log2FC: ", signif(dd$.lfc, 3),
+        "<br>padj: ",   signif(.rep_num(dd$padj), 3),
+        "<br>mor: ",    signif(dd$.mor, 3)
+      ),
+      hoverinfo = "text"
+    )
+  }
+  shapes <- list(
+    .rep_vline(-lfc_cutoff), .rep_vline(lfc_cutoff),
+    .rep_hline(-log10(padj_cutoff))
+  )
+  p |>
+    plotly::layout(
+      title = list(text = paste("Regulon:", tf), x = 0.02),
+      xaxis = list(title = "log2 fold change", zeroline = TRUE),
+      yaxis = list(title = "-log10(padj)"),
+      shapes = shapes,
+      legend = list(orientation = "h", y = -0.18)
+    ) |>
+    .rep_plotly_config("tf_regulon_volcano")
+}
+
+#' Interactive leading-edge plot for one TF's regulon
+#'
+#' Bar chart of the running enrichment score over all genes ranked by stat,
+#' with vertical markers at the rank of each of the TF's targets. The
+#' running ES curve is subsampled to ~1000 points (keeps the JSON payload
+#' light) while all targets are kept as markers.
+#'
+#' @param le_df     Leading-edge table (`rank`, `target`, `stat`) written by
+#'   `.run_decouple_tf_regulon_plots()`.
+#' @param dge_results Full DGE results table (`gene`, `stat` / `contrast_stat`).
+#' @param tf        TF name (for the title).
+#' @param test_type "Wald" or "LRT" -- determines which stat column ranks.
+#' @export
+iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
+  .rep_require("plotly")
+  if (is.null(le_df) || !nrow(le_df) || is.null(dge_results) || !nrow(dge_results)) {
+    return(.rep_empty_plot(paste("No leading-edge data for", tf)))
+  }
+  is_lrt <- identical(test_type, "LRT") && "contrast_stat" %in% colnames(dge_results)
+  stat_col <- if (is_lrt) "contrast_stat" else "stat"
+  if (!stat_col %in% colnames(dge_results)) {
+    return(.rep_empty_plot("No stat column available"))
+  }
+
+  keep <- !is.na(dge_results[[stat_col]]) &
+          !is.na(dge_results$gene) & dge_results$gene != ""
+  r <- dge_results[keep, c("gene", stat_col), drop = FALSE]
+  r <- r[order(-r[[stat_col]]), , drop = FALSE]
+  r <- r[!duplicated(r$gene), , drop = FALSE]
+  n_genes <- nrow(r)
+  if (!n_genes) return(.rep_empty_plot("No ranked genes"))
+
+  positions <- le_df$rank[order(le_df$rank)]
+  positions <- positions[!is.na(positions) & positions >= 1L & positions <= n_genes]
+  n_hits <- length(positions)
+  if (!n_hits) return(.rep_empty_plot("No hits within rank range"))
+
+  is_hit <- rep(FALSE, n_genes)
+  is_hit[positions] <- TRUE
+  hit_w  <- 1 / n_hits
+  miss_w <- -1 / max(1L, n_genes - n_hits)
+  es_vec <- cumsum(ifelse(is_hit, hit_w, miss_w))
+  peak_idx <- which.max(abs(es_vec))
+
+  # Downsample curve to <= 1000 points
+  idx <- if (n_genes > 1000) {
+    round(seq(1, n_genes, length.out = 1000))
+  } else seq_len(n_genes)
+
+  plotly::plot_ly() |>
+    plotly::add_trace(
+      x = idx, y = es_vec[idx],
+      type = "scatter", mode = "lines",
+      name = "Running ES",
+      line = list(color = "#1f78b4", width = 2),
+      hoverinfo = "skip"
+    ) |>
+    plotly::add_trace(
+      x = positions,
+      y = rep(min(es_vec) - 0.02, n_hits),
+      type = "scatter", mode = "markers",
+      name = paste0("Targets (", n_hits, ")"),
+      marker = list(
+        color = "#e31a1c", symbol = "line-ns",
+        size = 12, line = list(width = 2)
+      ),
+      text = paste0(
+        "<b>", r$gene[positions], "</b><br>rank: ", positions,
+        "<br>stat: ", signif(r[[stat_col]][positions], 3)
+      ),
+      hoverinfo = "text"
+    ) |>
+    plotly::layout(
+      title = list(text = paste("Leading edge:", tf), x = 0.02),
+      xaxis = list(title = "Rank (by stat, decreasing)"),
+      yaxis = list(title = "Running enrichment score"),
+      shapes = list(.rep_vline(peak_idx, "#888888")),
+      legend = list(orientation = "h", y = -0.18)
+    ) |>
+    .rep_plotly_config("tf_leading_edge")
+}
+
+# ---- tables ------------------------------------------------------------------
 
 #' Interactive result table
 #'
@@ -714,20 +957,15 @@ iplot_pvalue_hist <- function(p, title = "p-value distribution") {
 #' @param digits Significant digits for numeric columns.
 #' @param filename Base name of the exported CSV / Excel files.
 #' @param round_payload `TRUE` (default) rounds real-valued columns to
-#'   `digits` significant digits in R BEFORE serialisation: DT::formatSignif
-#'   only changes the rendered text, while the data itself would be embedded
-#'   at full double precision (16 significant digits), which is what makes
-#'   big tables heavy.
+#'   `digits` significant digits in R BEFORE serialisation.
+#' @param escape HTML-escape cell contents (default TRUE). Set to `FALSE`
+#'   when a column holds pre-built `<a href=...>` markup (e.g. clickable
+#'   file links built by `.xp_file_link()`).
 #' @return A DT htmlwidget.
 #' @export
 itable <- function(
-  df,
-  caption = NULL,
-  page_length = 10L,
-  max_rows = 800L,
-  digits = 3L,
-  filename = "expressom_table",
-  round_payload = TRUE
+  df, caption = NULL, page_length = 10L, max_rows = 800L, digits = 3L,
+  filename = "expressom_table", round_payload = TRUE, escape = TRUE
 ) {
   .rep_require("DT", "to display interactive tables")
   if (is.null(df) || nrow(df) == 0L) {
@@ -759,6 +997,7 @@ itable <- function(
     filter = "top",
     extensions = "Buttons",
     class = "compact stripe hover",
+    escape = escape,
     options = list(
       pageLength = page_length,
       scrollX = TRUE,
