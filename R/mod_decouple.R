@@ -38,6 +38,8 @@
 # The helpers below:
 #   * configure OmnipathR once per session (retry count, timeout, quieter
 #     logging) so transient network hiccups do not abort the whole stage;
+#   * redirect OmnipathR's own log file to <out_dir>/Log/omnipathr/ so its
+#     "omnipathr-log/" folder no longer lands in the process working directory;
 #   * retry each network fetch with exponential back-off;
 #   * stop() with a clear, actionable message when PROGENy fails;
 #   * probe OmniPath once at the start of the stage and tell the user upfront
@@ -48,13 +50,50 @@
 #' Sets OmnipathR options once per R session: more retries, longer HTTP
 #' timeout, and quieter logging (this package reports fallbacks explicitly
 #' instead). Never overrides values the user has set themselves.
+#'
+#' Additionally, OmnipathR's own log file (`omnipath.logfile`) is redirected
+#' to `<out_dir>/Log/omnipathr/` (or `<log_dir>/omnipathr/` when `log_dir` is
+#' supplied) on every call -- by default OmnipathR writes a
+#' `<cwd>/omnipathr-log/` folder, which was ending up outside the pipeline's
+#' `Log/` tree. This redirection is per-run (the log path is timestamped and
+#' comparison-tagged) and is therefore re-applied even when the generic
+#' options have already been set in this session.
+#'
+#' @param out_dir Output directory of the current run.
+#' @param log_dir Explicit base log directory; takes precedence over `out_dir`.
+#'   The actual log file goes into `<log_dir>/omnipathr/`.
+#' @param comp_name Comparison name, embedded in the log-file name so runs for
+#'   different comparisons produce distinctly named files.
 #' @keywords internal
-.configure_decouple_omnipathr <- function() {
-  if (isTRUE(getOption("ExpressOM.omnipathr_configured"))) {
-    return(invisible(TRUE))
-  }
+.configure_decouple_omnipathr <- function(
+  out_dir   = NULL,
+  log_dir   = NULL,
+  comp_name = NULL
+) {
   if (!requireNamespace("OmnipathR", quietly = TRUE)) {
     return(invisible(FALSE))
+  }
+
+  # Per-run: redirect OmnipathR's own log file to <out_dir>/Log/omnipathr/.
+  # Must run on every call (not gated by the flag below) because the target
+  # path is timestamped and comparison-specific.
+  if (!is.null(out_dir) || !is.null(log_dir)) {
+    log_base     <- if (!is.null(log_dir)) log_dir else file.path(out_dir, "Log")
+    omni_log_dir <- file.path(log_base, "omnipathr")
+    if (!dir.exists(omni_log_dir)) {
+      dir.create(omni_log_dir, recursive = TRUE, showWarnings = FALSE)
+    }
+    stamp    <- format(Sys.time(), "%Y-%m-%d-%H%M%S")
+    log_name <- if (!is.null(comp_name) && nzchar(comp_name)) {
+      paste0("omnipathr-log-", comp_name, "-", stamp, ".log")
+    } else {
+      paste0("omnipathr-log-", stamp, ".log")
+    }
+    options(omnipath.logfile = file.path(omni_log_dir, log_name))
+  }
+
+  if (isTRUE(getOption("ExpressOM.omnipathr_configured"))) {
+    return(invisible(TRUE))
   }
 
   defaults <- list(
@@ -91,9 +130,19 @@
 #' OmnipathR itself is not installed. This is a **network** probe: a working
 #' cache alone does not make it return `TRUE`, which is exactly the intent --
 #' the caller wants to know whether live data will be fetched.
+#'
+#' @param out_dir,log_dir,comp_name Forwarded to
+#'   `.configure_decouple_omnipathr()` so OmnipathR's own log file lands in
+#'   `<out_dir>/Log/omnipathr/` (or `<log_dir>/omnipathr/`).
 #' @keywords internal
-.decouple_omnipath_probe <- function(timeout = 15) {
-  .configure_decouple_omnipathr()
+.decouple_omnipath_probe <- function(
+  timeout   = 15,
+  out_dir   = NULL,
+  log_dir   = NULL,
+  comp_name = NULL
+) {
+  .configure_decouple_omnipathr(out_dir = out_dir, log_dir = log_dir,
+                                comp_name = comp_name)
   if (!requireNamespace("OmnipathR", quietly = TRUE)) {
     return(list(available = NA, n_resources = NA_integer_,
                 reason = "OmnipathR not installed"))
@@ -147,12 +196,22 @@
 #' offline fallback: if the fetch fails, this function raises an error so the
 #' caller can record a "failed" status and warn the user instead of quietly
 #' dropping the resource.
+#'
+#' @param resource "collectri", "progeny", or "dorothea".
+#' @param organism Ensembl organism string (used to pick human vs. mouse).
+#' @param out_dir,comp_name Forwarded to `.configure_decouple_omnipathr()` so
+#'   OmnipathR's own log file lands in `<out_dir>/Log/omnipathr/`.
 #' @keywords internal
-.decouple_get_net <- function(resource, organism) {
+.decouple_get_net <- function(
+  resource,
+  organism,
+  out_dir   = NULL,
+  comp_name = NULL
+) {
   if (!requireNamespace("decoupleR", quietly = TRUE)) {
     stop("Package 'decoupleR' is required. Install with BiocManager::install('decoupleR').")
   }
-  .configure_decouple_omnipathr()
+  .configure_decouple_omnipathr(out_dir = out_dir, comp_name = comp_name)
   org <- if (grepl("mus|mouse", organism, ignore.case = TRUE)) "mouse" else "human"
 
   net <- switch(
@@ -261,6 +320,10 @@
 #' @param lfc_cutoff Absolute log2 fold-change floor used to categorize regulon
 #'   targets (activated/repressed/other) in the targeted volcano and the summary
 #'   table. Default 1.
+#' @param log_dir Optional base log directory; forwarded to
+#'   `.configure_decouple_omnipathr()` / `.decouple_get_net()` so OmnipathR's
+#'   own log file lands under `<log_dir>/omnipathr/` instead of the default
+#'   `<out_dir>/Log/omnipathr/`.
 #' @return list(results = named list per resource, files = manifest,
 #'   network_status = data.frame of per-resource fetch status)
 #' @export
@@ -274,7 +337,8 @@ run_decouple_analysis <- function(
   min_size = 5,
   padj_cutoff = 0.05,
   stat_col = "stat",
-  lfc_cutoff = 1
+  lfc_cutoff = 1,
+  log_dir = NULL
 ) {
   method <- match.arg(method)
   if (!requireNamespace("decoupleR", quietly = TRUE)) {
@@ -283,10 +347,18 @@ run_decouple_analysis <- function(
   res_tbl <- as.data.frame(res_tbl)
   if (nrow(res_tbl) == 0L) return(NULL)
 
-  .configure_decouple_omnipathr()
+  .configure_decouple_omnipathr(
+    out_dir   = out_dir,
+    log_dir   = log_dir,
+    comp_name = comp_name
+  )
 
   # ---- Pre-flight network probe -------------------------------------------
-  probe <- .decouple_omnipath_probe()
+  probe <- .decouple_omnipath_probe(
+    out_dir   = out_dir,
+    log_dir   = log_dir,
+    comp_name = comp_name
+  )
   network_available <- isTRUE(probe$available)
   if (isFALSE(probe$available)) {
     message(
@@ -348,7 +420,12 @@ run_decouple_analysis <- function(
   for (resource in resources) {
     message("   -> decoupleR / ", resource, " (", method, ")")
     net <- tryCatch(
-      .decouple_get_net(resource, organism),
+      .decouple_get_net(
+        resource  = resource,
+        organism  = organism,
+        out_dir   = out_dir,
+        comp_name = comp_name
+      ),
       error = function(e) {
         message("      ", conditionMessage(e))
         NULL

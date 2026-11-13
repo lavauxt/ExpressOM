@@ -882,6 +882,21 @@ expressom_report_settings <- function(
         }))
       ))
     }
+
+    if (length(res$logs$omnipath_logs)) {
+      blocks <- c(blocks, list(
+        tg$h4("OmnipathR logs"),
+        tg$p(
+          class = "xp-note",
+          "OmnipathR's own log file (used by decoupleR when fetching ",
+          "CollecTRI / PROGENy / DoRothEA from OmniPath)."
+        ),
+        tg$ul(lapply(res$logs$omnipath_logs, function(p) {
+          rel <- .rep_rel(p, res$out_dir)
+          tg$li(.xp_file_link(p, res$out_dir, text = rel))
+        }))
+      ))
+    }
     if (length(blocks) == 0L) return(.xp_note("No log files were found in Log/."))
     htmltools::tagList(blocks)
   }
