@@ -118,3 +118,50 @@ test_that(".rep_hex converts R colour names and leaves hex values alone", {
   expect_identical(names(.rep_hex(c(up = "red", down = "blue"))), c("up", "down"))
   expect_null(.rep_hex(NULL))
 })
+
+
+test_that("extended RNA-seq QC and diagnostic charts are interactive widgets", {
+  skip_if_not_installed("plotly")
+  res <- fixture_results()
+  mat <- res$dge$expression$qc_matrix
+  expect_s3_class(.rep_iplot_sample_correlation(mat), "plotly")
+  expect_s3_class(.rep_iplot_sample_distance(mat), "plotly")
+  expect_s3_class(.rep_iplot_sample_dendrogram(mat), "plotly")
+  expect_s3_class(.rep_iplot_sample_mds(mat), "plotly")
+  expect_s3_class(.rep_iplot_rle(mat), "plotly")
+  expect_s3_class(.rep_iplot_mean_variance(mat), "plotly")
+  expect_s3_class(.rep_iplot_expression_boxplot(res$dge$expression$distribution_matrix), "plotly")
+  expect_s3_class(.rep_iplot_expression_density(res$dge$expression$distribution_matrix), "plotly")
+  expect_s3_class(.rep_iplot_pvalue_qq(res$dge$results$pvalue), "plotly")
+  expect_s3_class(.rep_iplot_ranked_effects(res$dge$results), "plotly")
+})
+
+test_that("enrichment bubble and gene-overlap plots handle suitable tables", {
+  skip_if_not_installed("plotly")
+  res <- fixture_results()
+  inv <- res$functional$inventory
+  i <- which(inv$kind == "ora")[[1L]]
+  tbl <- res$functional$tables[[inv$path[[i]]]]
+  std <- .rep_standardise_enrichment(tbl, "ora")
+  expect_s3_class(.rep_iplot_enrichment_bubble(std), "plotly")
+  # The fixture uses toy gene IDs; a heatmap is only returned if overlap data
+  # are in a parseable, non-empty gene-list column.
+  overlap <- .rep_iplot_enrichment_overlap(tbl)
+  if (!is.null(overlap)) expect_s3_class(overlap, "plotly")
+})
+
+test_that("enrichment networks and GSEA running scores are interactive when genes overlap", {
+  skip_if_not_installed("plotly")
+  tbl <- data.frame(
+    Description = c("Pathway A", "Pathway B", "Pathway C"),
+    p.adjust = c(0.001, 0.003, 0.01),
+    core_enrichment = c("g1/g2/g3/g4", "g2/g3/g5", "g4/g5/g6"),
+    stringsAsFactors = FALSE
+  )
+  expect_s3_class(.rep_iplot_enrichment_network(tbl), "plotly")
+  dge <- data.frame(
+    gene = paste0("g", 1:8), stat = c(4, 3, 2, 1, -1, -2, -3, -4),
+    stringsAsFactors = FALSE
+  )
+  expect_s3_class(.rep_iplot_gsea_running(tbl, dge), "plotly")
+})

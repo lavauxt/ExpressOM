@@ -74,7 +74,7 @@ test_that("an EDA-only directory still produces a report", {
   skip_if_no_pandoc()
   out <- withr::local_tempdir()
   make_run_dir(out, functional = FALSE, isoform = FALSE, figures = FALSE)
-  unlink(file.path(out, c("DE_raw_results", "Log")), recursive = TRUE)
+  unlink(file.path(out, c("DE_raw_results", "log")), recursive = TRUE)
   file.rename(
     file.path(out, "Plots", "PCA_treated_vs_control_sample_scores.tsv"),
     file.path(out, "Plots", "PCA_EDA_sample_scores.tsv")

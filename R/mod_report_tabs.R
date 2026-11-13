@@ -8,13 +8,13 @@ expressom_report_settings <- function(
   max_points = 1500L,
   heatmap_genes = 20L,
   top_terms = 15L,
-  table_rows = 2000L,
+  table_rows = Inf,
   static_figures = TRUE,
   max_static_figures = 24L,
   static_dpi = 60,
   static_max_px = 1000L,
   max_isoform_plots = 24L,
-  plotly_enrichment_max = 12L,
+  plotly_enrichment_max = 32L,
   merge_enrichment_threshold = 3L,
   plotly_pca_max = 4L,
   highlight_genes = NULL,
@@ -22,7 +22,7 @@ expressom_report_settings <- function(
   lfc_cutoff = NULL,
   theme = c("auto", "light", "dark"),
   self_contained = TRUE,
-  slim_tables = TRUE
+  slim_tables = FALSE
 ) {
   theme <- match.arg(theme)
   list(
@@ -425,6 +425,71 @@ expressom_report_settings <- function(
   }
 }
 
+
+.xp_leaf_sample_similarity <- function(res, st) {
+  function() {
+    ex <- res$dge$expression
+    mat <- ex$qc_matrix %||% ex$matrix
+    htmltools::tagList(
+      .xp_note(
+        "Sample-level similarity is calculated from log2(normalised counts + 1) " ,
+        "using the most variable genes across the available expression matrix. " ,
+        "This is an exploratory diagnostic, not a replacement for checking " ,
+        "library preparation, batch metadata and sample identity."
+      ),
+      .xp_two_col(
+        .rep_iplot_sample_correlation(mat, method = "pearson"),
+        .rep_iplot_sample_distance(mat)
+      ),
+      .xp_two_col(
+        .rep_iplot_sample_mds(mat),
+        .rep_iplot_sample_dendrogram(mat)
+      )
+    )
+  }
+}
+
+.xp_leaf_expression_qc <- function(res, st) {
+  function() {
+    ex <- res$dge$expression
+    mat <- ex$distribution_matrix %||% ex$qc_matrix %||% ex$matrix
+    htmltools::tagList(
+      .xp_note(
+        "Distributions are shown on log2(normalised counts + 1). " ,
+        "The same gene subset is used across samples so the profiles can be compared."
+      ),
+      .xp_two_col(
+        .rep_iplot_expression_boxplot(mat),
+        .rep_iplot_expression_density(mat)
+      ),
+      .xp_two_col(
+        .rep_iplot_rle(mat),
+        .rep_iplot_mean_variance(ex$qc_matrix %||% mat)
+      )
+    )
+  }
+}
+
+.xp_leaf_dge_diagnostics <- function(res, st) {
+  function() {
+    tbl <- res$dge$results
+    htmltools::tagList(
+      .xp_note(
+        "P-value diagnostics are descriptive: a uniform-like bulk of null p-values " ,
+        "and a left-tail excess of small p-values are generally expected when signal " ,
+        "is present. Interpret these plots together with the design, filtering, " ,
+        "dispersion modelling and sample-level QC."
+      ),
+      .xp_two_col(
+        iplot_pvalue_hist(tbl$pvalue, "Raw p-value distribution"),
+        .rep_iplot_pvalue_qq(tbl$pvalue)
+      ),
+      htmltools::tags$h4("Largest absolute effects"),
+      .rep_iplot_ranked_effects(tbl, top_n = 25L)
+    )
+  }
+}
+
 # ---- table slimming (report open-speed) ---------------------------------------
 
 .xp_table_drop_cols <- c(
@@ -497,10 +562,28 @@ expressom_report_settings <- function(
         .xp_file_link(file.path(res$out_dir, path), res$out_dir, text = path)
       ),
       if (isTRUE(show_plot) && !is.null(std)) {
-        iplot_enrichment(
-          std, top_n = st$top_terms, padj_cutoff = co$padj,
-          colors = res$config$volcano_colors,
-          title = paste0("Top terms \u2013 ", basename(path))
+        htmltools::tagList(
+          .xp_two_col(
+            iplot_enrichment(
+              std, top_n = st$top_terms, padj_cutoff = co$padj,
+              colors = res$config$volcano_colors,
+              title = paste0("Ranked enrichment \u2013 ", basename(path))
+            ),
+            .rep_iplot_enrichment_bubble(
+              std, top_n = st$top_terms,
+              title = paste0("Enrichment bubble plot \u2013 ", basename(path))
+            )
+          ),
+          {
+            overlap <- .rep_iplot_enrichment_overlap(tb, top_n = min(st$top_terms, 20L))
+            network <- .rep_iplot_enrichment_network(tb, top_n = min(st$top_terms, 14L))
+            if (!is.null(overlap) && !is.null(network)) .xp_two_col(overlap, network)
+            else if (!is.null(overlap)) overlap
+            else network
+          },
+          if (identical(kind, "gsea")) {
+            .rep_iplot_gsea_running(tb, res$dge$results)
+          }
         )
       } else if (is.null(std)) {
         .xp_note("This table has no recognised term / adjusted p-value columns; showing the raw table only.")
@@ -656,20 +739,33 @@ expressom_report_settings <- function(
   function() {
     co <- .xp_cutoffs(res, st)
     dte <- res$isoform$dte
-    lab <- .rep_first_col(dte, c("gene", "transcript_id"))
+    if (is.null(dte) || !nrow(dte)) return(.xp_note("No DTE transcript results are available."))
+    q_col <- .rep_first_col(dte, c("padj", "adj_pvalue", "FDR", "qvalue", "p.adjust"))
+    raw_p <- .rep_first_col(dte, c("pvalue", "p_value"))
+    ord <- if (is.na(q_col)) seq_len(nrow(dte)) else order(.rep_num(dte[[q_col]]), na.last = TRUE)
     htmltools::tagList(
-      iplot_volcano(
-        dte, padj_cutoff = co$padj, lfc_cutoff = co$lfc,
-        colors = res$config$volcano_colors,
-        label_col = if (is.na(lab)) "gene" else lab,
-        max_points = st$max_points,
-        title = "DTE volcano plot (transcript level)"
+      .xp_note(
+        "All available transcript-level DTE results are shown. Use the global search or " ,
+        "per-column filters in the table; the Copy, CSV and Excel buttons export the " ,
+        "filtered or complete result set. Volcano and MA plots use the transcript-level " ,
+        "log2 fold-change, mean abundance and adjusted p-value columns actually present."
       ),
-      itable(.xp_prune_table(
-               dte[order(.rep_num(dte$padj), na.last = TRUE), , drop = FALSE],
-               st
-             ),
-             page_length = 15L, max_rows = st$table_rows, filename = "DTE_results")
+      .xp_two_col(
+        iplot_dte_volcano(dte, padj_cutoff = co$padj, lfc_cutoff = co$lfc),
+        iplot_dte_ma(dte, padj_cutoff = co$padj, lfc_cutoff = co$lfc)
+      ),
+      .xp_two_col(
+        iplot_dte_abundance_significance(dte, padj_cutoff = co$padj),
+        iplot_dte_ranked(dte, top_n = 25L)
+      ),
+      .xp_two_col(
+        if (!is.na(raw_p)) iplot_pvalue_hist(dte[[raw_p]], "DTE raw p-value distribution")
+        else .xp_note("No raw DTE p-value column is available."),
+        if (!is.na(q_col)) iplot_pvalue_hist(dte[[q_col]], "DTE adjusted p-value distribution")
+        else .xp_note("No adjusted DTE p-value column is available.")
+      ),
+      itable(.xp_prune_table(dte[ord, , drop = FALSE], st),
+             page_length = 25L, max_rows = st$table_rows, filename = "DTE_results")
     )
   }
 }
@@ -678,15 +774,33 @@ expressom_report_settings <- function(
   function() {
     co <- .xp_cutoffs(res, st)
     dtu <- res$isoform$dtu
-    pc <- .rep_first_col(dtu, c("adj_pvalue", "padj", "FDR", "pvalue"))
+    if (is.null(dtu) || !nrow(dtu)) return(.xp_note("No DTU feature results are available."))
+    pc <- .rep_first_col(dtu, c("adj_pvalue", "padj", "FDR", "qvalue", "p.adjust"))
     raw_p <- .rep_first_col(dtu, c("pvalue", "p_value"))
     ord <- if (is.na(pc)) seq_len(nrow(dtu)) else order(.rep_num(dtu[[pc]]), na.last = TRUE)
     htmltools::tagList(
+      .xp_note(
+        "DTU tests report likelihood-ratio statistics and adjusted p-values; they do not " ,
+        "provide a transcript usage log2 fold-change in this result table. Therefore the " ,
+        "interactive LR/significance and feature-ranking views are shown instead of a " ,
+        "misleading volcano effect-size plot. All available feature rows are retained."
+      ),
       .xp_two_col(
         iplot_dtu(dtu, top_n = 30L, padj_cutoff = co$padj),
-        if (!is.na(raw_p)) iplot_pvalue_hist(dtu[[raw_p]], "DTU p-value distribution")
+        iplot_dtu_lr_q(dtu, padj_cutoff = co$padj)
       ),
-      itable(.xp_prune_table(dtu[ord, , drop = FALSE], st), page_length = 15L,
+      .xp_two_col(
+        iplot_dtu_lr_df(dtu),
+        iplot_dtu_gene_summary(dtu, top_n = 30L)
+      ),
+      .xp_two_col(
+        if (!is.na(raw_p)) iplot_pvalue_hist(dtu[[raw_p]], "DTU raw p-value distribution")
+        else .xp_note("No raw DTU p-value column is available."),
+        if (!is.na(pc)) iplot_pvalue_hist(dtu[[pc]], "DTU adjusted p-value distribution")
+        else .xp_note("No adjusted DTU p-value column is available.")
+      ),
+      iplot_dtu_lr_hist(dtu),
+      itable(.xp_prune_table(dtu[ord, , drop = FALSE], st), page_length = 25L,
              max_rows = st$table_rows, filename = "DTU_results")
     )
   }
@@ -897,7 +1011,16 @@ expressom_report_settings <- function(
         }))
       ))
     }
-    if (length(blocks) == 0L) return(.xp_note("No log files were found in Log/."))
+    if (length(res$logs$targets_logs)) {
+      blocks <- c(blocks, list(
+        tg$h4("targets pipeline logs"),
+        tg$ul(lapply(res$logs$targets_logs, function(p) {
+          rel <- .rep_rel(p, res$out_dir)
+          tg$li(.xp_file_link(p, res$out_dir, text = rel))
+        }))
+      ))
+    }
+    if (length(blocks) == 0L) return(.xp_note("No log files were found in log/."))
     htmltools::tagList(blocks)
   }
 }
@@ -945,6 +1068,12 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
       })
     ))
   }
+  if (!is.null(res$dge$expression)) {
+    pca_nodes <- c(pca_nodes, list(
+      .xp_node("Sample similarity", content = .xp_leaf_sample_similarity(res, st)),
+      .xp_node("Expression distributions", content = .xp_leaf_expression_qc(res, st))
+    ))
+  }
   qc <- if (length(pca_nodes)) {
     do.call(.xp_node, c(list("Samples & QC"), pca_nodes))
   } else NULL
@@ -956,6 +1085,7 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
       "Differential expression",
       .xp_node("Volcano", content = .xp_leaf_volcano(res, st)),
       .xp_node("MA plot", content = .xp_leaf_ma(res, st)),
+      .xp_node("Diagnostics", content = .xp_leaf_dge_diagnostics(res, st)),
       if (!is.null(res$dge$expression)) {
         .xp_node("Top genes heatmap", content = .xp_leaf_heatmap(res, st))
       },
@@ -1105,6 +1235,8 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
              filename = "file_inventory", escape = FALSE)
     )
   }
+
+
   info <- .xp_node(
     "Run info",
     .xp_node("Parameters", content = .xp_leaf_table(

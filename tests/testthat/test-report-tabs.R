@@ -10,6 +10,17 @@ test_that("the tab tree has the expected top-level tabs for a full run", {
     c("Overview", "Samples & QC", "Differential expression", "Functional analysis",
       "Isoforms", "Figures", "Run info")
   )
+  run_info <- tree[[which(tree_titles(tree) == "Run info")]]
+  expect_identical(
+    vapply(run_info$children, `[[`, character(1), "title"),
+    c("Parameters", "Logs", "Files")
+  )
+  qc_titles <- vapply(tree[[which(tree_titles(tree) == "Samples & QC")]]$children,
+                      `[[`, character(1), "title")
+  expect_true(all(c("Sample similarity", "Expression distributions") %in% qc_titles))
+  de_titles <- vapply(tree[[which(tree_titles(tree) == "Differential expression")]]$children,
+                      `[[`, character(1), "title")
+  expect_true("Diagnostics" %in% de_titles)
 })
 
 test_that("tabs for missing stages are left out", {

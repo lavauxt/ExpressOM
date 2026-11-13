@@ -88,7 +88,7 @@
 #' Write the run-configuration snapshot read back by the report and the app
 #' @keywords internal
 .write_run_config <- function(out_dir, params) {
-  log_dir <- file.path(out_dir, "Log")
+  log_dir <- .expressom_log_dir(out_dir, create = TRUE)
   dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
   safe <- .rep_json_safe(params)
   if (is.null(safe)) safe <- list()
@@ -122,11 +122,10 @@ list_expressom_comparisons <- function(out_dir) {
   } else {
     character(0)
   }
-  log_files <- list.files(
-    file.path(out_dir, "Log", "DGE"),
-    pattern = "^DGE_params_.*\\.json$",
-    full.names = TRUE
-  )
+  log_files <- unlist(lapply(.expressom_log_dirs(out_dir), function(d) {
+    list.files(file.path(d, "DGE"), pattern = "^DGE_params_.*\\.json$",
+               full.names = TRUE)
+  }), use.names = FALSE)
 
   strip_ext <- function(basename) sub("\\.(txt|tsv)$", "", basename)
   nm <- c(
@@ -287,10 +286,11 @@ load_expressom_results <- function(
   has_cmp <- !is.na(comparison)
 
   # ---- configuration ----------------------------------------------------------
-  run_cfg <- .rep_read_json(file.path(out_dir, "Log", "expressom_run.json"))
+  run_cfg <- .rep_read_json(.expressom_log_file(out_dir, "expressom_run.json"))
   dge_log <- if (has_cmp) {
-    .rep_read_json(file.path(out_dir, "Log", "DGE",
-                              paste0("DGE_params_", comparison, ".json")))
+    .rep_read_json(.expressom_log_file(
+      out_dir, "DGE", paste0("DGE_params_", comparison, ".json")
+    ))
   } else NULL
 
   lvl <- run_cfg$level %||% dge_log$contrast$level
@@ -441,7 +441,8 @@ load_expressom_results <- function(
   )
 }
 
-.rep_load_expression <- function(de_dir, comparison, results, max_genes) {
+.rep_load_expression <- function(de_dir, comparison, results, max_genes,
+                                max_qc_genes = 1500L, max_distribution_genes = 5000L) {
   path <- .rep_find_table(de_dir, paste0("DESeq_Normalized_Counts_", comparison))
   if (is.null(path) || max_genes < 2L) return(NULL)
   nc <- .rep_read_table(path)
@@ -453,16 +454,50 @@ load_expressom_results <- function(
   sample_cols <- sample_cols[vapply(nc[sample_cols], is.numeric, logical(1))]
   if (length(sample_cols) < 2L) return(NULL)
 
+  # Keep all usable rows for sample-level QC. The heatmap remains focused on
+  # the most significant DE genes, while clustering uses the most variable
+  # genes across the full normalised matrix (not only DE hits).
+  nc <- nc[!is.na(nc$gene) & nzchar(as.character(nc$gene)), , drop = FALSE]
+  nc <- nc[!duplicated(as.character(nc$gene)), , drop = FALSE]
+  full_mat <- as.matrix(nc[, sample_cols, drop = FALSE])
+  storage.mode(full_mat) <- "double"
+  rownames(full_mat) <- make.unique(as.character(nc$gene))
+  full_mat[!is.finite(full_mat)] <- NA_real_
+  log_full <- log2(full_mat + 1)
+
+  row_var <- apply(log_full, 1L, stats::var, na.rm = TRUE)
+  row_var[!is.finite(row_var)] <- -Inf
+  n_qc <- min(nrow(full_mat), max(2L, as.integer(max_qc_genes)))
+  qc_idx <- order(row_var, decreasing = TRUE)[seq_len(n_qc)]
+  qc_mat <- full_mat[qc_idx, , drop = FALSE]
+
+  # A deterministic, expression-range-spanning subset keeps the HTML compact
+  # while preserving broad per-sample distribution diagnostics.
+  n_dist <- min(nrow(full_mat), max(2L, as.integer(max_distribution_genes)))
+  if (nrow(full_mat) > n_dist) {
+    ord_mean <- order(rowMeans(full_mat, na.rm = TRUE), decreasing = TRUE)
+    dist_idx <- unique(round(seq(1, length(ord_mean), length.out = n_dist)))
+    dist_idx <- ord_mean[dist_idx]
+  } else {
+    dist_idx <- seq_len(nrow(full_mat))
+  }
+  distribution_mat <- full_mat[dist_idx, , drop = FALSE]
+
   ord <- results[!is.na(results$padj), , drop = FALSE]
   ord <- ord[order(ord$padj, -abs(ord$log2FoldChange)), , drop = FALSE]
   top <- unique(utils::head(ord$gene, max_genes))
-  nc <- nc[nc$gene %in% top, , drop = FALSE]
-  nc <- nc[!duplicated(nc$gene), , drop = FALSE]
-  if (nrow(nc) < 2L) return(NULL)
-  mat <- as.matrix(nc[, sample_cols, drop = FALSE])
-  rownames(mat) <- nc$gene
-  mat <- mat[intersect(top, rownames(mat)), , drop = FALSE]
-  list(matrix = mat, samples = sample_cols, groups = NULL)
+  top_idx <- match(top, rownames(full_mat), nomatch = 0L)
+  top_idx <- top_idx[top_idx > 0L]
+  mat <- full_mat[top_idx, , drop = FALSE]
+  if (nrow(mat) < 2L) return(NULL)
+
+  list(
+    matrix = mat, samples = sample_cols, groups = NULL,
+    qc_matrix = qc_mat,
+    distribution_matrix = distribution_mat,
+    qc_gene_count = nrow(qc_mat),
+    distribution_gene_count = nrow(distribution_mat)
+  )
 }
 
 .rep_load_pca <- function(out_dir) {
@@ -654,21 +689,29 @@ load_expressom_results <- function(
 }
 
 .rep_load_logs <- function(out_dir, dge_log) {
-  log_dir <- file.path(out_dir, "Log")
-  read_txt <- function(p) {
+  log_dirs <- .expressom_log_dirs(out_dir)
+  if (!length(log_dirs)) log_dirs <- .expressom_log_dir(out_dir)
+  read_txt <- function(name) {
+    p <- .expressom_log_file(out_dir, name)
     if (!file.exists(p)) return(NULL)
     tryCatch(readLines(p, warn = FALSE), error = function(e) NULL)
   }
-  iso_logs <- list.files(file.path(log_dir, "Isoform"),
-                         full.names = TRUE, recursive = TRUE)
-  wsl_logs <- list.files(file.path(log_dir, "WSL"),
-                         full.names = TRUE, recursive = TRUE)
+  collect <- function(subdir) {
+    paths <- unlist(lapply(log_dirs, function(d) {
+      path <- file.path(d, subdir)
+      if (dir.exists(path)) list.files(path, full.names = TRUE,
+                                       recursive = TRUE) else character(0)
+    }), use.names = FALSE)
+    unique(paths[file.info(paths)$isdir %in% FALSE])
+  }
   list(
     dge_params = dge_log,
-    session_info = read_txt(file.path(log_dir, "SessionInfo.txt")),
-    warnings = read_txt(file.path(log_dir, "Warnings.txt")),
-    isoform_logs = iso_logs,
-    wsl_logs = wsl_logs
+    session_info = read_txt("SessionInfo.txt"),
+    warnings = read_txt("Warnings.txt"),
+    isoform_logs = collect("Isoform"),
+    wsl_logs = collect("WSL"),
+    omnipath_logs = collect("omnipathr"),
+    targets_logs = collect("targets")
   )
 }
 

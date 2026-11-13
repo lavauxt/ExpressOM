@@ -1363,7 +1363,7 @@ run_functional_analysis <- function(
       } else if (!is.null(spia_result) && nrow(spia_result) == 0) {
         message("      SPIA returned an empty result (no pathways perturbed).")
       } else {
-        message("      SPIA failed — check Log/Warnings.txt for details.")
+        message("      SPIA failed — check log/Warnings.txt for details.")
       }
     } else {
       message("      Skipping SPIA: no significant Entrez genes available.")

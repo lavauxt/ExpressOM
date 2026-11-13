@@ -613,7 +613,7 @@ debug_wsl <- function(distro = "Ubuntu",
   effective_log_dir <- if (!is.null(log_dir)) {
     log_dir
   } else if (!is.null(out_dir)) {
-    file.path(out_dir, "Log")
+    .expressom_log_dir(out_dir, create = TRUE)
   } else {
     NULL
   }

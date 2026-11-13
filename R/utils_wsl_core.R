@@ -35,10 +35,10 @@
 #'
 #' Priority:
 #'   1. `options(expressom.wsl_log_dir)` -- set by `expressom()` /
-#'      `run_expressom_targets()` to `<out_dir>/Log/WSL`, so every WSL command
-#'      a pipeline run issues lands under the run's `Log/` folder next to
+#'      `run_expressom_targets()` to `<out_dir>/log/WSL`, so every WSL command
+#'      a pipeline run issues lands under the run's `log/` folder next to
 #'      SessionInfo.txt, Warnings.txt, the DGE/isoform logs, etc.
-#'   2. `<getwd()>/expressom_wsl_logs` -- fallback when the installer
+#'   2. `<getwd()>/log/WSL` -- fallback when the installer
 #'      functions are called outside any pipeline run (e.g. a one-off
 #'      `install_wsl_isoform_tools()`).
 #' @keywords internal
@@ -50,7 +50,7 @@
     }
     return(opt)
   }
-  d <- file.path(getwd(), "expressom_wsl_logs")
+  d <- file.path(getwd(), "log", "WSL")
   if (!dir.exists(d)) {
     dir.create(d, recursive = TRUE, showWarnings = FALSE)
   }
@@ -370,7 +370,7 @@
 #'
 #' @param log_dir Directory for the WSL command log; `NULL` falls back to
 #'   `getOption("expressom.wsl_log_dir")` or `<cwd>/expressom_wsl_logs`. The
-#'   pipeline always passes `<out_dir>/Log/WSL`.
+#'   pipeline always passes `<out_dir>/log/WSL`.
 #' @keywords internal
 .predictor_environment_fingerprint <- function(
   wsl_distro = "Ubuntu",

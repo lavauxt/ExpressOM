@@ -422,7 +422,7 @@ iplot_deg_counts <- function(
 #' @export
 iplot_heatmap <- function(
   mat, groups = NULL, colors = .de_direction_colors(),
-  max_genes = 50L, title = NULL
+  max_genes = 50L, title = NULL, cluster_columns = TRUE
 ) {
   .rep_require("plotly")
   colors <- .rep_hex(colors)
@@ -439,7 +439,12 @@ iplot_heatmap <- function(
     z <- z[ord, , drop = FALSE]
   }
   col_ord <- seq_len(ncol(z))
-  if (!is.null(groups) && length(groups) == ncol(z)) {
+  if (isTRUE(cluster_columns) && ncol(z) >= 3L) {
+    col_ord <- tryCatch(
+      stats::hclust(stats::dist(t(z)))$order,
+      error = function(e) seq_len(ncol(z))
+    )
+  } else if (!is.null(groups) && length(groups) == ncol(z)) {
     col_ord <- order(factor(groups, levels = unique(groups)), seq_len(ncol(z)))
   }
   z <- z[, col_ord, drop = FALSE]
@@ -605,6 +610,332 @@ iplot_pvalue_hist <- function(p, title = "p-value distribution") {
       yaxis = list(title = "count")
     ) |>
     .rep_plotly_config("pvalue_hist")
+}
+
+# ---- DTE / DTU interactive diagnostics --------------------------------------------
+
+#' Interactive transcript-level DTE volcano plot
+#' @keywords internal
+iplot_dte_volcano <- function(dte, padj_cutoff = 0.05, lfc_cutoff = 1,
+                              label_col = NULL, max_points = 5000L) {
+  .rep_require("plotly")
+  if (is.null(dte) || !nrow(dte)) return(.rep_empty_plot("No DTE results"))
+  lfc_col <- .rep_first_col(dte, c("log2FoldChange", "log2FC", "logFC", "lfc"))
+  q_col <- .rep_first_col(dte, c("padj", "adj_pvalue", "FDR", "qvalue", "p.adjust"))
+  if (is.na(lfc_col) || is.na(q_col)) {
+    return(.rep_empty_plot("DTE volcano requires a transcript log2 fold-change and adjusted p-value"))
+  }
+  if (is.null(label_col) || !label_col %in% colnames(dte)) {
+    label_col <- .rep_first_col(dte, c("gene_label", "gene_symbol", "gene", "transcript_id", "feature_id"))
+  }
+  label <- if (is.na(label_col)) as.character(seq_len(nrow(dte))) else as.character(dte[[label_col]])
+  d <- data.frame(
+    label = label,
+    lfc = .rep_num(dte[[lfc_col]]),
+    q = .rep_num(dte[[q_col]]),
+    stringsAsFactors = FALSE
+  )
+  d <- d[is.finite(d$lfc) & is.finite(d$q) & d$q >= 0 & d$q <= 1, , drop = FALSE]
+  if (!nrow(d)) return(.rep_empty_plot("No finite DTE fold-changes and adjusted p-values"))
+  d$mlog10 <- -log10(pmax(d$q, .Machine$double.xmin))
+  d$class <- "Not significant"
+  d$class[d$q < padj_cutoff & d$lfc > lfc_cutoff] <- "Upregulated"
+  d$class[d$q < padj_cutoff & d$lfc < -lfc_cutoff] <- "Downregulated"
+  if (nrow(d) > max_points) {
+    keep <- order(d$q, -abs(d$lfc))[seq_len(max_points)]
+    d <- d[keep, , drop = FALSE]
+  }
+  palette <- c("Not significant" = "#999999", "Downregulated" = "#0072B2", "Upregulated" = "#D55E00")
+  p <- plotly::plot_ly()
+  for (nm in names(palette)) {
+    dd <- d[d$class == nm, , drop = FALSE]
+    if (!nrow(dd)) next
+    p <- plotly::add_trace(
+      p, data = dd, x = ~lfc, y = ~mlog10,
+      type = "scattergl", mode = "markers", name = paste0(nm, " (", nrow(dd), ")"),
+      text = paste0("<b>", dd$label, "</b><br>", lfc_col, ": ", signif(dd$lfc, 3),
+                    "<br>", q_col, ": ", signif(dd$q, 3)),
+      hoverinfo = "text",
+      marker = list(color = unname(palette[[nm]]), size = 6, opacity = 0.72)
+    )
+  }
+  p |>
+    plotly::layout(
+      title = list(text = "DTE volcano (transcript level)", x = 0.02),
+      xaxis = list(title = "Transcript log2 fold change", zeroline = TRUE),
+      yaxis = list(title = "-log10(adjusted p-value)"),
+      shapes = list(
+        list(type = "line", x0 = -lfc_cutoff, x1 = -lfc_cutoff, y0 = 0, y1 = 1,
+             yref = "paper", line = list(color = "#666666", dash = "dot")),
+        list(type = "line", x0 = lfc_cutoff, x1 = lfc_cutoff, y0 = 0, y1 = 1,
+             yref = "paper", line = list(color = "#666666", dash = "dot")),
+        list(type = "line", x0 = 0, x1 = 1, xref = "paper", y0 = -log10(padj_cutoff),
+             y1 = -log10(padj_cutoff), line = list(color = "#666666", dash = "dot"))
+      ),
+      legend = list(orientation = "h", y = -0.18), hovermode = "closest"
+    ) |>
+    .rep_plotly_config("dte_volcano")
+}
+
+#' Interactive DTE MA plot
+#' @keywords internal
+iplot_dte_ma <- function(dte, padj_cutoff = 0.05, lfc_cutoff = 1,
+                         label_col = NULL, max_points = 5000L) {
+  .rep_require("plotly")
+  if (is.null(dte) || !nrow(dte)) return(.rep_empty_plot("No DTE results"))
+  lfc_col <- .rep_first_col(dte, c("log2FoldChange", "log2FC", "logFC", "lfc"))
+  mean_col <- .rep_first_col(dte, c("baseMean", "base_mean", "mean", "mean_expression"))
+  q_col <- .rep_first_col(dte, c("padj", "adj_pvalue", "FDR", "qvalue", "p.adjust"))
+  if (is.na(lfc_col) || is.na(mean_col)) {
+    return(.rep_empty_plot("DTE MA plot requires mean transcript abundance and log2 fold-change"))
+  }
+  if (is.null(label_col) || !label_col %in% colnames(dte)) {
+    label_col <- .rep_first_col(dte, c("gene_label", "gene_symbol", "gene", "transcript_id", "feature_id"))
+  }
+  label <- if (is.na(label_col)) as.character(seq_len(nrow(dte))) else as.character(dte[[label_col]])
+  q <- if (is.na(q_col)) rep(NA_real_, nrow(dte)) else .rep_num(dte[[q_col]])
+  d <- data.frame(label = label, mean = .rep_num(dte[[mean_col]]),
+                  lfc = .rep_num(dte[[lfc_col]]), q = q, stringsAsFactors = FALSE)
+  d <- d[is.finite(d$mean) & d$mean > 0 & is.finite(d$lfc), , drop = FALSE]
+  if (!nrow(d)) return(.rep_empty_plot("No finite positive DTE abundance values"))
+  d$class <- ifelse(!is.na(d$q) & d$q < padj_cutoff & abs(d$lfc) > lfc_cutoff,
+                    ifelse(d$lfc > 0, "Upregulated", "Downregulated"), "Not significant")
+  if (nrow(d) > max_points) d <- d[order(d$q, -abs(d$lfc), na.last = TRUE)[seq_len(max_points)], , drop = FALSE]
+  palette <- c("Not significant" = "#999999", "Downregulated" = "#0072B2", "Upregulated" = "#D55E00")
+  p <- plotly::plot_ly()
+  for (nm in names(palette)) {
+    dd <- d[d$class == nm, , drop = FALSE]
+    if (!nrow(dd)) next
+    p <- plotly::add_trace(
+      p, data = dd, x = ~mean, y = ~lfc, type = "scattergl", mode = "markers",
+      name = paste0(nm, " (", nrow(dd), ")"),
+      text = paste0("<b>", dd$label, "</b><br>mean: ", signif(dd$mean, 4),
+                    "<br>log2FC: ", signif(dd$lfc, 3),
+                    ifelse(is.na(dd$q), "", paste0("<br>adjusted p: ", signif(dd$q, 3)))),
+      hoverinfo = "text", marker = list(color = unname(palette[[nm]]), size = 6, opacity = 0.72)
+    )
+  }
+  p |>
+    plotly::layout(
+      title = list(text = "DTE MA plot", x = 0.02),
+      xaxis = list(title = "Mean normalised transcript abundance", type = "log"),
+      yaxis = list(title = "Transcript log2 fold change"),
+      shapes = list(list(type = "line", x0 = 0, x1 = 1, xref = "paper", y0 = 0, y1 = 0,
+                         line = list(color = "#666666", dash = "dot"))),
+      legend = list(orientation = "h", y = -0.18)
+    ) |>
+    .rep_plotly_config("dte_ma")
+}
+
+#' Interactive ranked DTE transcript bar chart
+#' @keywords internal
+iplot_dte_ranked <- function(dte, top_n = 25L) {
+  .rep_require("plotly")
+  if (is.null(dte) || !nrow(dte)) return(.rep_empty_plot("No DTE results"))
+  q_col <- .rep_first_col(dte, c("padj", "adj_pvalue", "FDR", "qvalue", "p.adjust"))
+  id_col <- .rep_first_col(dte, c("gene_label", "gene_symbol", "gene", "transcript_id", "feature_id"))
+  lfc_col <- .rep_first_col(dte, c("log2FoldChange", "log2FC", "logFC", "lfc"))
+  if (is.na(q_col)) return(.rep_empty_plot("No adjusted p-value column in DTE table"))
+  q <- .rep_num(dte[[q_col]])
+  lfc <- if (is.na(lfc_col)) rep(NA_real_, nrow(dte)) else .rep_num(dte[[lfc_col]])
+  label <- if (is.na(id_col)) as.character(seq_len(nrow(dte))) else as.character(dte[[id_col]])
+  ok <- is.finite(q) & q >= 0 & q <= 1
+  if (!any(ok)) return(.rep_empty_plot("No finite DTE adjusted p-values"))
+  idx <- which(ok)[order(q[ok])]
+  idx <- utils::head(idx, as.integer(top_n))
+  idx <- rev(idx)
+  labs <- make.unique(.rep_trunc(label[idx], 55L))
+  cols <- ifelse(is.finite(lfc[idx]) & lfc[idx] < 0, "#0072B2", "#D55E00")
+  plotly::plot_ly(
+    x = -log10(pmax(q[idx], .Machine$double.xmin)),
+    y = factor(labs, levels = labs), type = "bar", orientation = "h",
+    marker = list(color = cols),
+    text = paste0("<b>", labs, "</b><br>adjusted p: ", signif(q[idx], 3),
+                  ifelse(is.finite(lfc[idx]), paste0("<br>log2FC: ", signif(lfc[idx], 3)), "")),
+    hoverinfo = "text"
+  ) |>
+    plotly::layout(
+      title = list(text = paste0("Top ", length(idx), " DTE transcripts by adjusted p-value"), x = 0.02),
+      xaxis = list(title = "-log10(adjusted p-value)"),
+      yaxis = list(title = "Transcript / gene", automargin = TRUE), margin = list(l = 260)
+    ) |>
+    .rep_plotly_config("dte_ranked")
+}
+
+#' Interactive DTU likelihood-ratio versus adjusted significance scatter
+#' @keywords internal
+iplot_dtu_lr_q <- function(dtu, padj_cutoff = 0.05, max_points = 5000L) {
+  .rep_require("plotly")
+  if (is.null(dtu) || !nrow(dtu)) return(.rep_empty_plot("No DTU results"))
+  lr_col <- .rep_first_col(dtu, c("lr", "LR", "likelihood_ratio", "statistic"))
+  q_col <- .rep_first_col(dtu, c("adj_pvalue", "padj", "FDR", "qvalue", "p.adjust"))
+  id_col <- .rep_first_col(dtu, c("gene_label", "gene_symbol", "gene", "feature_id", "transcript_id"))
+  if (is.na(lr_col) || is.na(q_col)) {
+    return(.rep_empty_plot("DTU LR/significance view requires LR and adjusted p-value columns"))
+  }
+  label <- if (is.na(id_col)) as.character(seq_len(nrow(dtu))) else as.character(dtu[[id_col]])
+  d <- data.frame(label = label, lr = .rep_num(dtu[[lr_col]]), q = .rep_num(dtu[[q_col]]),
+                  stringsAsFactors = FALSE)
+  d <- d[is.finite(d$lr) & is.finite(d$q) & d$q >= 0 & d$q <= 1, , drop = FALSE]
+  if (!nrow(d)) return(.rep_empty_plot("No finite DTU LR and adjusted p-values"))
+  d$mlog10 <- -log10(pmax(d$q, .Machine$double.xmin))
+  d$class <- ifelse(d$q < padj_cutoff, "Adjusted p below cutoff", "Not significant")
+  if (nrow(d) > max_points) d <- d[order(d$q)[seq_len(max_points)], , drop = FALSE]
+  cols <- c("Not significant" = "#999999", "Adjusted p below cutoff" = "#7A6FAE")
+  p <- plotly::plot_ly()
+  for (nm in names(cols)) {
+    dd <- d[d$class == nm, , drop = FALSE]
+    if (!nrow(dd)) next
+    p <- plotly::add_trace(
+      p, data = dd, x = ~lr, y = ~mlog10, type = "scattergl", mode = "markers",
+      name = paste0(nm, " (", nrow(dd), ")"),
+      text = paste0("<b>", dd$label, "</b><br>LR: ", signif(dd$lr, 4),
+                    "<br>adjusted p: ", signif(dd$q, 3)),
+      hoverinfo = "text", marker = list(color = unname(cols[[nm]]), size = 6, opacity = 0.72)
+    )
+  }
+  p |>
+    plotly::layout(
+      title = list(text = "DTU likelihood-ratio vs adjusted p-value", x = 0.02),
+      xaxis = list(title = "Likelihood-ratio statistic"),
+      yaxis = list(title = "-log10(adjusted p-value)"),
+      shapes = list(list(type = "line", x0 = 0, x1 = 1, xref = "paper",
+                         y0 = -log10(padj_cutoff), y1 = -log10(padj_cutoff),
+                         line = list(color = "#666666", dash = "dot"))),
+      legend = list(orientation = "h", y = -0.18)
+    ) |>
+    .rep_plotly_config("dtu_lr_q")
+}
+
+#' Interactive histogram of DTU likelihood-ratio statistics
+#' @keywords internal
+iplot_dtu_lr_hist <- function(dtu) {
+  .rep_require("plotly")
+  if (is.null(dtu) || !nrow(dtu)) return(.rep_empty_plot("No DTU results"))
+  lr_col <- .rep_first_col(dtu, c("lr", "LR", "likelihood_ratio", "statistic"))
+  if (is.na(lr_col)) return(.rep_empty_plot("No likelihood-ratio column in DTU table"))
+  x <- .rep_num(dtu[[lr_col]])
+  x <- x[is.finite(x)]
+  if (!length(x)) return(.rep_empty_plot("No finite DTU likelihood-ratio statistics"))
+  plotly::plot_ly(x = x, type = "histogram", nbinsx = 40,
+                  marker = list(color = "#7A6FAE")) |>
+    plotly::layout(
+      title = list(text = "DTU likelihood-ratio distribution", x = 0.02),
+      xaxis = list(title = "Likelihood-ratio statistic"),
+      yaxis = list(title = "Feature count")
+    ) |>
+    .rep_plotly_config("dtu_lr_hist")
+}
+
+#' Interactive DTE transcript abundance versus adjusted significance
+#' @keywords internal
+iplot_dte_abundance_significance <- function(dte, padj_cutoff = 0.05, max_points = 5000L) {
+  .rep_require("plotly")
+  if (is.null(dte) || !nrow(dte)) return(.rep_empty_plot("No DTE results"))
+  mean_col <- .rep_first_col(dte, c("baseMean", "base_mean", "mean", "mean_expression"))
+  q_col <- .rep_first_col(dte, c("padj", "adj_pvalue", "FDR", "qvalue", "p.adjust"))
+  id_col <- .rep_first_col(dte, c("gene_label", "gene_symbol", "gene", "transcript_id", "feature_id"))
+  if (is.na(mean_col) || is.na(q_col)) {
+    return(.rep_empty_plot("DTE abundance-significance view requires mean abundance and adjusted p-value"))
+  }
+  label <- if (is.na(id_col)) as.character(seq_len(nrow(dte))) else as.character(dte[[id_col]])
+  d <- data.frame(label = label, mean = .rep_num(dte[[mean_col]]),
+                  q = .rep_num(dte[[q_col]]), stringsAsFactors = FALSE)
+  d <- d[is.finite(d$mean) & d$mean > 0 & is.finite(d$q) & d$q >= 0 & d$q <= 1, , drop = FALSE]
+  if (!nrow(d)) return(.rep_empty_plot("No finite positive abundance and adjusted p-values"))
+  d$mlog10 <- -log10(pmax(d$q, .Machine$double.xmin))
+  d$class <- ifelse(d$q < padj_cutoff, "Adjusted p below cutoff", "Not significant")
+  if (nrow(d) > max_points) d <- d[order(d$q, -d$mlog10)[seq_len(max_points)], , drop = FALSE]
+  cols <- c("Not significant" = "#999999", "Adjusted p below cutoff" = "#7A6FAE")
+  p <- plotly::plot_ly()
+  for (nm in names(cols)) {
+    dd <- d[d$class == nm, , drop = FALSE]
+    if (!nrow(dd)) next
+    p <- plotly::add_trace(
+      p, data = dd, x = ~mean, y = ~mlog10, type = "scattergl", mode = "markers",
+      name = paste0(nm, " (", nrow(dd), ")"),
+      text = paste0("<b>", dd$label, "</b><br>mean abundance: ", signif(dd$mean, 4),
+                    "<br>adjusted p: ", signif(dd$q, 3)),
+      hoverinfo = "text", marker = list(color = unname(cols[[nm]]), size = 6, opacity = 0.72)
+    )
+  }
+  p |>
+    plotly::layout(
+      title = list(text = "DTE transcript abundance vs adjusted significance", x = 0.02),
+      xaxis = list(title = "Mean normalised transcript abundance", type = "log"),
+      yaxis = list(title = "-log10(adjusted p-value)"),
+      shapes = list(list(type = "line", x0 = 0, x1 = 1, xref = "paper",
+                         y0 = -log10(padj_cutoff), y1 = -log10(padj_cutoff),
+                         line = list(color = "#666666", dash = "dot"))),
+      legend = list(orientation = "h", y = -0.18)
+    ) |>
+    .rep_plotly_config("dte_abundance_significance")
+}
+
+#' Interactive DTU likelihood-ratio versus degrees-of-freedom diagnostic
+#' @keywords internal
+iplot_dtu_lr_df <- function(dtu, max_points = 5000L) {
+  .rep_require("plotly")
+  if (is.null(dtu) || !nrow(dtu)) return(.rep_empty_plot("No DTU results"))
+  lr_col <- .rep_first_col(dtu, c("lr", "LR", "likelihood_ratio", "statistic"))
+  df_col <- .rep_first_col(dtu, c("df", "Df", "degrees_of_freedom"))
+  id_col <- .rep_first_col(dtu, c("gene_label", "gene_symbol", "gene", "feature_id", "transcript_id"))
+  if (is.na(lr_col) || is.na(df_col)) return(.rep_empty_plot("DTU LR-vs-df view requires LR and df columns"))
+  label <- if (is.na(id_col)) as.character(seq_len(nrow(dtu))) else as.character(dtu[[id_col]])
+  d <- data.frame(label = label, lr = .rep_num(dtu[[lr_col]]), df = .rep_num(dtu[[df_col]]),
+                  stringsAsFactors = FALSE)
+  d <- d[is.finite(d$lr) & is.finite(d$df), , drop = FALSE]
+  if (!nrow(d)) return(.rep_empty_plot("No finite DTU LR and df values"))
+  if (nrow(d) > max_points) d <- d[order(d$lr, decreasing = TRUE)[seq_len(max_points)], , drop = FALSE]
+  plotly::plot_ly(
+    d, x = ~df, y = ~lr, type = "scattergl", mode = "markers",
+    text = ~paste0("<b>", label, "</b><br>df: ", df, "<br>LR: ", signif(lr, 4)),
+    hoverinfo = "text", marker = list(color = "#4C78A8", size = 6, opacity = 0.7)
+  ) |>
+    plotly::layout(
+      title = list(text = "DTU likelihood-ratio vs degrees of freedom", x = 0.02),
+      xaxis = list(title = "Degrees of freedom"), yaxis = list(title = "Likelihood-ratio statistic")
+    ) |>
+    .rep_plotly_config("dtu_lr_df")
+}
+
+#' Interactive DTU feature counts by gene (descriptive, not gene-level FDR)
+#' @keywords internal
+iplot_dtu_gene_summary <- function(dtu, top_n = 30L) {
+  .rep_require("plotly")
+  if (is.null(dtu) || !nrow(dtu)) return(.rep_empty_plot("No DTU results"))
+  gene_col <- .rep_first_col(dtu, c("gene_symbol", "gene", "gene_id", "gene_label"))
+  q_col <- .rep_first_col(dtu, c("adj_pvalue", "padj", "FDR", "qvalue", "p.adjust"))
+  if (is.na(gene_col)) return(.rep_empty_plot("DTU gene summary requires a gene identifier"))
+  gene <- as.character(dtu[[gene_col]])
+  gene[is.na(gene) | !nzchar(gene)] <- "Unannotated"
+  groups <- split(seq_along(gene), gene)
+  q <- if (is.na(q_col)) rep(NA_real_, nrow(dtu)) else .rep_num(dtu[[q_col]])
+  summary <- data.frame(
+    gene = names(groups),
+    n_features = vapply(groups, length, integer(1)),
+    best_feature_q = vapply(groups, function(i) {
+      z <- q[i][is.finite(q[i])]
+      if (!length(z)) NA_real_ else min(z)
+    }, numeric(1)),
+    stringsAsFactors = FALSE
+  )
+  summary <- summary[order(summary$n_features, summary$best_feature_q, decreasing = TRUE, na.last = TRUE), , drop = FALSE]
+  summary <- utils::head(summary, as.integer(top_n))
+  summary$gene <- factor(summary$gene, levels = rev(summary$gene))
+  plotly::plot_ly(
+    summary, x = ~n_features, y = ~gene, type = "bar", orientation = "h",
+    marker = list(color = "#7A6FAE"),
+    text = ~paste0("<b>", gene, "</b><br>DTU features: ", n_features,
+                   ifelse(is.na(best_feature_q), "", paste0("<br>best feature-level adjusted p: ", signif(best_feature_q, 3)))),
+    hoverinfo = "text"
+  ) |>
+    plotly::layout(
+      title = list(text = "Genes with the most tested DTU features", x = 0.02),
+      xaxis = list(title = "Number of DTU features"), yaxis = list(title = "Gene", automargin = TRUE),
+      margin = list(l = 220)
+    ) |>
+    .rep_plotly_config("dtu_gene_summary")
 }
 
 # ---- isoform switch ---------------------------------------------------------------
@@ -943,6 +1274,527 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
     .rep_plotly_config("tf_leading_edge")
 }
 
+
+# ---- additional sample-level QC and differential diagnostics -----------------
+
+.rep_matrix_for_qc <- function(mat, min_rows = 2L) {
+  if (is.null(mat)) return(NULL)
+  mat <- as.matrix(mat)
+  if (nrow(mat) < min_rows || ncol(mat) < 2L) return(NULL)
+  storage.mode(mat) <- "double"
+  mat[!is.finite(mat)] <- NA_real_
+  mat
+}
+
+#' Interactive sample-to-sample correlation heatmap
+#' @keywords internal
+.rep_iplot_sample_correlation <- function(mat, method = c("pearson", "spearman")) {
+  .rep_require("plotly")
+  method <- match.arg(method)
+  mat <- .rep_matrix_for_qc(mat)
+  if (is.null(mat)) return(.rep_empty_plot("At least two samples and two genes are needed"))
+  x <- log2(mat + 1)
+  cm <- suppressWarnings(stats::cor(x, method = method, use = "pairwise.complete.obs"))
+  cm[!is.finite(cm)] <- 0
+  diag(cm) <- 1
+  if (nrow(cm) >= 3L) {
+    ord <- tryCatch(stats::hclust(stats::as.dist(1 - cm))$order,
+                    error = function(e) seq_len(nrow(cm)))
+    cm <- cm[ord, ord, drop = FALSE]
+  }
+  plotly::plot_ly(
+    x = colnames(cm), y = rownames(cm), z = cm, type = "heatmap",
+    zmin = -1, zmax = 1,
+    colorscale = list(c(0, "#2b5c8f"), c(0.5, "#f7f7f7"), c(1, "#c94a4a")),
+    colorbar = list(title = "r"),
+    hovertemplate = "%{y} vs %{x}<br>correlation = %{z:.3f}<extra></extra>"
+  ) |>
+    plotly::layout(
+      title = list(text = paste("Sample correlation (", method, ")", sep = ""), x = 0.02),
+      xaxis = list(title = "", tickangle = -35),
+      yaxis = list(title = "", autorange = "reversed"),
+      margin = list(l = 100, b = 100)
+    ) |>
+    .rep_plotly_config("sample_correlation")
+}
+
+#' Interactive sample-to-sample Euclidean distance heatmap
+#' @keywords internal
+.rep_iplot_sample_distance <- function(mat) {
+  .rep_require("plotly")
+  mat <- .rep_matrix_for_qc(mat)
+  if (is.null(mat)) return(.rep_empty_plot("Sample distance matrix not available"))
+  x <- t(log2(mat + 1))
+  d <- as.matrix(stats::dist(x, method = "euclidean"))
+  if (nrow(d) >= 3L) {
+    ord <- tryCatch(stats::hclust(stats::as.dist(d))$order,
+                    error = function(e) seq_len(nrow(d)))
+    d <- d[ord, ord, drop = FALSE]
+  }
+  plotly::plot_ly(
+    x = colnames(d), y = rownames(d), z = d, type = "heatmap",
+    colorscale = "Viridis", colorbar = list(title = "distance"),
+    hovertemplate = "%{y} vs %{x}<br>Euclidean distance = %{z:.2f}<extra></extra>"
+  ) |>
+    plotly::layout(
+      title = list(text = "Sample-to-sample distance", x = 0.02),
+      xaxis = list(title = "", tickangle = -35),
+      yaxis = list(title = "", autorange = "reversed"),
+      margin = list(l = 100, b = 100)
+    ) |>
+    .rep_plotly_config("sample_distance")
+}
+
+#' Interactive hierarchical sample dendrogram
+#' @keywords internal
+.rep_iplot_sample_dendrogram <- function(mat, method = "complete") {
+  .rep_require("plotly")
+  mat <- .rep_matrix_for_qc(mat)
+  if (is.null(mat) || ncol(mat) < 3L) {
+    return(.rep_empty_plot("At least three samples are needed for a dendrogram"))
+  }
+  x <- t(log2(mat + 1))
+  hc <- tryCatch(stats::hclust(stats::dist(x), method = method),
+                 error = function(e) NULL)
+  if (is.null(hc)) return(.rep_empty_plot("Hierarchical clustering could not be computed"))
+
+  n <- length(hc$order)
+  xpos <- rep(NA_real_, 2L * n - 1L)
+  ypos <- rep(0, 2L * n - 1L)
+  for (i in seq_len(n)) xpos[i] <- match(i, hc$order)
+  seg_x <- seg_y <- numeric(0)
+  for (k in seq_len(n - 1L)) {
+    child_pos <- function(v) if (v < 0L) -v else n + v
+    a <- child_pos(hc$merge[k, 1L])
+    b <- child_pos(hc$merge[k, 2L])
+    parent <- n + k
+    xpos[parent] <- mean(c(xpos[a], xpos[b]))
+    ypos[parent] <- hc$height[k]
+    seg_x <- c(seg_x, xpos[a], xpos[a], NA, xpos[b], xpos[b], NA, xpos[a], xpos[b], NA)
+    seg_y <- c(seg_y, ypos[a], hc$height[k], NA, ypos[b], hc$height[k], NA,
+               hc$height[k], hc$height[k], NA)
+  }
+  labels <- colnames(mat)[hc$order]
+  plotly::plot_ly() |>
+    plotly::add_trace(
+      x = seg_x, y = seg_y, type = "scatter", mode = "lines",
+      line = list(color = "#496a81", width = 2), hoverinfo = "skip",
+      showlegend = FALSE
+    ) |>
+    plotly::layout(
+      title = list(text = paste("Hierarchical clustering (", method, ")", sep = ""), x = 0.02),
+      xaxis = list(title = "", tickmode = "array", tickvals = seq_len(n),
+                   ticktext = labels, tickangle = -45, range = c(0.5, n + 0.5)),
+      yaxis = list(title = "Euclidean distance", rangemode = "tozero"),
+      margin = list(l = 60, b = 120)
+    ) |>
+    .rep_plotly_config("sample_dendrogram")
+}
+
+#' Interactive per-sample boxplots of normalised expression
+#' @keywords internal
+.rep_iplot_expression_boxplot <- function(mat) {
+  .rep_require("plotly")
+  mat <- .rep_matrix_for_qc(mat)
+  if (is.null(mat)) return(.rep_empty_plot("Expression matrix not available"))
+  long <- data.frame(
+    sample = rep(colnames(mat), each = nrow(mat)),
+    expression = as.vector(log2(mat + 1)),
+    stringsAsFactors = FALSE
+  )
+  long <- long[is.finite(long$expression), , drop = FALSE]
+  plotly::plot_ly(
+    long, x = ~sample, y = ~expression, type = "box", color = ~sample,
+    boxpoints = FALSE, jitter = 0.25, pointpos = 0,
+    hovertemplate = "%{x}<br>log2(normalised count + 1) = %{y:.2f}<extra></extra>"
+  ) |>
+    plotly::layout(
+      title = list(text = "Expression distribution by sample", x = 0.02),
+      showlegend = FALSE,
+      xaxis = list(title = "Sample", tickangle = -35),
+      yaxis = list(title = "log2(normalised count + 1)")
+    ) |>
+    .rep_plotly_config("expression_boxplot")
+}
+
+#' Interactive per-sample expression density curves
+#' @keywords internal
+.rep_iplot_expression_density <- function(mat) {
+  .rep_require("plotly")
+  mat <- .rep_matrix_for_qc(mat)
+  if (is.null(mat)) return(.rep_empty_plot("Expression matrix not available"))
+  p <- plotly::plot_ly()
+  for (sample in colnames(mat)) {
+    v <- log2(mat[, sample] + 1)
+    v <- v[is.finite(v)]
+    if (length(v) < 2L) next
+    de <- stats::density(v, na.rm = TRUE, n = 256L)
+    p <- plotly::add_lines(
+      p, x = de$x, y = de$y, name = sample,
+      hovertemplate = paste0(sample, "<br>expression = %{x:.2f}<br>density = %{y:.3f}<extra></extra>")
+    )
+  }
+  p |>
+    plotly::layout(
+      title = list(text = "Expression density by sample", x = 0.02),
+      xaxis = list(title = "log2(normalised count + 1)"),
+      yaxis = list(title = "Density"),
+      legend = list(orientation = "h", y = -0.2)
+    ) |>
+    .rep_plotly_config("expression_density")
+}
+
+#' Interactive multidimensional scaling of samples
+#' @keywords internal
+.rep_iplot_sample_mds <- function(mat) {
+  .rep_require("plotly")
+  mat <- .rep_matrix_for_qc(mat)
+  if (is.null(mat) || ncol(mat) < 3L) {
+    return(.rep_empty_plot("At least three samples are needed for MDS"))
+  }
+  x <- t(log2(mat + 1))
+  d <- stats::dist(x, method = "euclidean")
+  coords <- tryCatch(stats::cmdscale(d, k = 2L), error = function(e) NULL)
+  if (is.null(coords) || ncol(coords) < 2L) {
+    return(.rep_empty_plot("MDS coordinates could not be computed"))
+  }
+  labs <- rownames(coords) %||% colnames(mat)
+  plotly::plot_ly(
+    x = coords[, 1L], y = coords[, 2L], type = "scatter", mode = "markers+text",
+    text = labs, textposition = "top center",
+    marker = list(size = 11, color = "#159a8c", line = list(color = "#ffffff", width = 1)),
+    hovertemplate = "%{text}<br>MDS1 = %{x:.3f}<br>MDS2 = %{y:.3f}<extra></extra>"
+  ) |>
+    plotly::layout(
+      title = list(text = "Multidimensional scaling of samples", x = 0.02),
+      xaxis = list(title = "MDS1"), yaxis = list(title = "MDS2")
+    ) |>
+    .rep_plotly_config("sample_mds")
+}
+
+#' Interactive relative log expression (RLE) boxplots
+#' @keywords internal
+.rep_iplot_rle <- function(mat) {
+  .rep_require("plotly")
+  mat <- .rep_matrix_for_qc(mat)
+  if (is.null(mat)) return(.rep_empty_plot("Expression matrix not available for RLE"))
+  x <- log2(mat + 1)
+  gene_medians <- apply(x, 1L, stats::median, na.rm = TRUE)
+  rle <- sweep(x, 1L, gene_medians, FUN = "-")
+  long <- data.frame(
+    sample = rep(colnames(rle), each = nrow(rle)),
+    rle = as.vector(rle), stringsAsFactors = FALSE
+  )
+  long <- long[is.finite(long$rle), , drop = FALSE]
+  plotly::plot_ly(
+    long, x = ~sample, y = ~rle, type = "box", color = ~sample,
+    boxpoints = FALSE,
+    hovertemplate = "%{x}<br>relative log expression = %{y:.3f}<extra></extra>"
+  ) |>
+    plotly::layout(
+      title = list(text = "Relative log expression by sample", x = 0.02),
+      showlegend = FALSE,
+      xaxis = list(title = "Sample", tickangle = -35),
+      yaxis = list(title = "log2 count + 1 minus gene median"),
+      shapes = list(.rep_hline(0, "#777777"))
+    ) |>
+    .rep_plotly_config("expression_rle")
+}
+
+#' Interactive mean-variance diagnostic
+#' @keywords internal
+.rep_iplot_mean_variance <- function(mat) {
+  .rep_require("plotly")
+  mat <- .rep_matrix_for_qc(mat)
+  if (is.null(mat)) return(.rep_empty_plot("Expression matrix not available for mean-variance plot"))
+  means <- rowMeans(mat, na.rm = TRUE)
+  vars <- apply(mat, 1L, stats::var, na.rm = TRUE)
+  keep <- is.finite(means) & is.finite(vars)
+  if (!any(keep)) return(.rep_empty_plot("No finite mean-variance pairs"))
+  labs <- rownames(mat)
+  if (is.null(labs)) labs <- paste0("feature_", seq_len(nrow(mat)))
+  plotly::plot_ly(
+    x = log10(means[keep] + 1), y = log10(vars[keep] + 1),
+    type = "scattergl", mode = "markers",
+    text = labs[keep],
+    marker = list(size = 5, color = "#8b6fc1", opacity = 0.6),
+    hovertemplate = "%{text}<br>log10(mean + 1) = %{x:.2f}<br>log10(variance + 1) = %{y:.2f}<extra></extra>"
+  ) |>
+    plotly::layout(
+      title = list(text = "Mean-variance relationship", x = 0.02),
+      xaxis = list(title = "log10(mean normalised count + 1)"),
+      yaxis = list(title = "log10(variance + 1)")
+    ) |>
+    .rep_plotly_config("mean_variance")
+}
+
+#' Interactive p-value Q-Q plot
+#' @keywords internal
+.rep_iplot_pvalue_qq <- function(pvalues) {
+  .rep_require("plotly")
+  p <- .rep_num(pvalues)
+  p <- sort(p[is.finite(p) & p >= 0 & p <= 1])
+  if (length(p) < 3L) return(.rep_empty_plot("At least three finite p-values are needed"))
+  n <- length(p)
+  expected <- -log10((seq_len(n) - 0.5) / n)
+  observed <- -log10(pmax(p, .Machine$double.xmin))
+  lim <- max(c(expected, observed), na.rm = TRUE)
+  plotly::plot_ly(x = expected, y = observed, type = "scattergl", mode = "markers",
+                  marker = list(size = 5, color = "#0072B2", opacity = 0.55),
+                  hovertemplate = "Expected = %{x:.2f}<br>Observed = %{y:.2f}<extra></extra>") |>
+    plotly::add_lines(x = c(0, lim), y = c(0, lim), name = "Null expectation",
+                      line = list(color = "#d55e00", dash = "dash"), hoverinfo = "skip") |>
+    plotly::layout(
+      title = list(text = "P-value Q-Q plot", x = 0.02),
+      xaxis = list(title = "Expected -log10(p)"),
+      yaxis = list(title = "Observed -log10(p)")
+    ) |>
+    .rep_plotly_config("pvalue_qq")
+}
+
+#' Interactive ranked absolute fold changes
+#' @keywords internal
+.rep_iplot_ranked_effects <- function(res_tbl, top_n = 25L) {
+  .rep_require("plotly")
+  if (is.null(res_tbl) || !nrow(res_tbl) ||
+      !all(c("gene", "log2FoldChange") %in% colnames(res_tbl))) {
+    return(.rep_empty_plot("Fold-change results are not available"))
+  }
+  d <- res_tbl
+  d$log2FoldChange <- .rep_num(d$log2FoldChange)
+  d$padj <- if ("padj" %in% colnames(d)) .rep_num(d$padj) else NA_real_
+  d <- d[is.finite(d$log2FoldChange), , drop = FALSE]
+  d <- utils::head(d[order(-abs(d$log2FoldChange)), , drop = FALSE], top_n)
+  d <- d[order(d$log2FoldChange), , drop = FALSE]
+  d$direction <- ifelse(d$log2FoldChange > 0, "Positive", "Negative")
+  plotly::plot_ly(
+    d, x = ~log2FoldChange, y = ~factor(gene, levels = gene),
+    type = "bar", orientation = "h", color = ~direction,
+    colors = c("Negative" = "#2b5c8f", "Positive" = "#c94a4a"),
+    hovertemplate = paste0("%{y}<br>log2FC = %{x:.2f}<extra></extra>")
+  ) |>
+    plotly::layout(
+      title = list(text = paste0("Top ", nrow(d), " genes by |log2FC|"), x = 0.02),
+      xaxis = list(title = "log2 fold change", zeroline = TRUE),
+      yaxis = list(title = ""),
+      margin = list(l = 140),
+      shapes = list(.rep_vline(0, "#777777"))
+    ) |>
+    .rep_plotly_config("ranked_effects")
+}
+
+#' Interactive enrichment bubble plot
+#' @keywords internal
+.rep_iplot_enrichment_bubble <- function(std, top_n = 20L, title = "Enrichment overview") {
+  .rep_require("plotly")
+  if (is.null(std) || !nrow(std)) return(.rep_empty_plot("No enrichment results"))
+  d <- utils::head(std[order(std$padj), , drop = FALSE], top_n)
+  d$label <- make.unique(.rep_trunc(d$term, 52L))
+  d$mlog10 <- -log10(pmax(d$padj, .Machine$double.xmin))
+  is_gsea <- all(is.finite(d$score))
+  d$x <- if (is_gsea) d$score else ifelse(is.finite(d$size), d$size, seq_len(nrow(d)))
+  d$size_plot <- ifelse(is.finite(d$size), pmax(6, pmin(28, sqrt(d$size) * 3)), 10)
+  xtitle <- if (is_gsea) "Normalised enrichment score (NES)" else "Gene count / overlap size"
+  plotly::plot_ly(
+    d, x = ~x, y = ~factor(label, levels = label),
+    type = "scatter", mode = "markers",
+    marker = list(size = ~size_plot, color = ~mlog10, colorscale = "Viridis",
+                  showscale = TRUE, colorbar = list(title = "-log10(FDR)"),
+                  sizemode = "diameter", line = list(color = "#ffffff", width = 1)),
+    text = ~paste0("<b>", term, "</b><br>FDR: ", signif(padj, 3),
+                   "<br>size: ", ifelse(is.finite(size), size, "n/a"),
+                   "<br>score: ", ifelse(is.finite(score), signif(score, 3), "n/a")),
+    hoverinfo = "text"
+  ) |>
+    plotly::layout(
+      title = list(text = title, x = 0.02),
+      xaxis = list(title = xtitle, zeroline = TRUE),
+      yaxis = list(title = "", autorange = "reversed"),
+      margin = list(l = 270)
+    ) |>
+    .rep_plotly_config("enrichment_bubble")
+}
+
+#' Interactive enrichment-map network based on shared genes
+#' @keywords internal
+.rep_iplot_enrichment_network <- function(tbl, top_n = 14L, min_jaccard = 0.08) {
+  .rep_require("plotly")
+  if (is.null(tbl) || !nrow(tbl)) return(NULL)
+  member_col <- .rep_first_col(tbl, c("core_enrichment", "geneID", "gene_id",
+                                      "geneIDs", "leadingEdge", "leading_edge", "Genes"))
+  term_col <- .rep_first_col(tbl, c("Description", "pathway", "Name", "Term", "ID", "source"))
+  padj_col <- .rep_first_col(tbl, c("p.adjust", "padj", "pGFdr", "Adjusted.P.value",
+                                     "qvalue", "qvalues", "FDR"))
+  if (is.na(member_col) || is.na(term_col) || is.na(padj_col)) return(NULL)
+  d <- tbl
+  d$.padj <- .rep_num(d[[padj_col]])
+  d <- d[is.finite(d$.padj), , drop = FALSE]
+  d <- utils::head(d[order(d$.padj), , drop = FALSE], top_n)
+  split_members <- strsplit(as.character(d[[member_col]]), "[/;,| ]+", perl = TRUE)
+  sets <- lapply(split_members, function(x) unique(x[nzchar(x)]))
+  keep <- lengths(sets) >= 2L
+  d <- d[keep, , drop = FALSE]
+  sets <- sets[keep]
+  n <- length(sets)
+  if (n < 3L) return(NULL)
+
+  j <- matrix(0, nrow = n, ncol = n)
+  for (i in seq_len(n)) for (k in seq_len(n)) {
+    den <- length(union(sets[[i]], sets[[k]]))
+    j[i, k] <- if (den) length(intersect(sets[[i]], sets[[k]])) / den else 0
+  }
+  labs <- make.unique(.rep_trunc(as.character(d[[term_col]]), 46L))
+  coords <- tryCatch(
+    stats::cmdscale(stats::as.dist(1 - j), k = 2L),
+    error = function(e) NULL
+  )
+  if (is.null(coords) || ncol(coords) < 2L || any(!is.finite(coords))) {
+    ang <- seq(0, 2 * pi, length.out = n + 1L)[seq_len(n)]
+    coords <- cbind(cos(ang), sin(ang))
+  }
+
+  p <- plotly::plot_ly()
+  for (i in seq_len(n - 1L)) for (k in (i + 1L):n) {
+    if (j[i, k] >= min_jaccard) {
+      p <- plotly::add_trace(
+        p, x = coords[c(i, k), 1L], y = coords[c(i, k), 2L],
+        type = "scatter", mode = "lines", showlegend = FALSE,
+        line = list(color = "rgba(105,125,145,0.35)",
+                    width = 1 + 5 * j[i, k]),
+        hoverinfo = "skip"
+      )
+    }
+  }
+  p <- plotly::add_trace(
+    p, x = coords[, 1L], y = coords[, 2L],
+    type = "scatter", mode = "markers+text", text = labs,
+    textposition = "top center", showlegend = FALSE,
+    marker = list(
+      size = pmax(12, pmin(34, sqrt(lengths(sets)) * 5)),
+      color = -log10(pmax(d$.padj, .Machine$double.xmin)),
+      colorscale = "Viridis", showscale = TRUE,
+      colorbar = list(title = "-log10(FDR)"),
+      line = list(color = "#ffffff", width = 1)
+    ),
+    hovertext = paste0(
+      "<b>", as.character(d[[term_col]]), "</b><br>FDR: ",
+      signif(d$.padj, 3), "<br>genes: ", lengths(sets),
+      "<br>connected terms: ", rowSums(j >= min_jaccard) - 1L
+    ),
+    hoverinfo = "text"
+  )
+  p |>
+    plotly::layout(
+      title = list(text = "Enrichment map: shared-gene network", x = 0.02),
+      xaxis = list(title = "", visible = FALSE),
+      yaxis = list(title = "", visible = FALSE),
+      showlegend = FALSE, margin = list(l = 30, r = 30, b = 30, t = 65)
+    ) |>
+    .rep_plotly_config("enrichment_network")
+}
+
+#' Interactive running enrichment score for a ranked GSEA gene set
+#' @keywords internal
+.rep_iplot_gsea_running <- function(enrichment_tbl, dge_results) {
+  .rep_require("plotly")
+  if (is.null(enrichment_tbl) || !nrow(enrichment_tbl) ||
+      is.null(dge_results) || !nrow(dge_results)) return(NULL)
+  member_col <- .rep_first_col(enrichment_tbl, c("core_enrichment", "leading_edge",
+                                                  "leadingEdge", "geneID", "gene_id"))
+  if (is.na(member_col)) return(NULL)
+  term_col <- .rep_first_col(enrichment_tbl, c("Description", "pathway", "Name", "Term", "ID"))
+  stat_col <- .rep_first_col(dge_results, c("contrast_stat", "stat"))
+  gene_col <- .rep_first_col(dge_results, c("gene", "symbol", "gene_id"))
+  if (is.na(stat_col) || is.na(gene_col)) return(NULL)
+  pcol <- .rep_first_col(enrichment_tbl, c("p.adjust", "padj", "qvalue", "FDR"))
+  d <- enrichment_tbl
+  if (!is.na(pcol)) {
+    d$.padj <- .rep_num(d[[pcol]])
+    d <- d[order(d$.padj, na.last = TRUE), , drop = FALSE]
+  }
+  if (!nrow(d)) return(NULL)
+  set_genes <- unique(strsplit(as.character(d[[member_col]][[1L]]),
+                               "[/;,| ]+", perl = TRUE)[[1L]])
+  set_genes <- set_genes[nzchar(set_genes)]
+  ranked <- data.frame(
+    gene = as.character(dge_results[[gene_col]]),
+    stat = .rep_num(dge_results[[stat_col]]),
+    stringsAsFactors = FALSE
+  )
+  ranked <- ranked[is.finite(ranked$stat) & !is.na(ranked$gene) &
+                     nzchar(ranked$gene), , drop = FALSE]
+  ranked <- ranked[order(-ranked$stat), , drop = FALSE]
+  ranked <- ranked[!duplicated(ranked$gene), , drop = FALSE]
+  hit <- ranked$gene %in% set_genes
+  nh <- sum(hit)
+  if (nh < 2L || nh >= nrow(ranked)) return(NULL)
+  weights <- abs(ranked$stat[hit])
+  if (!sum(weights)) weights <- rep(1, nh)
+  hit_step <- rep(0, nrow(ranked))
+  hit_step[hit] <- weights / sum(weights)
+  miss_step <- 1 / (nrow(ranked) - nh)
+  es <- cumsum(ifelse(hit, hit_step, -miss_step))
+  title_term <- if (!is.na(term_col)) as.character(d[[term_col]][[1L]]) else "Selected gene set"
+  plotly::plot_ly(
+    x = seq_along(es), y = es, type = "scatter", mode = "lines",
+    line = list(color = "#2b5c8f", width = 2.5),
+    hovertemplate = "rank = %{x}<br>running ES = %{y:.3f}<extra></extra>"
+  ) |>
+    plotly::add_trace(
+      x = which(hit), y = es[hit], type = "scatter", mode = "markers",
+      marker = list(color = "#c94a4a", size = 5),
+      text = ranked$gene[hit], name = "Leading-edge genes",
+      hovertemplate = "%{text}<br>rank = %{x}<br>ES = %{y:.3f}<extra></extra>"
+    ) |>
+    plotly::layout(
+      title = list(text = paste0("GSEA running score: ", .rep_trunc(title_term, 70L)), x = 0.02),
+      xaxis = list(title = "Genes ranked by signed test statistic"),
+      yaxis = list(title = "Running enrichment score"),
+      shapes = list(.rep_hline(0, "#777777"))
+    ) |>
+    .rep_plotly_config("gsea_running_score")
+}
+
+#' Interactive pairwise gene-overlap heatmap between enriched terms
+#' @keywords internal
+.rep_iplot_enrichment_overlap <- function(tbl, top_n = 20L) {
+  .rep_require("plotly")
+  if (is.null(tbl) || !nrow(tbl)) return(NULL)
+  member_col <- .rep_first_col(tbl, c("core_enrichment", "geneID", "gene_id",
+                                       "geneIDs", "leadingEdge", "leading_edge", "Genes"))
+  term_col <- .rep_first_col(tbl, c("Description", "pathway", "Name", "Term", "ID", "source"))
+  padj_col <- .rep_first_col(tbl, c("p.adjust", "padj", "pGFdr", "Adjusted.P.value",
+                                     "qvalue", "qvalues", "FDR"))
+  if (is.na(member_col) || is.na(term_col) || is.na(padj_col)) return(NULL)
+  d <- tbl
+  d$.padj <- .rep_num(d[[padj_col]])
+  d <- d[is.finite(d$.padj), , drop = FALSE]
+  d <- utils::head(d[order(d$.padj), , drop = FALSE], top_n)
+  if (nrow(d) < 3L) return(NULL)
+  split_members <- strsplit(as.character(d[[member_col]]), "[/;,| ]+", perl = TRUE)
+  sets <- lapply(split_members, function(x) unique(x[nzchar(x)]))
+  if (sum(lengths(sets) > 0L) < 3L) return(NULL)
+  labs <- make.unique(.rep_trunc(as.character(d[[term_col]]), 42L))
+  j <- matrix(0, nrow = length(sets), ncol = length(sets), dimnames = list(labs, labs))
+  for (i in seq_along(sets)) for (k in seq_along(sets)) {
+    den <- length(union(sets[[i]], sets[[k]]))
+    j[i, k] <- if (den) length(intersect(sets[[i]], sets[[k]])) / den else 0
+  }
+  if (max(j, na.rm = TRUE) <= 0) return(NULL)
+  plotly::plot_ly(
+    x = labs, y = labs, z = j, type = "heatmap", zmin = 0, zmax = 1,
+    colorscale = "Blues", colorbar = list(title = "Jaccard"),
+    hovertemplate = "%{y}<br>%{x}<br>shared-gene Jaccard = %{z:.2f}<extra></extra>"
+  ) |>
+    plotly::layout(
+      title = list(text = "Gene overlap between enriched terms", x = 0.02),
+      xaxis = list(title = "", tickangle = -40),
+      yaxis = list(title = "", autorange = "reversed"),
+      margin = list(l = 260, b = 150)
+    ) |>
+    .rep_plotly_config("enrichment_overlap")
+}
+
 # ---- tables ------------------------------------------------------------------
 
 #' Interactive result table
@@ -964,7 +1816,7 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
 #' @return A DT htmlwidget.
 #' @export
 itable <- function(
-  df, caption = NULL, page_length = 10L, max_rows = 800L, digits = 3L,
+  df, caption = NULL, page_length = 25L, max_rows = Inf, digits = 3L,
   filename = "expressom_table", round_payload = TRUE, escape = TRUE
 ) {
   .rep_require("DT", "to display interactive tables")
@@ -1000,9 +1852,14 @@ itable <- function(
     escape = escape,
     options = list(
       pageLength = page_length,
+      lengthMenu = list(c(10, 25, 50, 100, 250, 500), c(10, 25, 50, 100, 250, 500)),
+      searchDelay = 250,
+      stateSave = TRUE,
+      orderCellsTop = TRUE,
+      autoWidth = FALSE,
       scrollX = TRUE,
       deferRender = TRUE,
-      dom = "Bfrtip",
+      dom = "Bfltip",
       buttons = list(
         "copy",
         list(extend = "csv", filename = filename),

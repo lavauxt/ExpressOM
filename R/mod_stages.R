@@ -480,7 +480,8 @@
       padj_cutoff = p$padj_cutoff,
       # NEW: forwarded so the regulon volcano / leading edge categories
       # use the same |log2FC| floor as the rest of the pipeline.
-      lfc_cutoff  = p$deg_lfc_cutoff
+      lfc_cutoff  = p$deg_lfc_cutoff,
+      log_dir     = .expressom_log_dir(p$out_dir, create = TRUE)
     ),
     label = "decoupleR activity inference"
   )
@@ -553,10 +554,10 @@
 
   # Every WSL/predictor log -- wsl_commands.log, wsl_debug.json,
   # predictor_status.log, per-tool CPAT/SignalP/Pfam logs, DEXSeq step
-  # checkpoints side-effects -- goes under <out_dir>/Log/WSL/ so the report
-  # finds them in its "External-predictor (WSL) logs" section and Log/
+  # checkpoints side-effects -- goes under <out_dir>/log/WSL/ so the report
+  # finds them in its "External-predictor (WSL) logs" section and log/
   # remains the single folder holding every run diagnostic.
-  wsl_log_dir <- file.path(out_dir, "Log", "WSL")
+  wsl_log_dir <- file.path(.expressom_log_dir(out_dir, create = TRUE), "WSL")
   dir.create(wsl_log_dir, recursive = TRUE, showWarnings = FALSE)
 
   .iso_ckpt_exists <- function(nm) file.exists(file.path(iso_save_dir, nm))
@@ -608,7 +609,7 @@
     run_predictors = run_predictors,
     predictor_env = if (isTRUE(run_predictors)) {
       # Pass log_dir explicitly so the WSL commands issued by the probe land
-      # in Log/WSL/wsl_commands.log instead of <cwd>/expressom_wsl_logs/.
+      # in log/WSL/wsl_commands.log instead of <cwd>/log/WSL/.
       .predictor_environment_fingerprint(
         wsl_distro = wsl_distro,
         use_wsl    = use_wsl,
@@ -780,7 +781,7 @@
     save_dir = iso_save_dir, resume_from = resume_isoform_from,
     predictor_cpu = predictor_cpu,
     # All WSL/predictor logs (wsl_commands.log, wsl_debug.json,
-    # predictor_status.log, per-tool CPAT/SignalP/Pfam) go under Log/WSL/.
+    # predictor_status.log, per-tool CPAT/SignalP/Pfam) go under log/WSL/.
     log_dir = wsl_log_dir,
     custom_transcript_id_map = custom_transcript_id_map,
     skip_fasta_filter = skip_fasta_filter,

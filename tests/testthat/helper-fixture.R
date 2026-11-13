@@ -66,7 +66,7 @@
 #' @param test "Wald" or "LRT".
 #' @param n_genes Number of genes in the DE table.
 #' @param functional,isoform,figures Which optional stages to include.
-#' @param snapshot Write `Log/expressom_run.json` (the run snapshot).
+#' @param snapshot Write `log/expressom_run.json` (the run snapshot).
 #' @return `dir`.
 make_run_dir <- function(
   dir,
@@ -137,7 +137,7 @@ make_run_dir <- function(
   )
 
   # ---- logs / run snapshot
-  dir.create(file.path(dir, "Log", "DGE"), recursive = TRUE, showWarnings = FALSE)
+  dir.create(file.path(dir, "log", "DGE"), recursive = TRUE, showWarnings = FALSE)
   jsonlite::write_json(
     list(
       comparison = cmp, design_formula = "~ condition", test_type = test,
@@ -146,7 +146,7 @@ make_run_dir <- function(
       shrinkage_method = "ashr", padj_cutoff = 0.05, lfc_cutoff = 1,
       genes_before_filter = n_genes, genes_after_filter = n_genes
     ),
-    file.path(dir, "Log", "DGE", paste0("DGE_params_", cmp, ".json")),
+    file.path(dir, "log", "DGE", paste0("DGE_params_", cmp, ".json")),
     auto_unbox = TRUE, pretty = TRUE
   )
   if (snapshot) {
@@ -158,7 +158,7 @@ make_run_dir <- function(
       pca_colors = c(level = "red2", base = "royalblue")
     ))
   }
-  writeLines("R version x.y.z", file.path(dir, "Log", "SessionInfo.txt"))
+  writeLines("R version x.y.z", file.path(dir, "log", "SessionInfo.txt"))
 
   # ---- functional analysis
   if (functional) {

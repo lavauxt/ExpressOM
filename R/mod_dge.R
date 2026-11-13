@@ -144,7 +144,7 @@
 
   if (!requireNamespace("jsonlite", quietly = TRUE)) {
     warning("jsonlite not installed; writing log as text file.")
-    log_dir <- file.path(out_dir, "Log", "DGE")
+    log_dir <- file.path(.expressom_log_dir(out_dir, create = TRUE), "DGE")
     if (!dir.exists(log_dir)) {
       dir.create(log_dir, recursive = TRUE)
     }
@@ -210,7 +210,7 @@
     params$directional_de_genes <- "not reported: LRT p-values are omnibus"
     params$de_genes_total <- NA_integer_
   }
-  log_dir <- file.path(out_dir, "Log", "DGE")
+  log_dir <- file.path(.expressom_log_dir(out_dir, create = TRUE), "DGE")
   if (!dir.exists(log_dir)) {
     dir.create(log_dir, recursive = TRUE)
   }

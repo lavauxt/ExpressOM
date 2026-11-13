@@ -204,7 +204,7 @@
   via_wsl <- is_windows && isTRUE(use_wsl)
 
   if (is.null(log_dir)) {
-    log_dir <- file.path(out_dir, "Log")
+    log_dir <- .expressom_log_dir(out_dir, create = TRUE)
   }
   if (!dir.exists(log_dir)) {
     dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
@@ -214,7 +214,7 @@
   # prediction_results.txt, the InterProScan/hmmscan Pfam tables and their
   # pfam_scan.pl-converted counterparts) goes into saved/<Tool>/ instead of
   # out_dir root, so results_.../IsoformSwitch stops accumulating a flat
-  # pile of per-tool files next to Plots/, Log/, sequences/, etc.
+  # pile of per-tool files next to Plots/, log/, sequences/, etc.
   tool_save_dir <- function(family) {
     d <- if (!is.null(save_dir)) {
       file.path(save_dir, family)
@@ -693,7 +693,7 @@
       # -h`), written relative to the shell's cwd at invocation time -- NOT
       # next to the -o outputs. Since that cwd is wherever WSL starts the
       # script (not out_dir), the log was landing outside the results
-      # folder entirely. Pointing it at Log/Isoform/CPAT/ explicitly keeps
+      # folder entirely. Pointing it at log/Isoform/CPAT/ explicitly keeps
       # it grouped with this tool's other logs. Only cpat (3.x) is
       # confirmed to support this flag, so it's gated to that binary -- the
       # legacy run_cpat.py (2.x) command below is left as-is.
@@ -1411,11 +1411,11 @@ run_isoform_switch <- function(
   # signature itself needs to call .predictor_environment_fingerprint(), which
   # issues WSL probes and writes to its log_dir -- without this the probes
   # would fall back to <cwd>/expressom_wsl_logs/ and the WSL command log
-  # would never reach <out_dir>/Log/WSL/. Default keeps backward compat when
-  # the caller does not specify a log_dir: fall back to Log/WSL (the pipeline
-  # convention) rather than Log/ (older default).
+  # would never reach <out_dir>/log/WSL/. Default keeps backward compatibility when
+  # the caller does not specify a log_dir: fall back to log/WSL (the pipeline
+  # convention) rather than log/ (older default).
   if (is.null(log_dir)) {
-    log_dir <- file.path(out_dir, "Log", "WSL")
+    log_dir <- file.path(.expressom_log_dir(out_dir, create = TRUE), "WSL")
   }
   if (!dir.exists(log_dir)) {
     dir.create(log_dir, recursive = TRUE, showWarnings = FALSE)
@@ -1450,7 +1450,7 @@ run_isoform_switch <- function(
     # this, step3_predictors.rds / step3_5_refreshed.rds / switch_list.rds
     # saved before a predictor was installed were silently reused
     # forever, so the newly-installed predictor never actually ran.
-    # log_dir is passed so the WSL probes write to Log/WSL/.
+    # log_dir is passed so the WSL probes write to log/WSL/.
     predictor_env = if (isTRUE(run_predictors)) {
       .predictor_environment_fingerprint(
         wsl_distro = wsl_distro,

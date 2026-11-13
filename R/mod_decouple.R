@@ -38,7 +38,7 @@
 # The helpers below:
 #   * configure OmnipathR once per session (retry count, timeout, quieter
 #     logging) so transient network hiccups do not abort the whole stage;
-#   * redirect OmnipathR's own log file to <out_dir>/Log/omnipathr/ so its
+#   * redirect OmnipathR's own log file to <out_dir>/log/omnipathr/ so its
 #     "omnipathr-log/" folder no longer lands in the process working directory;
 #   * retry each network fetch with exponential back-off;
 #   * stop() with a clear, actionable message when PROGENy fails;
@@ -47,17 +47,20 @@
 
 #' Configure OmnipathR for robust operation
 #'
-#' Sets OmnipathR options once per R session: more retries, longer HTTP
-#' timeout, and quieter logging (this package reports fallbacks explicitly
-#' instead). Never overrides values the user has set themselves.
+#' Sets OmnipathR's current `omnipathr.*` options when absent: download
+#' retries, HTTP timeouts and quieter logging. Never overrides values the
+#' user has set themselves.
 #'
-#' Additionally, OmnipathR's own log file (`omnipath.logfile`) is redirected
-#' to `<out_dir>/Log/omnipathr/` (or `<log_dir>/omnipathr/` when `log_dir` is
+#' Additionally, OmnipathR's own log file (`omnipathr.logfile`) is redirected
+#' to `<out_dir>/log/omnipathr/` (or `<log_dir>/omnipathr/` when `log_dir` is
 #' supplied) on every call -- by default OmnipathR writes a
 #' `<cwd>/omnipathr-log/` folder, which was ending up outside the pipeline's
-#' `Log/` tree. This redirection is per-run (the log path is timestamped and
+#' `log/` tree. This redirection is per-run (the log path is timestamped and
 #' comparison-tagged) and is therefore re-applied even when the generic
-#' options have already been set in this session.
+#' options have already been set in this session. Cache-lock recovery is
+#' opt-in (`ExpressOM.omnipath_unlock_cache = TRUE`): the cache lock contains
+#' no owner PID, so age alone cannot prove that a concurrent worker has died.
+#' Enable recovery only after all OmniPathR users of that cache have stopped.
 #'
 #' @param out_dir Output directory of the current run.
 #' @param log_dir Explicit base log directory; takes precedence over `out_dir`.
@@ -65,60 +68,218 @@
 #' @param comp_name Comparison name, embedded in the log-file name so runs for
 #'   different comparisons produce distinctly named files.
 #' @keywords internal
+.decouple_unlock_stale_cache_db <- function(cache_dir = NULL,
+                                            stale_after = getOption(
+                                              "ExpressOM.omnipath_lock_stale_after",
+                                              600
+                                            )) {
+  # The public OmniPathR helper removes cache.lock unconditionally and the
+  # lock file does not record an owner PID. Age alone cannot prove that a
+  # process is dead (a long-running fetch can hold the lock for a long time),
+  # so recovery is opt-in and must only be enabled after workers are stopped.
+  if (!isTRUE(getOption("ExpressOM.omnipath_unlock_cache", FALSE))) {
+    return(invisible(FALSE))
+  }
+  if (isTRUE(getOption("ExpressOM.omnipath_cache_recovery_checked"))) {
+    return(invisible(FALSE))
+  }
+  options(ExpressOM.omnipath_cache_recovery_checked = TRUE)
+
+  if (is.null(cache_dir) || !length(cache_dir) || is.na(cache_dir[[1L]]) ||
+      !nzchar(cache_dir[[1L]])) {
+    cache_dir <- getOption("omnipathr.cachedir")
+  }
+  if (is.null(cache_dir) || !length(cache_dir) || is.na(cache_dir[[1L]]) ||
+      !nzchar(cache_dir[[1L]])) {
+    # Newer OmnipathR releases may expose a getter; use it when available.
+    getter <- tryCatch(
+      getExportedValue("OmnipathR", "omnipath_get_cachedir"),
+      error = function(e) NULL
+    )
+    if (is.function(getter)) {
+      cache_dir <- tryCatch(getter(), error = function(e) NULL)
+    }
+  }
+  if (is.null(cache_dir) || !length(cache_dir) || is.na(cache_dir[[1L]]) ||
+      !nzchar(cache_dir[[1L]])) {
+    if (requireNamespace("rappdirs", quietly = TRUE)) {
+      cache_dir <- tryCatch(
+        rappdirs::user_cache_dir(appname = "OmnipathR"),
+        error = function(e) NULL
+      )
+    }
+  }
+  if (is.null(cache_dir) || !length(cache_dir) || is.na(cache_dir[[1L]]) ||
+      !nzchar(cache_dir[[1L]])) {
+    message("   -> OmniPath cache recovery skipped: cache directory unavailable.")
+    return(invisible(FALSE))
+  }
+
+  cache_dir <- normalizePath(cache_dir[[1L]], winslash = "/", mustWork = FALSE)
+  if (!dir.exists(cache_dir) || !file.exists(file.path(cache_dir, "cache.json"))) {
+    message("   -> OmniPath cache recovery skipped: not a recognised cache directory.")
+    return(invisible(FALSE))
+  }
+  lock_file <- file.path(cache_dir, "cache.lock")
+  if (!file.exists(lock_file)) return(invisible(FALSE))
+
+  stale_after <- suppressWarnings(as.numeric(stale_after))
+  if (!length(stale_after) || !is.finite(stale_after[[1L]]) ||
+      stale_after[[1L]] < 0) {
+    stale_after <- 600
+  } else {
+    stale_after <- stale_after[[1L]]
+  }
+  lock_info <- file.info(lock_file)
+  lock_age <- as.numeric(difftime(Sys.time(), lock_info$mtime, units = "secs"))
+  if (!is.finite(lock_age) || lock_age < stale_after) {
+    message(
+      "   -> OmniPath cache lock exists and appears active/recent (",
+      round(lock_age, 1), " s); leaving it untouched."
+    )
+    return(invisible(FALSE))
+  }
+
+  # Re-check immediately before invoking OmnipathR's unconditional unlock.
+  latest_info <- file.info(lock_file)
+  latest_age <- as.numeric(difftime(Sys.time(), latest_info$mtime,
+                                    units = "secs"))
+  if (!file.exists(lock_file) || !is.finite(latest_age) ||
+      latest_age < stale_after) {
+    return(invisible(FALSE))
+  }
+
+  # omnipath_unlock_cache_db() resolves its path from the package option.
+  # Temporarily point it at the directory inspected above, then restore the
+  # user's setting even when the unlock fails.
+  previous_cache_dir <- getOption("omnipathr.cachedir")
+  options(omnipathr.cachedir = cache_dir)
+  on.exit(options(omnipathr.cachedir = previous_cache_dir), add = TRUE)
+  unlocked <- tryCatch(
+    OmnipathR::omnipath_unlock_cache_db(),
+    error = function(e) {
+      message("   -> OmniPath cache recovery failed: ", conditionMessage(e))
+      FALSE
+    }
+  )
+  if (isTRUE(unlocked)) {
+    message("   -> Removed stale OmniPath cache lock (age: ",
+            round(latest_age), " s).")
+  }
+  invisible(isTRUE(unlocked))
+}
+
+#' Configure OmnipathR for robust operation
+#'
+#' Uses OmnipathR's current `omnipathr.*` option names. The logfile option is
+#' set before loading the namespace (so its logger starts at the right path),
+#' and the file appender is retargeted for sessions where OmnipathR is already
+#' loaded. Stale cache-lock recovery is opt-in and checks the lock age; it
+#' should only be enabled after all workers using that cache have stopped.
+#'
+#' @param out_dir Output directory of the current run.
+#' @param log_dir Explicit log directory; takes precedence over `out_dir`.
+#' @param comp_name Comparison name used in the OmniPathR log filename.
+#' @keywords internal
 .configure_decouple_omnipathr <- function(
   out_dir   = NULL,
   log_dir   = NULL,
   comp_name = NULL
 ) {
+  # Create/reuse the per-run logfile path before requireNamespace() loads OmnipathR.
+  omni_log_file <- NULL
+  if (!is.null(out_dir) || !is.null(log_dir)) {
+    log_base <- if (!is.null(log_dir)) {
+      log_dir
+    } else {
+      file.path(out_dir, "log")
+    }
+    omni_log_dir <- file.path(log_base, "omnipathr")
+    dir.create(omni_log_dir, recursive = TRUE, showWarnings = FALSE)
+    comp_tag <- if (!is.null(comp_name) && length(comp_name) == 1L &&
+                    !is.na(comp_name) && nzchar(comp_name)) {
+      gsub("[^A-Za-z0-9_.-]+", "_", comp_name)
+    } else "run"
+    run_id <- getOption("ExpressOM.omnipathr_log_run_id")
+    if (is.null(run_id) || !length(run_id) || is.na(run_id[[1L]]) ||
+        !nzchar(run_id[[1L]])) {
+      run_id <- paste0(Sys.getpid(), "-", format(Sys.time(), "%Y%m%d-%H%M%S"))
+    } else {
+      run_id <- as.character(run_id[[1L]])
+    }
+    log_identity <- paste(normalizePath(log_base, winslash = "/", mustWork = FALSE),
+                          comp_tag, run_id, sep = "|")
+    cached_logfile <- getOption("ExpressOM.omnipathr_logfile")
+    if (identical(getOption("ExpressOM.omnipathr_log_identity"), log_identity) &&
+        length(cached_logfile) == 1L && !is.na(cached_logfile) &&
+        nzchar(cached_logfile) && file.exists(cached_logfile)) {
+      omni_log_file <- cached_logfile
+    } else {
+      stamp <- format(Sys.time(), "%Y%m%d-%H%M%S")
+      omni_log_file <- file.path(
+        omni_log_dir,
+        paste0("omnipathr-log-", comp_tag, "-", stamp, "-pid", Sys.getpid(), ".log")
+      )
+      options(
+        ExpressOM.omnipathr_log_identity = log_identity,
+        ExpressOM.omnipathr_logfile = omni_log_file
+      )
+    }
+    options(
+      omnipathr.logdir = omni_log_dir,
+      omnipathr.logfile = omni_log_file
+    )
+  }
+
+  # Correct option names as defined by current OmnipathR. Preserve explicit
+  # user choices for retry count/levels/timeouts.
+  defaults <- list(
+    omnipathr.retry_downloads = 3L,
+    omnipathr.retry_downloads_in_seconds = 2L,
+    omnipathr.loglevel = "error",
+    omnipathr.console_loglevel = "error",
+    omnipathr.http_timeout = 60L,
+    omnipathr.connect_timeout = 15L
+  )
+  for (opt in names(defaults)) {
+    current <- getOption(opt)
+    if (is.null(current)) options(setNames(list(defaults[[opt]]), opt))
+  }
+
   if (!requireNamespace("OmnipathR", quietly = TRUE)) {
     return(invisible(FALSE))
   }
 
-  # Per-run: redirect OmnipathR's own log file to <out_dir>/Log/omnipathr/.
-  # Must run on every call (not gated by the flag below) because the target
-  # path is timestamped and comparison-specific.
-  if (!is.null(out_dir) || !is.null(log_dir)) {
-    log_base     <- if (!is.null(log_dir)) log_dir else file.path(out_dir, "Log")
-    omni_log_dir <- file.path(log_base, "omnipathr")
-    if (!dir.exists(omni_log_dir)) {
-      dir.create(omni_log_dir, recursive = TRUE, showWarnings = FALSE)
-    }
-    stamp    <- format(Sys.time(), "%Y-%m-%d-%H%M%S")
-    log_name <- if (!is.null(comp_name) && nzchar(comp_name)) {
-      paste0("omnipathr-log-", comp_name, "-", stamp, ".log")
-    } else {
-      paste0("omnipathr-log-", stamp, ".log")
-    }
-    options(omnipath.logfile = file.path(omni_log_dir, log_name))
+  # The logger file appender is created during package load. Update it when a
+  # prior call/session has already loaded OmnipathR before this run selected
+  # its output directory. Index 2 is OmnipathR's file appender; index 1 is the
+  # console appender. Use OmnipathR's public setters so explicit user levels
+  # remain respected rather than forcing ERROR at every pipeline start.
+  if (!is.null(omni_log_file) && requireNamespace("logger", quietly = TRUE)) {
+    try(
+      logger::log_appender(
+        logger::appender_file(omni_log_file),
+        namespace = "OmnipathR", index = 2
+      ),
+      silent = TRUE
+    )
+    try(
+      OmnipathR::omnipath_set_console_loglevel(
+        getOption("omnipathr.console_loglevel", "error")
+      ),
+      silent = TRUE
+    )
+    try(
+      OmnipathR::omnipath_set_logfile_loglevel(
+        getOption("omnipathr.loglevel", "error")
+      ),
+      silent = TRUE
+    )
   }
 
-  if (isTRUE(getOption("ExpressOM.omnipathr_configured"))) {
-    return(invisible(TRUE))
-  }
-
-  defaults <- list(
-    omnipath.max_retries      = 3L,
-    omnipath.retry_in_seconds = 2L,
-    omnipath.log_level        = "error",
-    omnipath.print_messages   = FALSE
-  )
-  for (opt in names(defaults)) {
-    if (is.null(getOption(opt))) {
-      options(setNames(list(defaults[[opt]]), opt))
-    }
-  }
-
-  # Give OmnipathR at least 60 s to answer (some users lower R's default).
-  if (is.null(getOption("timeout")) || getOption("timeout") < 60) {
-    options(timeout = 60)
-  }
-
-  # logger (used by OmnipathR for the "[WARN] ..." lines) - best effort,
-  # harmless if logger is not installed.
-  if (requireNamespace("logger", quietly = TRUE)) {
-    try(logger::log_threshold(logger::ERROR, namespace = "OmnipathR"),
-        silent = TRUE)
-  }
+  # Attempt recovery at most once per R process. It remains disabled unless
+  # the operator explicitly opts in after stopping other cache users.
+  .decouple_unlock_stale_cache_db()
 
   options(ExpressOM.omnipathr_configured = TRUE)
   invisible(TRUE)
@@ -133,7 +294,7 @@
 #'
 #' @param out_dir,log_dir,comp_name Forwarded to
 #'   `.configure_decouple_omnipathr()` so OmnipathR's own log file lands in
-#'   `<out_dir>/Log/omnipathr/` (or `<log_dir>/omnipathr/`).
+#'   `<out_dir>/log/omnipathr/` (or `<log_dir>/omnipathr/`).
 #' @keywords internal
 .decouple_omnipath_probe <- function(
   timeout   = 15,
@@ -149,7 +310,7 @@
   }
   old_to <- getOption("timeout")
   on.exit(options(timeout = old_to), add = TRUE)
-  options(timeout = max(old_to, timeout))
+  options(timeout = max(as.numeric(old_to %||% 60), timeout, na.rm = TRUE))
 
   tryCatch(
     {
@@ -200,18 +361,20 @@
 #' @param resource "collectri", "progeny", or "dorothea".
 #' @param organism Ensembl organism string (used to pick human vs. mouse).
 #' @param out_dir,comp_name Forwarded to `.configure_decouple_omnipathr()` so
-#'   OmnipathR's own log file lands in `<out_dir>/Log/omnipathr/`.
+#'   OmnipathR's own log file lands in `<out_dir>/log/omnipathr/`.
 #' @keywords internal
 .decouple_get_net <- function(
   resource,
   organism,
   out_dir   = NULL,
-  comp_name = NULL
+  comp_name = NULL,
+  log_dir   = NULL
 ) {
   if (!requireNamespace("decoupleR", quietly = TRUE)) {
     stop("Package 'decoupleR' is required. Install with BiocManager::install('decoupleR').")
   }
-  .configure_decouple_omnipathr(out_dir = out_dir, comp_name = comp_name)
+  .configure_decouple_omnipathr(out_dir = out_dir, log_dir = log_dir,
+                                comp_name = comp_name)
   org <- if (grepl("mus|mouse", organism, ignore.case = TRUE)) "mouse" else "human"
 
   net <- switch(
@@ -323,7 +486,7 @@
 #' @param log_dir Optional base log directory; forwarded to
 #'   `.configure_decouple_omnipathr()` / `.decouple_get_net()` so OmnipathR's
 #'   own log file lands under `<log_dir>/omnipathr/` instead of the default
-#'   `<out_dir>/Log/omnipathr/`.
+#'   `<out_dir>/log/omnipathr/`.
 #' @return list(results = named list per resource, files = manifest,
 #'   network_status = data.frame of per-resource fetch status)
 #' @export
@@ -347,6 +510,9 @@ run_decouple_analysis <- function(
   res_tbl <- as.data.frame(res_tbl)
   if (nrow(res_tbl) == 0L) return(NULL)
 
+  options(ExpressOM.omnipathr_log_run_id = paste0(
+    Sys.getpid(), "-", format(Sys.time(), "%Y%m%d-%H%M%OS6")
+  ))
   .configure_decouple_omnipathr(
     out_dir   = out_dir,
     log_dir   = log_dir,
@@ -424,7 +590,8 @@ run_decouple_analysis <- function(
         resource  = resource,
         organism  = organism,
         out_dir   = out_dir,
-        comp_name = comp_name
+        comp_name = comp_name,
+        log_dir   = log_dir
       ),
       error = function(e) {
         message("      ", conditionMessage(e))
@@ -528,7 +695,7 @@ run_decouple_analysis <- function(
   }
 
   # ---- Save per-resource network status ----------------------------------
-  # Written next to the DecoupleR/ tables (not under Log/) because it is a
+  # Written next to the DecoupleR/ tables (not under log/) because it is a
   # result: the report reads it to tell the user which resources were
   # fetched live, which fell back to a static table, and which failed.
   network_status <- if (length(network_status_rows)) {

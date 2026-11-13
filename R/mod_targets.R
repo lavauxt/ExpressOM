@@ -141,7 +141,7 @@ expressom_params <- function(..., defaults = expressom_default_params()) {
 
 #' Recover the parameters of a previous run
 #'
-#' Reads the parameter snapshot (`Log/expressom_run.json`) that [expressom()]
+#' Reads the parameter snapshot (`log/expressom_run.json`) that [expressom()]
 #' and the pipeline write next to the results, so a run can be reproduced or
 #' tweaked ("same as before, but another cut-off").
 #'
@@ -149,10 +149,10 @@ expressom_params <- function(..., defaults = expressom_default_params()) {
 #' @return A parameter list (see [expressom_params()]).
 #' @export
 expressom_params_from_run <- function(out_dir) {
-  cfg <- .rep_read_json(file.path(out_dir, "Log", "expressom_run.json"))
+  cfg <- .rep_read_json(.expressom_log_file(out_dir, "expressom_run.json"))
   if (is.null(cfg)) {
     stop(
-      "No run snapshot (Log/expressom_run.json) found in '", out_dir, "'.",
+      "No run snapshot (log/expressom_run.json) found in '", out_dir, "'.",
       call. = FALSE
     )
   }
@@ -409,12 +409,12 @@ expressom_pipeline <- function(params_file, overrides = list()) {
   p0 <- readRDS(params_file)
   flags <- .pipeline_flags(p0)
 
-  # Every WSL/predictor log must land under <out_dir>/Log/WSL/ instead of the
+  # Every WSL/predictor log must land under <out_dir>/log/WSL/ instead of the
   # targets working directory. Set it here (in the child process that
   # tar_make() spins up) so all downstream .wsl_exec_script() calls -- target
-  # code AND .predictor_environment_fingerprint() probes -- write to Log/WSL.
+  # code AND .predictor_environment_fingerprint() probes -- write to log/WSL.
   if (!is.null(p0$out_dir) && nzchar(p0$out_dir)) {
-    wsl_log_dir <- file.path(p0$out_dir, "Log", "WSL")
+    wsl_log_dir <- file.path(.expressom_log_dir(p0$out_dir, create = TRUE), "WSL")
     if (!dir.exists(wsl_log_dir)) {
       dir.create(wsl_log_dir, recursive = TRUE, showWarnings = FALSE)
     }
@@ -497,7 +497,7 @@ expressom_pipeline <- function(params_file, overrides = list()) {
     # results appear" work end-to-end.
     #
     # The explicit log_dir makes the WSL commands it issues land under
-    # Log/WSL/ (matching the option set at the top of expressom_pipeline()),
+    # log/WSL/ (matching the option set at the top of expressom_pipeline()),
     # so the fingerprint probe shows up in the report's WSL log section.
     if (isTRUE(p0$run_predictors)) {
       isoform_deps <- c(isoform_deps, list(
@@ -506,7 +506,7 @@ expressom_pipeline <- function(params_file, overrides = list()) {
           quote(.predictor_environment_fingerprint(
             wsl_distro = params$wsl_distro,
             use_wsl    = params$use_wsl,
-            log_dir    = file.path(params$out_dir, "Log", "WSL")
+            log_dir    = file.path(.expressom_log_dir(params$out_dir, create = TRUE), "WSL")
           )),
           cue = always
         )
@@ -717,7 +717,7 @@ run_expressom_targets <- function(
   # the targets DAG). Setting it here too covers edge cases where a target
   # shells out before expressom_pipeline() has run (e.g. custom _targets.R).
   old_wsl_log <- getOption("expressom.wsl_log_dir")
-  options(expressom.wsl_log_dir = file.path(params$out_dir, "Log", "WSL"))
+  options(expressom.wsl_log_dir = file.path(.expressom_log_dir(params$out_dir, create = TRUE), "WSL"))
   on.exit(options(expressom.wsl_log_dir = old_wsl_log), add = TRUE)
 
   args <- list(
@@ -1075,7 +1075,7 @@ expressom_params <- function(..., defaults = expressom_default_params()) {
 
 #' Recover the parameters of a previous run
 #'
-#' Reads the parameter snapshot (`Log/expressom_run.json`) that [expressom()]
+#' Reads the parameter snapshot (`log/expressom_run.json`) that [expressom()]
 #' and the pipeline write next to the results, so a run can be reproduced or
 #' tweaked ("same as before, but another cut-off").
 #'
@@ -1083,10 +1083,10 @@ expressom_params <- function(..., defaults = expressom_default_params()) {
 #' @return A parameter list (see [expressom_params()]).
 #' @export
 expressom_params_from_run <- function(out_dir) {
-  cfg <- .rep_read_json(file.path(out_dir, "Log", "expressom_run.json"))
+  cfg <- .rep_read_json(.expressom_log_file(out_dir, "expressom_run.json"))
   if (is.null(cfg)) {
     stop(
-      "No run snapshot (Log/expressom_run.json) found in '", out_dir, "'.",
+      "No run snapshot (log/expressom_run.json) found in '", out_dir, "'.",
       call. = FALSE
     )
   }
@@ -1343,12 +1343,12 @@ expressom_pipeline <- function(params_file, overrides = list()) {
   p0 <- readRDS(params_file)
   flags <- .pipeline_flags(p0)
 
-  # Every WSL/predictor log must land under <out_dir>/Log/WSL/ instead of the
+  # Every WSL/predictor log must land under <out_dir>/log/WSL/ instead of the
   # targets working directory. Set it here (in the child process that
   # tar_make() spins up) so all downstream .wsl_exec_script() calls -- target
-  # code AND .predictor_environment_fingerprint() probes -- write to Log/WSL.
+  # code AND .predictor_environment_fingerprint() probes -- write to log/WSL.
   if (!is.null(p0$out_dir) && nzchar(p0$out_dir)) {
-    wsl_log_dir <- file.path(p0$out_dir, "Log", "WSL")
+    wsl_log_dir <- file.path(.expressom_log_dir(p0$out_dir, create = TRUE), "WSL")
     if (!dir.exists(wsl_log_dir)) {
       dir.create(wsl_log_dir, recursive = TRUE, showWarnings = FALSE)
     }
@@ -1431,7 +1431,7 @@ expressom_pipeline <- function(params_file, overrides = list()) {
     # results appear" work end-to-end.
     #
     # The explicit log_dir makes the WSL commands it issues land under
-    # Log/WSL/ (matching the option set at the top of expressom_pipeline()),
+    # log/WSL/ (matching the option set at the top of expressom_pipeline()),
     # so the fingerprint probe shows up in the report's WSL log section.
     if (isTRUE(p0$run_predictors)) {
       isoform_deps <- c(isoform_deps, list(
@@ -1440,7 +1440,7 @@ expressom_pipeline <- function(params_file, overrides = list()) {
           quote(.predictor_environment_fingerprint(
             wsl_distro = params$wsl_distro,
             use_wsl    = params$use_wsl,
-            log_dir    = file.path(params$out_dir, "Log", "WSL")
+            log_dir    = file.path(.expressom_log_dir(params$out_dir, create = TRUE), "WSL")
           )),
           cue = always
         )
@@ -1632,7 +1632,7 @@ run_expressom_targets <- function(
   # the targets DAG). Setting it here too covers edge cases where a target
   # shells out before expressom_pipeline() has run (e.g. custom _targets.R).
   old_wsl_log <- getOption("expressom.wsl_log_dir")
-  options(expressom.wsl_log_dir = file.path(params$out_dir, "Log", "WSL"))
+  options(expressom.wsl_log_dir = file.path(.expressom_log_dir(params$out_dir, create = TRUE), "WSL"))
   on.exit(options(expressom.wsl_log_dir = old_wsl_log), add = TRUE)
 
   args <- list(

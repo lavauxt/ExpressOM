@@ -9,8 +9,8 @@
 #' By default the report is rendered with `rmarkdown` + pandoc as a single
 #' self-contained `.html` file written **at the root of `<out_dir>`** (i.e.
 #' `<out_dir>/ExpressOM_report_<comparison>.html`), so it sits right next to
-#' `Log/`, `Plots/`, `DE_raw_results/` and every other result folder, and the
-#' relative links it contains (`Log/…`, `Plots/…`, `DE_raw_results/…`) resolve
+#' `log/`, `Plots/`, `DE_raw_results/` and every other result folder, and the
+#' relative links it contains (`log/…`, `Plots/…`, `DE_raw_results/…`) resolve
 #' without any further setup when the file is opened from its own directory.
 #'
 #' Pass `settings = expressom_report_settings(self_contained = FALSE)` for the

@@ -201,12 +201,12 @@ Open it in any browser, no R needed: figures are interactive `plotly` widgets (z
 | Tab | Content |
 |---|---|
 | **Overview** | Summary boxes (comparison, genes tested, up/down-regulated genes, samples, number of enrichment tables, significant DTE/DTU) and a checklist of which results were found |
-| **Samples & QC** | One sub-tab per PCA (global, batch-corrected, comparison-only, transcript-level): interactive PC1/PC2 and PC1/PC3 plots, scree plot and the sample-scores table |
-| **Differential expression** | *Volcano* (your volcano colours, cut-offs and highlighted genes), *MA plot*, *Top genes heatmap*, full *Results table*, *DEG lists* per cut-off |
-| **Functional analysis** | By source (gene level, DTE, DTU), method (ORA, GSEA, SPIA, transcription factors) and gene-set collection (including every FGSEA `.gmt`): top-term plot + full table |
+| **Samples & QC** | One sub-tab per PCA (global, batch-corrected, comparison-only, transcript-level), plus sample-similarity diagnostics: interactive PC1/PC2 and PC1/PC3 plots, scree plot, sample-scores table, PCA-score correlation and distance heatmaps, MDS and hierarchical clustering where the saved scores allow it |
+| **Differential expression** | *Volcano* (your volcano colours, cut-offs and highlighted genes), *MA plot*, *Top genes heatmap*, *Diagnostics* (ranked effects and distribution checks when their input data are available), full *Results table*, *DEG lists* per cut-off |
+| **Functional analysis** | By source (gene level, DTE, DTU), method (ORA, GSEA, SPIA, transcription factors) and gene-set collection (including every FGSEA `.gmt`): original top-term plot + full table, with optional interactive enrichment bubbles and gene-set overlap/network views when the source result tables contain the required fields |
 | **Isoforms** | DTE, DTU, DEXSeq, variable transcripts, switch plots and the methods used |
 | **Figures** | The PDF/PNG figures found under `out_dir`, one sub-tab per output folder: PDFs are converted to PNG and embedded (click to enlarge; needs `pdftools`; up to `max_static_figures` per folder), plus a table listing every file |
-| **Run info** | Parameters of the run, logs (`Log/`) and the list of files produced |
+| **Run info** | Parameters of the run, logs (`log/`; legacy `log/` folders remain readable) and the list of files produced |
 
 ```R
 # on by default; the report is rebuilt at the end of every run
@@ -237,6 +237,19 @@ The button at the top right of the report switches between light and dark. The r
 > **Replaces `RegionReport`.** The previous `RegionReport/` HTML was a separate static document, centred on the differential-expression results. It was dropped in favour of the report above (the `regionReport`, `pcaExplorer` and `mockery` suggestions are gone). The argument `nBest`, which only controlled it, is now deprecated and ignored. The legacy stand-alone `IsoformSwitch/DTU_DTE_report/DTU_DTE_report.html` is only rendered when you run with `make_report = FALSE` (or call `generate_dte_dtu_report(render_html = TRUE)`); the tables and plots it was built from are always written, and the *Isoforms* tab shows them.
 
 The report needs `rmarkdown`, `knitr`, `htmltools`, `htmlwidgets`, `plotly` and `DT`, and [pandoc](https://pandoc.org/) (bundled with RStudio/Positron). `validate_environment()` warns about them before the run starts, and a run without them still completes (only the report is skipped).
+
+### OmniPathR cache and logging
+
+When decoupleR retrieves networks through OmniPathR, ExpressOM configures the current `omnipathr.*` option names and redirects OmniPathR log output to `log/omnipathr/`. The pipeline writes its other run logs under the lower-case `log/` directory. Existing runs that used `Log/` remain readable; new runs use `log/`.
+
+A stale OmniPathR cache lock is **not removed automatically by default**. OmniPathR's `omnipath_unlock_cache_db()` removes the lock file unconditionally, so it must not be called while another process or `targets` worker may still be using the same cache. Only after all such workers have stopped, an operator can explicitly enable recovery for a run with:
+
+```R
+options(ExpressOM.omnipath_unlock_cache = TRUE)
+options(ExpressOM.omnipath_lock_stale_after = 600) # seconds; default 10 minutes
+```
+
+The option is deliberately opt-in: lock-file age alone cannot prove that its owner is no longer active.
 
 ---
 
@@ -299,7 +312,7 @@ run_expressom_targets(p, stages = "dge")              # build up to the stage(s)
 expressom_targets_invalidate(expressom_targets_dir("./results"), "functional")  # force one stage to run again
 ```
 
-Everything the pipeline needs is stored in `<out_dir>/.expressom_targets/` (the `targets` store, a `params.rds` copy of the parameters and a one-line `_targets.R`; to drive it with `targets` directly use `targets::tar_make(script = ".expressom_targets/_targets.R", store = ".expressom_targets/store")` from `out_dir`). `expressom_params_from_run("./results")` rebuilds the parameters of a finished run from `Log/expressom_run.json`.
+Everything the pipeline needs is stored in `<out_dir>/.expressom_targets/` (the `targets` store, a `params.rds` copy of the parameters and a one-line `_targets.R`; to drive it with `targets` directly use `targets::tar_make(script = ".expressom_targets/_targets.R", store = ".expressom_targets/store")` from `out_dir`). `expressom_params_from_run("./results")` rebuilds the parameters of a finished run from `log/expressom_run.json`.
 
 ### Stages and dependencies
 
@@ -352,18 +365,18 @@ The `run_bulk_pipeline` function generates a heavily organized output structure 
 * **`Report/`**: the unified interactive report `ExpressOM_report_<level>_vs_<base>.html` (see [Interactive HTML Report](#interactive-html-report)). Static figures in it are converted from PDF to PNG and embedded; install `pdftools` if you want them inline (the underlying `.pdf` files are always written to `Plots/`).
 * **`.expressom_targets/`**: only when you use the `targets` pipeline or the Shiny app: the pipeline store, the stored parameters and the last run log (see [Incremental Runs with `targets`](#incremental-runs-with-targets)). Safe to delete; the next run simply starts from scratch.
 * **`Save_rdata/`**: The complete populated R environment serialized as an `.RData` file.
-* **`Log/`**: A single, unified log tree for the whole run — always check here first if something looks like it didn't run:
-  * `Log/SessionInfo.txt`, `Log/Warnings.txt` — captured at the very end of the run, regardless of what was enabled.
-  * `Log/expressom_run.json` — snapshot of the parameters, cut-offs and colours of the run. The report and the Shiny app read it so they reproduce exactly what the run used (`expressom_params_from_run()` turns it back into a parameter list).
-  * `Log/DGE/DGE_params_<comparison>.json` — one file per DGE comparison (design formula, contrast, filters, up/down counts).
-  * `Log/Isoform/wsl_debug.json` — output of `debug_wsl()`: which predictor tools were found, whether the Pfam database is present *and* `hmmpress`-indexed, whether the `isoform_tools` conda env exists, etc.
-  * `Log/Isoform/wsl_commands.log` — a timestamped audit trail of every command run inside WSL/bash, with exit codes and captured output. First place to look if a predictor "silently" didn't produce results.
-  * `Log/Isoform/predictor_status.log` — one line per tool per run (OK/SKIPPED/FAILED/IMPORT_FAILED) with the actual error message where relevant.
-  * `Log/Isoform/CPAT/`, `Log/Isoform/SignalP6/`, `Log/Isoform/Pfam/` — each tool's own log, grouped by tool (`Pfam/` holds both the InterProScan and hmmscan attempts).
+* **`log/`**: A single, unified log tree for the whole run — always check here first if something looks like it didn't run. New runs write to lower-case `log/`; existing `log/` folders remain readable for backward compatibility:
+  * `log/SessionInfo.txt`, `log/Warnings.txt` — captured at the very end of the run, regardless of what was enabled.
+  * `log/expressom_run.json` — snapshot of the parameters, cut-offs and colours of the run. The report and the Shiny app read it so they reproduce exactly what the run used (`expressom_params_from_run()` turns it back into a parameter list).
+  * `log/DGE/DGE_params_<comparison>.json` — one file per DGE comparison (design formula, contrast, filters, up/down counts).
+  * `log/Isoform/wsl_debug.json` — output of `debug_wsl()`: which predictor tools were found, whether the Pfam database is present *and* `hmmpress`-indexed, whether the `isoform_tools` conda env exists, etc.
+  * `log/Isoform/wsl_commands.log` — a timestamped audit trail of every command run inside WSL/bash, with exit codes and captured output. First place to look if a predictor "silently" didn't produce results.
+  * `log/Isoform/predictor_status.log` — one line per tool per run (OK/SKIPPED/FAILED/IMPORT_FAILED) with the actual error message where relevant.
+  * `log/Isoform/CPAT/`, `log/Isoform/SignalP6/`, `log/Isoform/Pfam/` — each tool's own log, grouped by tool (`Pfam/` holds both the InterProScan and hmmscan attempts).
 
 ## Windows / WSL Troubleshooting
 
-If CPAT, SignalP, or Pfam/hmmscan results are missing after a run with `run_predictors = TRUE`, check `Log/Isoform/wsl_debug.json` and `Log/Isoform/wsl_commands.log` first — they will usually show exactly which tool or database was missing or failed, and why. Common causes that are now checked and reported explicitly:
+If CPAT, SignalP, or Pfam/hmmscan results are missing after a run with `run_predictors = TRUE`, check `log/Isoform/wsl_debug.json` and `log/Isoform/wsl_commands.log` first — they will usually show exactly which tool or database was missing or failed, and why. Common causes that are now checked and reported explicitly:
 
 * **Pfam database found but not indexed.** `hmmscan` requires `Pfam-A.hmm` to be `hmmpress`-indexed (companion `.h3f/.h3i/.h3m/.h3p` files). `debug_wsl()` now checks this specifically and `install_isoform_databases()` performs the indexing itself (activating the `isoform_tools` conda environment first, since `hmmer` lives inside it rather than on the bare WSL PATH).
 * **Custom `CPAT_DATA` / `SIGNALP_DIR` paths not taking effect.** These are now persisted to a dedicated file (`~/.isoform_tools_env.sh`) that every predictor invocation sources, instead of `~/.bashrc` (which is never read by the non-interactive scripts this package runs).
@@ -643,7 +656,7 @@ plot: `ConsequenceSummary.pdf`, `ConsequenceEnrichment.pdf`,
 `SplicingSummary.pdf`, and `SplicingEnrichment.pdf` — matching the equivalent
 figures in the `IsoformSwitchAnalyzeR` vignette. Each is best-effort: on a
 small or single-direction dataset one or more may legitimately be skipped
-(reported in the console and in `Log/Isoform/`), without affecting anything
+(reported in the console and in `log/Isoform/`), without affecting anything
 else in the run.
 
 ## Isoform-Level Analysis: Enhanced Visualization (DEXSeq, Switch Plots, Sashimi, Exon Usage)
@@ -756,14 +769,31 @@ results/
     │   └── Pfam/                              # interproscan.tsv, pfam_domtblout.txt, and both
     │                                          # converted to pfam_scan.pl format for analyzePFAM()
     ├── sequences/                              # isoform_NT.fa / isoform_AA.fa fed to the predictors
-    └── Log/                                    # see Log/ below
+    └── log/                                    # see log/ below
 ```
 
-`Log/Isoform/` mirrors the same by-tool grouping: `Log/Isoform/CPAT/`,
-`Log/Isoform/SignalP6/`, `Log/Isoform/Pfam/` (InterProScan and hmmscan both
+`log/Isoform/` mirrors the same by-tool grouping: `log/Isoform/CPAT/`,
+`log/Isoform/SignalP6/`, `log/Isoform/Pfam/` (InterProScan and hmmscan both
 land here) each hold that tool's own log, while `predictor_status.log` and
-`wsl_commands.log` stay at the top of `Log/Isoform/` since they're a
+`wsl_commands.log` stay at the top of `log/Isoform/` since they're a
 cross-tool summary/live feed, not any one tool's log.
+
+## Enhancing an Existing HTML Report
+
+The `demo/merge_source_report.py` utility can enhance an already generated ExpressOM report without rebuilding the analysis. It preserves the original report's top-level tabs, nested tabs, embedded Plotly/DT widgets, static figures, notes and source-derived values, then adds diagnostics that can be calculated from the data already embedded in the source HTML. It also adds a searchable file browser from the companion inventory CSV.
+
+```bash
+python demo/merge_source_report.py \
+  --report ExpressOM_report_LPS_vs_NS.html \
+  --inventory ExpressOM_LPS_vs_NS_file_inventory.csv \
+  --output ExpressOM_report_LPS_vs_NS_merged.html
+```
+
+Python requirements: `beautifulsoup4` and `numpy`; `scipy` is optional and is used for Ward hierarchical clustering. The helper does not generate replacement biological results. For example, PCA-distance diagnostics are labelled as PCA-score-space views (not gene-expression correlations), differential-expression ranking is limited to the rows embedded in the source HTML, and enrichment overlap networks are only generated when gene-member fields are present.
+
+The merged report remains a single HTML file for the embedded content. Links to external result files are relative to the analysis output directory: keep the merged HTML at the root of the original results folder and place the companion inventory CSV next to it. The linked result files must remain in their original relative paths.
+
+The current `demo/` folder also includes an English README and the file inventory used for the LPS-vs-NS example. The report HTML itself is distributed separately because it is much larger than the R source package.
 
 ## Tests
 
@@ -793,3 +823,50 @@ Tests that need optional packages (`plotly`, `DT`, `shiny`, `targets`, `callr`, 
 ## License
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE).
+
+## Interactive report (v0.2.3)
+
+The unified HTML report keeps the hierarchical tab/subtab navigation and now
+provides full-row interactive result tables by default. DT tables include a
+global search, per-column filters, paging, sortable columns, persistent table
+state, and Copy / CSV / Excel export buttons. Set `table_rows` explicitly in
+`expressom_report_settings()` only when a smaller report is preferred.
+
+The Samples & QC section includes Pearson and Spearman sample-correlation
+heatmaps, sample-distance heatmaps, a hierarchical sample dendrogram, MDS,
+expression distribution boxplots/density curves, RLE and mean-variance
+diagnostics. Sample-level similarity uses the QC expression matrix derived
+from the full normalised-count table (up to the configured QC-gene limit),
+not just the top differentially expressed genes.
+
+The Isoforms > DTE and Isoforms > DTU sections include interactive transcript
+volcano/MA and ranked significance views for DTE, and likelihood-ratio versus
+adjusted-p, LR-distribution, raw/adjusted-p and feature-ranking views for DTU.
+DTU does not provide a log2 fold-change in its likelihood-ratio result table,
+so the report intentionally does not display a fabricated DTU volcano plot.
+
+For portable reports, all tables remain client-side searchable and exportable.
+The report also provides a searchable output-file index; links are clickable
+when the underlying result file is present beside the report, while missing
+external result files are identified rather than represented by dead links.
+
+
+### Interactive report: sample similarity, DTE/DTU and complete tables (0.2.3)
+
+The report includes Pearson and Spearman sample-expression correlation heatmaps,
+sample-distance and hierarchical-clustering views, MDS, expression distribution,
+RLE and mean-variance diagnostics. These are computed from the configured
+normalised expression/QC matrix (not from PCA scores).
+
+The DTE tab includes transcript-level volcano and MA plots, abundance-versus-
+adjusted-significance, ranked transcripts and raw/adjusted p-value distributions.
+The DTU tab includes ranked features, likelihood-ratio-versus-adjusted-significance,
+LR and p-value distributions, LR-versus-degrees-of-freedom, and a descriptive
+summary of tested features per gene. The DTU result schema does not provide a
+transcript-usage log2 fold-change, so no DTU volcano plot is fabricated.
+
+`expressom_report_settings(table_rows = Inf, slim_tables = FALSE)` is now the
+default: report tables retain all available rows and columns. Each DataTable
+provides global search, per-column filters, sorting, paging, state persistence,
+and Copy/CSV/Excel export. Large reports can opt into row/column pruning through
+`table_rows` and `slim_tables` when file size is a concern.

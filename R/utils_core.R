@@ -1,5 +1,46 @@
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
+
+# Output-directory log path helpers. New runs always write to `log/`;
+# readers continue to recognise pre-0.2.1 runs that used `Log/`.
+.expressom_log_dir <- function(out_dir, create = FALSE) {
+  if (length(out_dir) != 1L || is.na(out_dir) || !nzchar(out_dir)) {
+    stop("`out_dir` must be a non-empty directory path.", call. = FALSE)
+  }
+  current <- file.path(out_dir, "log")
+  legacy <- file.path(out_dir, "Log")
+  if (isTRUE(create)) {
+    dir.create(current, recursive = TRUE, showWarnings = FALSE)
+    return(current)
+  }
+  if (dir.exists(current)) return(current)
+  if (dir.exists(legacy)) return(legacy)
+  current
+}
+
+.expressom_log_dirs <- function(out_dir) {
+  dirs <- file.path(out_dir, c("log", "Log"))
+  dirs[dir.exists(dirs)]
+}
+
+.expressom_log_file <- function(out_dir, ..., create = FALSE) {
+  parts <- c(...)
+  if (isTRUE(create)) {
+    dir <- .expressom_log_dir(out_dir, create = TRUE)
+    path <- do.call(file.path, c(list(dir), as.list(parts)))
+    dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+    return(path)
+  }
+  dirs <- .expressom_log_dirs(out_dir)
+  if (!length(dirs)) dirs <- .expressom_log_dir(out_dir)
+  candidates <- lapply(dirs, function(dir) {
+    do.call(file.path, c(list(dir), as.list(parts)))
+  })
+  candidates <- unlist(candidates, use.names = FALSE)
+  hit <- candidates[file.exists(candidates)]
+  if (length(hit)) hit[[1L]] else candidates[[1L]]
+}
+
 .parse_ensembl_package_name <- function(ensembl_package_name) {
   if (length(ensembl_package_name) != 1L || is.na(ensembl_package_name)) {
     stop("`ensembl_package_name` must be one package name.", call. = FALSE)

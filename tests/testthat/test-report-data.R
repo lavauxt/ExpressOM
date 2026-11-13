@@ -43,6 +43,10 @@ test_that("load_expressom_results returns the typed result contract", {
   expect_equal(nrow(res$dge$deg_counts), 2L)
   expect_true(length(res$dge$sig_lists) >= 1L)
   expect_true(is.matrix(res$dge$expression$matrix))
+  expect_true(is.matrix(res$dge$expression$qc_matrix))
+  expect_true(is.matrix(res$dge$expression$distribution_matrix))
+  expect_equal(ncol(res$dge$expression$qc_matrix), 6L)
+  expect_equal(ncol(res$dge$expression$distribution_matrix), 6L)
   expect_identical(res$dge$expression$samples, paste0("S", 1:6))
   # heatmap columns are labelled with the PCA's grouping factor
   expect_identical(unname(res$dge$expression$groups), rep(c("control", "treated"), each = 3))
@@ -111,7 +115,7 @@ test_that("stages that were not run leave their elements empty", {
 test_that("an EDA-only directory loads (no comparison, no DGE)", {
   out <- withr::local_tempdir()
   make_run_dir(out)
-  unlink(file.path(out, c("DE_raw_results", "ORA", "GSEA", "SPIA", "Transcription_Factors", "IsoformSwitch", "Log")), recursive = TRUE)
+  unlink(file.path(out, c("DE_raw_results", "ORA", "GSEA", "SPIA", "Transcription_Factors", "IsoformSwitch", "log")), recursive = TRUE)
   file.rename(
     file.path(out, "Plots", "PCA_treated_vs_control_sample_scores.tsv"),
     file.path(out, "Plots", "PCA_EDA_sample_scores.tsv")
@@ -162,7 +166,7 @@ test_that("the run snapshot keeps simple values and drops what cannot be seriali
     long = seq_len(500),
     nothing = NULL
   ))
-  cfg <- jsonlite::read_json(file.path(out, "Log", "expressom_run.json"), simplifyVector = TRUE)
+  cfg <- jsonlite::read_json(file.path(out, "log", "expressom_run.json"), simplifyVector = TRUE)
   expect_identical(cfg$level, "a")
   expect_equal(cfg$padj_cutoff, 0.01)
   expect_true(cfg$flag)
