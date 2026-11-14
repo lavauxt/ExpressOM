@@ -193,8 +193,10 @@ results/
 Every run of `expressom()` (alias `run_bulk_pipeline()`) ends with **one self-contained, dynamic HTML file** that gathers all the results of the run in tabs:
 
 ```txt
-results/Report/ExpressOM_report_<level>_vs_<base>.html
+results/ExpressOM_report_<level>_vs_<base>.html
 ```
+
+(The file sits at the root of `out_dir`, next to `log/`, `Plots/` and `DE_raw_results/`, so the links it contains resolve as-is.)
 
 Open it in any browser, no R needed: figures are interactive `plotly` widgets (zoom, hover, toggle groups, export to PNG) and tables are searchable/sortable `DT` tables with CSV/Excel buttons. A **light / dark switch** in the header re-themes the page, the plotly figures and the tables; see [Dark mode](#dark-mode). The report is **discovery based**: it reads whatever is on disk in `out_dir`, and a tab simply does not appear when the stage behind it was not run (no isoform analysis → no *Isoforms* tab, no FGSEA → no FGSEA sub-tab...).
 
@@ -228,7 +230,18 @@ res <- load_expressom_results("./results")
 res
 ```
 
-`report_settings` accepts the arguments of `expressom_report_settings()` (`title`, `max_points`, `heatmap_genes`, `top_terms`, `table_rows`, `static_figures`, `max_static_figures`, `static_dpi`, `highlight_genes`, `padj_cutoff`, `lfc_cutoff`, `theme`). If one tab fails to render, the rest of the report is still built and the failed tab shows the error message.
+`report_settings` accepts the arguments of `expressom_report_settings()` (`title`, `max_points`, `heatmap_genes`, `top_terms`, `table_rows`, `slim_tables`, `plotly_bundle`, `static_figures`, `max_static_figures`, `static_dpi`, `highlight_genes`, `padj_cutoff`, `lfc_cutoff`, `theme`). If one tab fails to render, the rest of the report is still built and the failed tab shows the error message.
+
+#### Report size and open speed
+
+The defaults are tuned so that even a genome-scale run (tens of thousands of genes, hundreds of thousands of transcripts) produces a report that opens in a browser in well under a second:
+
+* interactive tables embed at most `table_rows` rows (default 5,000, in adjusted-p order, so the most interesting rows stay; the caption of each table says so) and hide the bulky per-row gene-list columns (`slim_tables = TRUE`); every table keeps its CSV / Excel buttons, and the complete files are always in the run folder;
+* QC box plots (expression, RLE) send the five-number summary per sample instead of every gene, the p-value histogram sends 20 bins instead of every p-value, and the Q-Q plot is thinned to 2,000 evenly spaced order statistics;
+* the report plots embed the smaller `cartesian` build of plotly.js (~1.3 MB instead of ~3.6 MB) when it can be fetched once from `cdn.plot.ly`; offline (or if the download fails) the full bundle that ships with the plotly package is used silently, so building a report never requires internet access. `plotly_bundle = "full"` opts out, `"cartesian"` forces the small build;
+* widgets in hidden tabs are not initialised until their tab is first opened (lazy tabs), which keeps the first paint fast.
+
+Set `table_rows = Inf` / `slim_tables = FALSE` in `report_settings` to embed everything again, at the cost of a much larger and slower file; on a 45,000-gene run with 150,000 transcripts the old behaviour can make `pandoc` run out of memory while assembling the single file.
 
 #### Dark mode
 
@@ -362,7 +375,7 @@ The `run_bulk_pipeline` function generates a heavily organized output structure 
 * **`ORA/` & `GSEA/`**: Extensive targets and plots for GO mapping, Reactome, Disease Ontology, and KEGG generic pathways (Dotplots, Ridgeplots, Pathway Graphs).
 * **`SPIA/`**: Signaling Pathway Impact Analysis graphs and Evidence CSVs.
 * **`Transcription_Factors/`**: Output mapping active transcription factor perturbations based on dynamically mapped Enrichr libraries.
-* **`Report/`**: the unified interactive report `ExpressOM_report_<level>_vs_<base>.html` (see [Interactive HTML Report](#interactive-html-report)). Static figures in it are converted from PDF to PNG and embedded; install `pdftools` if you want them inline (the underlying `.pdf` files are always written to `Plots/`).
+* **`ExpressOM_report_<level>_vs_<base>.html`**: the unified interactive report, written at the root of `out_dir` (see [Interactive HTML Report](#interactive-html-report)). Static figures in it are converted from PDF to PNG and embedded; install `pdftools` if you want them inline (the underlying `.pdf` files are always written to `Plots/`).
 * **`.expressom_targets/`**: only when you use the `targets` pipeline or the Shiny app: the pipeline store, the stored parameters and the last run log (see [Incremental Runs with `targets`](#incremental-runs-with-targets)). Safe to delete; the next run simply starts from scratch.
 * **`Save_rdata/`**: The complete populated R environment serialized as an `.RData` file.
 * **`log/`**: A single, unified log tree for the whole run — always check here first if something looks like it didn't run. New runs write to lower-case `log/`; existing `log/` folders remain readable for backward compatibility:
