@@ -24,6 +24,11 @@
 #'   [list_expressom_comparisons()]. `NULL` uses the most recent one.
 #' @param settings List from [expressom_report_settings()].
 #' @param results Optional pre-loaded [load_expressom_results()] object.
+#' @param engine Report engine: `"htmltools"` (default; fast, dependency-free,
+#'   needs plotly + DT), `"pandoc"` (the legacy rmarkdown self-contained
+#'   single file) or `"quarto"` (Quarto dashboard with Observable JS
+#'   explorers, DuckDB-Wasm filtering and float32 binary payloads; needs the
+#'   quarto CLI, see `vignette` and `engine = "quarto"` in README).
 #' @param quiet Suppress console output.
 #' @return The path of the HTML report (invisibly).
 #' @export
@@ -33,12 +38,40 @@ build_expressom_report <- function(
   comparison = NULL,
   settings = expressom_report_settings(),
   results = NULL,
+  engine = c("auto", "htmltools", "pandoc", "quarto"),
   quiet = TRUE
 ) {
+  engine <- match.arg(engine)
+  if (identical(engine, "auto")) {
+    engine <- if (isTRUE(settings$self_contained)) "pandoc" else "htmltools"
+  }
+  if (identical(engine, "quarto")) {
+    .rep_require("htmltools", "to build the interactive report")
+    .rep_require("jsonlite", "to build the Quarto dashboard report")
+    if (is.null(results)) {
+      results <- load_expressom_results(out_dir, comparison = comparison)
+    } else if (!inherits(results, "expressom_results")) {
+      stop("`results` must come from load_expressom_results().", call. = FALSE)
+    }
+    out_dir <- results$out_dir
+    if (is.null(output_file)) {
+      stem <- if (is.na(results$comparison)) "ExpressOM_report" else {
+        paste0("ExpressOM_report_", results$comparison)
+      }
+      output_file <- file.path(out_dir, paste0(stem, "_quarto.html"))
+    }
+    path <- .xq_render_dashboard(results, settings, output_file, quiet = quiet)
+    size_mb <- file.size(path) / 1024^2
+    message(
+      "Quarto dashboard report written: ", path, " (",
+      format(round(size_mb, 1), nsmall = 1), " MB, self-contained)"
+    )
+    return(invisible(path))
+  }
   for (pkg in c("htmltools", "htmlwidgets")) {
     .rep_require(pkg, "to build the interactive report")
   }
-  pandoc_mode <- isTRUE(settings$self_contained)
+  pandoc_mode <- identical(engine, "pandoc")
   if (pandoc_mode) {
     for (pkg in c("rmarkdown", "knitr", "plotly", "DT")) {
       .rep_require(pkg, "to build the interactive report")
