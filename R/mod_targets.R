@@ -842,6 +842,9 @@ rerun_decouple_only <- function(out_dir, rebuild_report = TRUE, ...) {
       call. = FALSE
     )
   }
+  # OmnipathR's default log folder may sit in the working directory from an
+  # earlier run: file it with the results before the stage writes new logs.
+  try(.decouple_sweep_omnipathr_logs(out_dir), silent = TRUE)
   expressom_targets_invalidate(pipe, "decouple")
   stages <- c("decouple", if (isTRUE(rebuild_report)) "report")
   run_expressom_targets(stages = stages, dir = pipe, ...)

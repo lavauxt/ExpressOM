@@ -28,10 +28,14 @@ Additionally, OmnipathR's own log file (`omnipathr.logfile`) is redirected
 to `<out_dir>/log/omnipathr/` (or `<log_dir>/omnipathr/` when `log_dir` is
 supplied) on every call -- by default OmnipathR writes a
 `<cwd>/omnipathr-log/` folder, which was ending up outside the pipeline's
-`log/` tree. This redirection is per-run (the log path is timestamped and
-comparison-tagged) and is therefore re-applied even when the generic
-options have already been set in this session. Cache-lock recovery is
-opt-in (`ExpressOM.omnipath_unlock_cache = TRUE`): the cache lock contains
+`log/` tree. When neither `out_dir` nor `log_dir` is known, a
+session-stable folder under [tempdir()] is used instead, so the stray
+folder never lands in the working directory even for calls that happen
+before the pipeline knows its output directory. The redirection is
+per-run (the log path is timestamped and comparison-tagged) and is
+therefore re-applied even when the generic options have already been set
+in this session. Cache-lock recovery is opt-in
+(`ExpressOM.omnipath_unlock_cache = TRUE`): the cache lock contains
 no owner PID, so age alone cannot prove that a concurrent worker has died.
 Enable recovery only after all OmniPathR users of that cache have stopped.
 }

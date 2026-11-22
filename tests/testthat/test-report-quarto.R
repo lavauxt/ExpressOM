@@ -97,8 +97,18 @@ test_that("the data layer round-trips through the JavaScript runtime", {
   skip_on_cran()
   node <- Sys.which("node")
   testthat::skip_if(!nzchar(node), "node is not installed")
-  xq_dir <- system.file("xq", package = "ExpressOM")
-  if (!nzchar(xq_dir)) xq_dir <- normalizePath(testthat::test_path("..", "..", "inst", "xq"))
+  # materialise the embedded assets into a temp dir: the runtime no longer
+  # ships as files (inst/xq is gone), so the round-trip runs against the
+  # exact bytes a report would inflate.
+  xq_dir <- withr::local_tempdir()
+  for (key in names(ExpressOM:::.xq_asset_data)) {
+    rec <- ExpressOM:::.xq_asset_data[[key]]
+    writeBin(
+      memDecompress(jsonlite::base64_dec(rec$b64), type = "gzip"),
+      file.path(xq_dir, rec$file)
+    )
+  }
+  writeLines(ExpressOM:::.xq_bootstrap_js, file.path(xq_dir, "xq-bootstrap.js"))
   testthat::skip_if(!file.exists(file.path(xq_dir, "xq-core.js")), "runtime assets not found")
   set.seed(1)
   df <- data.frame(
@@ -199,9 +209,41 @@ test_that("the head payload carries styles, specs, notes, tables and runtime", {
   expect_match(head, 'id="xqt-de"', fixed = TRUE)
   expect_match(head, 'id="xqj-cfg"', fixed = TRUE)
   expect_match(head, 'id="xqh-', fixed = TRUE)
-  expect_match(head, "globalThis.XQV", fixed = TRUE)
+  # runtime assets travel compressed; the bootstrap travels plain
+  expect_match(head, 'type="application/x-xq-asset" id="xqa-xq-vendor.min.js"',
+               fixed = TRUE)
+  expect_match(head, 'id="xqa-xq.css" data-kind="css"', fixed = TRUE)
+  expect_false(grepl("globalThis.XQV", head, fixed = TRUE))
+  expect_match(head, "XQ.inflateAssets", fixed = TRUE)
   expect_match(head, "XQ.mount", fixed = TRUE)
   expect_true(all(c("de", "dte", "dtu") %in% names(col$tables)))
+})
+
+test_that("the embedded assets match their source files and decompress losslessly", {
+  src_dir <- normalizePath(testthat::test_path("..", "..", "tools", "xq"),
+                           winslash = "/", mustWork = FALSE)
+  testthat::skip_if(!dir.exists(src_dir), "package source tree not available")
+  for (key in names(ExpressOM:::.xq_asset_data)) {
+    rec <- ExpressOM:::.xq_asset_data[[key]]
+    f <- file.path(src_dir, rec$file)
+    testthat::skip_if(!file.exists(f), paste("missing source", basename(f)))
+    raw <- readBin(f, "raw", file.size(f))
+    # decompressed embedded copy == source file bytes (catches a stale
+    # R/xq-assets.R: regenerate with python3 tools/embed_xq_assets.py)
+    txt <- ExpressOM:::.xq_asset(rec$file)
+    expect_identical(charToRaw(txt), raw, info = key)
+  }
+})
+
+test_that("asset override files win over the embedded copies", {
+  dir <- withr::local_tempdir()
+  writeLines("/* override css */", file.path(dir, "xq.css"))
+  withr::local_options(list(expressom.xq_dir = dir))
+  rec <- ExpressOM:::.xq_asset_record("xq.css")
+  expect_false(rec$embedded)
+  expect_identical(rec$txt, "/* override css */\n")
+  # a missing asset still fails loudly
+  expect_error(ExpressOM:::.xq_asset_record("nope.js"), "not found")
 })
 
 # ---- end to end ------------------------------------------------------------------------------

@@ -127,6 +127,45 @@ test_that("a broken HTTP configuration keeps the probe at NA instead of lying", 
   expect_match(probe$reason, "method")
 })
 
+test_that("OmnipathR gets a log destination even without an out_dir", {
+  withr::local_options(list(
+    ExpressOM.omnipathr_log_identity = NULL,
+    ExpressOM.omnipathr_logfile = NULL,
+    ExpressOM.omnipathr_log_run_id = NULL
+  ))
+  # no out_dir / log_dir: the fallback must be under tempdir(), never the cwd
+  .configure_decouple_omnipathr()
+  lf <- getOption("omnipathr.logfile")
+  expect_true(grepl(tempdir(), lf, fixed = TRUE))
+  expect_false(grepl(getwd(), normalizePath(lf, winslash = "/"), fixed = TRUE))
+  # a second call in the same session reuses the same file
+  .configure_decouple_omnipathr()
+  expect_identical(getOption("omnipathr.logfile"), lf)
+})
+
+test_that("stray omnipathr-log folders are swept into the results", {
+  cwd <- withr::local_tempdir()
+  out <- withr::local_tempdir()
+  # folder form + flat form
+  dir.create(file.path(cwd, "omnipathr-log"))
+  writeLines("log1", file.path(cwd, "omnipathr-log", "omnipathr-log-run-x.log"))
+  writeLines("log2", file.path(cwd, "omnipathr-log-flat.log"))
+  moved <- .decouple_sweep_omnipathr_logs(out, cwd = cwd)
+  expect_gte(moved, 2L)
+  dest <- file.path(out, "log", "omnipathr")
+  expect_true(file.exists(file.path(dest, "omnipathr-log-run-x.log")))
+  expect_true(file.exists(file.path(dest, "omnipathr-log-flat.log")))
+  # the emptied folder was removed; a later clash is resolved by suffixing,
+  # the original file's content survives
+  dir.create(file.path(cwd, "omnipathr-log"))
+  writeLines("clash", file.path(cwd, "omnipathr-log", "omnipathr-log-flat.log"))
+  writeLines("keep", file.path(cwd, "omnipathr-log", "omnipathr-log-keep.log"))
+  moved2 <- .decouple_sweep_omnipathr_logs(out, cwd = cwd)
+  expect_gte(moved2, 2L)
+  expect_identical(readLines(file.path(dest, "omnipathr-log-run-x.log")), "log1")
+  expect_true(length(list.files(dest, pattern = "flat")) >= 2L)
+})
+
 test_that("the network-status label follows the probe verdict only", {
   expect_identical(.decouple_net_status_label(TRUE), "network (live)")
   expect_identical(.decouple_net_status_label(FALSE),

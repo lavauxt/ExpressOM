@@ -3,7 +3,7 @@
 # Every table the dashboard needs is written once, in R, as a zlib-compressed
 # *columnar* binary container and embedded in a
 # `<script type="application/x-xq-table" id="xqt-<key>">` block. The browser
-# side (inst/xq/xq-core.js) inflates a table only when one of its columns is
+# side (tools/xq/xq-core.js, embedded compressed in R/xq-assets.R) inflates a table
 # first read, so tables that are never opened cost nothing but their bytes.
 #
 # Container layout (all little-endian), before zlib:

@@ -244,7 +244,7 @@ res
 
 `report_settings` accepts the arguments of `expressom_report_settings()` (`title`, `max_points`, `heatmap_genes`, `top_terms`, `table_rows`, `static_figures`, `max_static_figures`, `static_dpi`, `highlight_genes`, `padj_cutoff`, `lfc_cutoff`, `theme`, `slim_tables`). If one tab fails to render, the rest of the report is still built and the failed tab shows the error message.
 
-All the report's custom JavaScript and CSS live **in R code**, not in loose asset files: the lazy-tab renderer and the theme switch are R string constants (`R/mod_report_templates.R`), the base stylesheet is `R/mod_report_tabs.R`, and the Quarto engine's Observable JavaScript is vendored in `inst/xq/` and inlined into the HTML by `R/mod_report_quarto.R` -- so a report never references an external script the browser would have to fetch.
+All the report's custom JavaScript and CSS live **in R code**, not in loose asset files: the lazy-tab renderer and the theme switch are R string constants (`R/mod_report_templates.R`), the base stylesheet is `R/mod_report_tabs.R`, and the Quarto engine's runtime (`tools/xq/*.js`, `tools/xq/xq.css`) is embedded into `R/xq-assets.R` as compressed string constants by `python3 tools/embed_xq_assets.py` -- the package carries no `inst/` asset directory at all, and a report never references an external script the browser would have to fetch.
 
 #### Dark mode
 
@@ -875,9 +875,10 @@ build_expressom_report(out_dir, engine = "quarto")
 ```
 
 Requires the `quarto` CLI (>= 1.4, on the PATH or in `QUARTO_PATH`) and
-`jsonlite` + `htmltools`. Nothing else: the JavaScript libraries are vendored
-inside the package (`inst/xq/`), so the report needs **no network** to open or
-to use, except for free-form SQL (see below).
+`jsonlite` + `htmltools`. Nothing else: the JavaScript libraries are embedded
+in `R/xq-assets.R` (regenerated from `tools/xq/` with
+`python3 tools/embed_xq_assets.py`), so the report needs **no network** to
+open or to use, except for free-form SQL (see below).
 
 ### What is in it
 
@@ -933,7 +934,15 @@ offline) and drew SVG points.
 `R/mod_report_quarto_data.R` (binary encoder), `R/mod_report_quarto_collect.R`
 (what each tab shows, QC and enrichment pre-computation),
 `R/mod_report_quarto_help.R` (the notes), `R/mod_report_quarto.R` (pages,
-render, `file://` patch) and `inst/xq/` (`xq-core.js` data layer and filter
+render, `file://` patch), `R/xq-assets.R` (the compressed runtime constants)
+and the sources under `tools/xq/` (`xq-core.js` data layer and filter
 engine, `xq-widgets.js` tables and controls, `xq-scatter.js` WebGL scatter,
-`xq-charts.js` / `xq-views.js` the views, `xq.css`, and `xq-vendor.min.js`,
-rebuilt from `vendor-entry.js` with `esbuild --bundle --minify --format=iife`).
+`xq-charts.js` / `xq-views.js` the views, `xq.css`, `xq-bootstrap.js` the
+asset decompressor, and `xq-vendor.min.js`, rebuilt in `tools/vendor/` from
+`vendor-entry.js` with `esbuild --bundle --minify --format=iife`). Edit any
+of them, then run `python3 tools/embed_xq_assets.py` to refresh
+`R/xq-assets.R`. Three checks gate the result: `tools/xq/test_tinf.js` and
+`tools/xq/bootstrap_check.js` (node) verify the decoder and the full
+inflate-evaluate chain, and `tools/verify_xq_assets_r.py` parses the
+generated R and re-derives both constants -- it rejects exactly the
+"argument N is empty" trailing-comma mistake R's parser silently accepts.

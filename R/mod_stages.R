@@ -467,6 +467,9 @@
   p <- ctx$p
   if (!isTRUE(p$run_dge) || !isTRUE(p$run_decouple) || is.null(dge)) return(NULL)
   message("\n=== Running decoupleR activity inference ===")
+  # OmnipathR's default log folder may have been created in the working
+  # directory by an earlier/unconfigured call: file it with the results.
+  try(.decouple_sweep_omnipathr_logs(p$out_dir), silent = TRUE)
 
   res <- safe_run(
     run_decouple_analysis(

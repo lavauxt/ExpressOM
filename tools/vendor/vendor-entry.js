@@ -1,5 +1,8 @@
 // Vendored libraries for the ExpressOM Quarto dashboard engine.
-// Bundled with esbuild into inst/xq/xq-vendor.min.js (see inst/xq/build-vendor.md).
+// Bundled with esbuild into tools/xq/xq-vendor.min.js. Rebuild:
+//   cd tools/vendor && npm install && npx esbuild vendor-entry.js \
+//     --bundle --minify --format=iife -o ../xq/xq-vendor.min.js
+// then regenerate the embedded copy: python3 tools/embed_xq_assets.py
 import * as Plot from "@observablehq/plot";
 import * as Inputs from "@observablehq/inputs";
 import * as htl from "htl";

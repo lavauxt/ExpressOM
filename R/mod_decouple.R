@@ -56,10 +56,14 @@
 #' to `<out_dir>/log/omnipathr/` (or `<log_dir>/omnipathr/` when `log_dir` is
 #' supplied) on every call -- by default OmnipathR writes a
 #' `<cwd>/omnipathr-log/` folder, which was ending up outside the pipeline's
-#' `log/` tree. This redirection is per-run (the log path is timestamped and
-#' comparison-tagged) and is therefore re-applied even when the generic
-#' options have already been set in this session. Cache-lock recovery is
-#' opt-in (`ExpressOM.omnipath_unlock_cache = TRUE`): the cache lock contains
+#' `log/` tree. When neither `out_dir` nor `log_dir` is known, a
+#' session-stable folder under [tempdir()] is used instead, so the stray
+#' folder never lands in the working directory even for calls that happen
+#' before the pipeline knows its output directory. The redirection is
+#' per-run (the log path is timestamped and comparison-tagged) and is
+#' therefore re-applied even when the generic options have already been set
+#' in this session. Cache-lock recovery is opt-in
+#' (`ExpressOM.omnipath_unlock_cache = TRUE`): the cache lock contains
 #' no owner PID, so age alone cannot prove that a concurrent worker has died.
 #' Enable recovery only after all OmniPathR users of that cache have stopped.
 #'
@@ -187,7 +191,11 @@
   log_dir   = NULL,
   comp_name = NULL
 ) {
-  # Create/reuse the per-run logfile path before requireNamespace() loads OmnipathR.
+  # Create/reuse the per-run logfile path before requireNamespace() loads
+  # OmnipathR. Even without out_dir/log_dir a destination is set (a stable
+  # folder under tempdir()), because OmnipathR's default would otherwise be
+  # <cwd>/omnipathr-log/ -- the folder users kept finding in their project
+  # root after early/unconfigured calls.
   omni_log_file <- NULL
   if (!is.null(out_dir) || !is.null(log_dir)) {
     log_base <- if (!is.null(log_dir)) {
@@ -196,41 +204,49 @@
       file.path(out_dir, "log")
     }
     omni_log_dir <- file.path(log_base, "omnipathr")
-    dir.create(omni_log_dir, recursive = TRUE, showWarnings = FALSE)
-    comp_tag <- if (!is.null(comp_name) && length(comp_name) == 1L &&
-                    !is.na(comp_name) && nzchar(comp_name)) {
-      gsub("[^A-Za-z0-9_.-]+", "_", comp_name)
-    } else "run"
-    run_id <- getOption("ExpressOM.omnipathr_log_run_id")
-    if (is.null(run_id) || !length(run_id) || is.na(run_id[[1L]]) ||
-        !nzchar(run_id[[1L]])) {
-      run_id <- paste0(Sys.getpid(), "-", format(Sys.time(), "%Y%m%d-%H%M%S"))
-    } else {
-      run_id <- as.character(run_id[[1L]])
-    }
-    log_identity <- paste(normalizePath(log_base, winslash = "/", mustWork = FALSE),
-                          comp_tag, run_id, sep = "|")
-    cached_logfile <- getOption("ExpressOM.omnipathr_logfile")
-    if (identical(getOption("ExpressOM.omnipathr_log_identity"), log_identity) &&
-        length(cached_logfile) == 1L && !is.na(cached_logfile) &&
-        nzchar(cached_logfile) && file.exists(cached_logfile)) {
-      omni_log_file <- cached_logfile
-    } else {
-      stamp <- format(Sys.time(), "%Y%m%d-%H%M%S")
-      omni_log_file <- file.path(
-        omni_log_dir,
-        paste0("omnipathr-log-", comp_tag, "-", stamp, "-pid", Sys.getpid(), ".log")
-      )
-      options(
-        ExpressOM.omnipathr_log_identity = log_identity,
-        ExpressOM.omnipathr_logfile = omni_log_file
-      )
-    }
+    persistent_log <- TRUE
+  } else {
+    omni_log_dir <- file.path(
+      tempdir(), paste0("expressom-omnipathr-", Sys.getpid())
+    )
+    persistent_log <- FALSE
+  }
+  dir.create(omni_log_dir, recursive = TRUE, showWarnings = FALSE)
+  comp_tag <- if (!is.null(comp_name) && length(comp_name) == 1L &&
+                  !is.na(comp_name) && nzchar(comp_name)) {
+    gsub("[^A-Za-z0-9_.-]+", "_", comp_name)
+  } else "run"
+  run_id <- getOption("ExpressOM.omnipathr_log_run_id")
+  if (is.null(run_id) || !length(run_id) || is.na(run_id[[1L]]) ||
+      !nzchar(run_id[[1L]])) {
+    run_id <- paste0(Sys.getpid(), "-", format(Sys.time(), "%Y%m%d-%H%M%S"))
+  } else {
+    run_id <- as.character(run_id[[1L]])
+  }
+  log_identity <- paste(normalizePath(omni_log_dir, winslash = "/",
+                                      mustWork = FALSE),
+                        comp_tag, run_id, sep = "|")
+  cached_logfile <- getOption("ExpressOM.omnipathr_logfile")
+  if (identical(getOption("ExpressOM.omnipathr_log_identity"), log_identity) &&
+      length(cached_logfile) == 1L && !is.na(cached_logfile) &&
+      nzchar(cached_logfile) && file.exists(cached_logfile)) {
+    omni_log_file <- cached_logfile
+  } else {
+    stamp <- format(Sys.time(), "%Y%m%d-%H%M%S")
+    omni_log_file <- file.path(
+      omni_log_dir,
+      paste0("omnipathr-log-", comp_tag, "-", stamp, "-pid", Sys.getpid(), ".log")
+    )
     options(
-      omnipathr.logdir = omni_log_dir,
-      omnipathr.logfile = omni_log_file
+      ExpressOM.omnipathr_log_identity = log_identity,
+      ExpressOM.omnipathr_logfile = omni_log_file
     )
   }
+  options(
+    omnipathr.logdir = omni_log_dir,
+    omnipathr.logfile = omni_log_file,
+    ExpressOM.omnipathr_log_persistent = persistent_log
+  )
 
   # Correct option names as defined by current OmnipathR. Preserve explicit
   # user choices for retry count/levels/timeouts.
@@ -284,6 +300,70 @@
 
   options(ExpressOM.omnipathr_configured = TRUE)
   invisible(TRUE)
+}
+
+#' Sweep a stray OmnipathR log folder into the run's log tree
+#'
+#' OmnipathR (before ExpressOM's redirection applies, or from a parallel
+#' session that loaded it first) writes its default `omnipathr-log/` folder
+#' into the current working directory. This helper moves such a folder (and
+#' the log files directly inside it) into `<out_dir>/log/omnipathr/`, so the
+#' logs end up with the results instead of polluting the project root. It
+#' merges rather than overwrites: an existing destination file keeps its
+#' name and the moved one is suffixed with `-<timestamp>`.
+#'
+#' Called at pipeline start and from [rerun_decouple_only()], both times
+#' before any OmnipathR call of this session, so nothing is writing while we
+#' move. Silent by design: a stray folder is not the user's problem to fix.
+#'
+#' @param out_dir Output directory of the current run.
+#' @param cwd Directory to sweep (default: the current working directory).
+#' @return Invisibly, the number of files moved.
+#' @keywords internal
+.decouple_sweep_omnipathr_logs <- function(out_dir, cwd = getwd()) {
+  if (is.null(out_dir) || !dir.exists(out_dir)) return(invisible(0L))
+  dest <- file.path(.expressom_log_dir(out_dir, create = TRUE), "omnipathr")
+  moved <- 0L
+  # the folder form: <cwd>/omnipathr-log/**
+  stray_dir <- file.path(cwd, "omnipathr-log")
+  src_files <- character(0)
+  if (dir.exists(stray_dir)) {
+    src_files <- list.files(stray_dir, full.names = TRUE, recursive = TRUE)
+  }
+  # the flat form: <cwd>/omnipathr-log-*.log written by even older versions
+  src_files <- c(
+    src_files,
+    list.files(cwd, pattern = "^omnipathr-log.*\\.log$", full.names = TRUE)
+  )
+  if (!length(src_files)) return(invisible(0L))
+  dir.create(dest, recursive = TRUE, showWarnings = FALSE)
+  for (f in src_files) {
+    if (!file.exists(f) || file.size(f) == 0) next
+    base <- basename(f)
+    target <- file.path(dest, base)
+    if (file.exists(target)) {
+      target <- file.path(
+        dest, sub("(\\.log)$",
+                  paste0("-", format(Sys.time(), "%Y%m%d-%H%M%OS3"), "\\1"),
+                  base)
+      )
+    }
+    if (file.rename(f, target)) moved <- moved + 1L
+  }
+  # remove the folder when it is now empty (keep it when files remain: they
+  # may belong to another live session)
+  if (dir.exists(stray_dir)) {
+    if (!length(list.files(stray_dir, all.files = TRUE, no.. = TRUE))) {
+      unlink(stray_dir, recursive = TRUE, force = TRUE)
+    }
+  }
+  if (moved > 0L) {
+    message(
+      "   -> moved ", moved, " stray OmnipathR log file(s) from '", cwd,
+      "' into '", dest, "'."
+    )
+  }
+  invisible(moved)
 }
 
 #' Probe whether the OmniPath API is currently reachable

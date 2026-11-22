@@ -1,5 +1,5 @@
 // Cross-language test of the dashboard data layer: R encodes a table with
-// .xq_encode_table(), this script decodes it with inst/xq/xq-core.js and checks
+// .xq_encode_table(), this script decodes it with xq-core.js (materialised by the
 // every column type, the WHERE engine, sorting, search and CSV export.
 // usage: node core_roundtrip.js <xq dir> <payload.json>
 const fs = require('fs');
