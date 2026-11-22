@@ -4,9 +4,28 @@
 \alias{.decouple_get_net}
 \title{Fetch a decoupleR network for one of the supported resources.}
 \usage{
-.decouple_get_net(resource, organism)
+.decouple_get_net(
+  resource,
+  organism,
+  out_dir = NULL,
+  comp_name = NULL,
+  log_dir = NULL
+)
+}
+\arguments{
+\item{resource}{"collectri", "progeny", or "dorothea".}
+
+\item{organism}{Ensembl organism string (used to pick human vs. mouse).}
+
+\item{out_dir, comp_name}{Forwarded to `.configure_decouple_omnipathr()` so
+OmnipathR's own log file lands in `<out_dir>/log/omnipathr/`.}
 }
 \description{
-Fetch a decoupleR network for one of the supported resources.
+Collectri and dorothea are served from OmnipathR's local cache when the
+API is unreachable, and from decoupleR's bundled static tables when there
+is no cache either (may be older). PROGENy has **no** offline source: if
+the fetch fails, this function raises an error so the caller can record a
+"failed" status and warn the user instead of quietly dropping the
+resource.
 }
 \keyword{internal}

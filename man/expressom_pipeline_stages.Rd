@@ -5,11 +5,18 @@
 \title{Pipeline stages: id, label and the targets they correspond to}
 \usage{
 expressom_pipeline_stages()
+
+expressom_pipeline_stages()
 }
 \value{
 A data.frame with columns `stage`, `label`, `target` and `upstream`
   (space-separated stages it reads from).
+
+A data.frame with columns `stage`, `label`, `target` and `upstream`
+  (space-separated stages it reads from).
 }
 \description{
+Pipeline stages: id, label and the targets they correspond to
+
 Pipeline stages: id, label and the targets they correspond to
 }

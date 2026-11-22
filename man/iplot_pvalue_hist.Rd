@@ -4,8 +4,10 @@
 \alias{iplot_pvalue_hist}
 \title{Interactive p-value histogram}
 \usage{
-iplot_pvalue_hist(p, title = "p-value distribution")
+iplot_pvalue_hist(p, title = "p-value distribution", nbins = 100L)
 }
 \description{
-Interactive p-value histogram
+Bins are computed in R and drawn as a bar chart: passing the raw p-values
+to plotly's histogram would embed every observation in the HTML (a 30k-gene
+run costs several MB per plot).
 }

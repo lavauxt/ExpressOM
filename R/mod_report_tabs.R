@@ -2,13 +2,20 @@
 # the Shiny app ("same UI, precomputed backend").
 
 #' Settings of the interactive report
+#'
+#' @param table_rows Rows embedded per interactive table. Tables longer than
+#'   this are truncated (a note in the caption says so and the complete file
+#'   stays available in the run folder). Keeping this finite is the main
+#'   lever for a small, fast-opening HTML.
+#' @param slim_tables Drop helper columns (statistics, IDs, descriptions)
+#'   from the displayed tables; the CSVs in the run folder keep every column.
 #' @export
 expressom_report_settings <- function(
   title = "ExpressOM report",
   max_points = 1500L,
   heatmap_genes = 20L,
   top_terms = 15L,
-  table_rows = Inf,
+  table_rows = 5000L,
   static_figures = TRUE,
   max_static_figures = 24L,
   static_dpi = 60,
@@ -22,7 +29,8 @@ expressom_report_settings <- function(
   lfc_cutoff = NULL,
   theme = c("auto", "light", "dark"),
   self_contained = TRUE,
-  slim_tables = FALSE
+  slim_tables = TRUE,
+  duckdb_url = NULL
 ) {
   theme <- match.arg(theme)
   list(
@@ -44,7 +52,8 @@ expressom_report_settings <- function(
     lfc_cutoff = lfc_cutoff,
     theme = theme,
     self_contained = self_contained,
-    slim_tables = slim_tables
+    slim_tables = slim_tables,
+    duckdb_url = duckdb_url
   )
 }
 
@@ -600,7 +609,10 @@ expressom_report_settings <- function(
 
 .xp_leaf_enrichment_merged <- function(res, st, paths, collections, kind) {
   function() {
-    merged <- do.call(rbind, lapply(seq_along(paths), function(i) {
+    # Collections of the same method can carry different columns (e.g. mixed
+    # ORA / GSEA outputs); a plain rbind() fails on those with
+    # "numbers of columns of arguments do not match", so fill-bind instead.
+    merged <- .rep_rbind_fill(lapply(seq_along(paths), function(i) {
       tb <- res$functional$tables[[paths[[i]]]]
       if (is.null(tb) || !nrow(tb)) return(NULL)
       tb$collection <- collections[[i]]
@@ -627,6 +639,16 @@ expressom_report_settings <- function(
     resource <- entry$resource
     pcol <- .rep_first_col(tbl, c("p_value", "padj", "pval", "p.value"))
     n_sig <- if (is.na(pcol)) NA_integer_ else sum(.rep_num(tbl[[pcol]]) < co$padj, na.rm = TRUE)
+    # Rank by |score| when the column exists and is numeric; otherwise keep
+    # the file order. Coercing first makes any text column in a hand-edited
+    # CSV harmless instead of an "non-numeric argument to mathematical
+    # function" error in abs().
+    ord <- if ("score" %in% colnames(tbl)) {
+      sc <- .rep_num(tbl$score)
+      if (any(is.finite(sc))) order(-abs(sc), na.last = TRUE) else seq_len(nrow(tbl))
+    } else {
+      seq_len(nrow(tbl))
+    }
 
     htmltools::tagList(
       .xp_note(
@@ -655,14 +677,53 @@ expressom_report_settings <- function(
         "score and p-value; the table below lists every tested source, ",
         "including those that did not reach the cut-off."
       ),
-      itable(tbl[order(if (!is.na(pcol)) .rep_num(tbl[[pcol]]) else rep(0, nrow(tbl))), , drop = FALSE],
+      itable(tbl[ord, , drop = FALSE],
              page_length = 15L, max_rows = st$table_rows,
              filename = paste0("decouple_", resource))
     )
   }
 }
 
-# NEW: interactive regulon view for one TF: volcano + leading edge + two tables.
+# Network-status table (written by run_decouple_analysis()): which resource was
+# fetched live, which came from an offline copy, which failed.
+.xp_leaf_decouple_status <- function(res, st) {
+  function() {
+    tbl <- res$decouple_status
+    if (is.null(tbl) || !nrow(tbl)) {
+      return(.xp_note("No network-status table was written for this run."))
+    }
+    status_col <- if ("status" %in% colnames(tbl)) "status" else NULL
+    htmltools::tagList(
+      .xp_note(
+        "Where each decoupleR network came from. ",
+        htmltools::tags$strong("network (live)"),
+        " = the OmniPath API answered and the network was fetched through it; ",
+        htmltools::tags$strong("offline (cache / bundled fallback)"),
+        " = the API was unreachable, so the network came from OmnipathR's ",
+        "local cache or from the static tables bundled with decoupleR (may ",
+        "be older); ",
+        htmltools::tags$strong("network (OmniPath)"),
+        " = the fetch succeeded but the reachability check could not run; ",
+        htmltools::tags$strong("failed (network)"),
+        " / ",
+        htmltools::tags$strong("skipped (insufficient overlap)"),
+        " = the resource was not tested; fix the network or the annotation ",
+        "mapping and re-run the stage with rerun_decouple_only(out_dir). ",
+        "Source file: ",
+        .xp_file_link(
+          file.path(res$out_dir, "DecoupleR"), res$out_dir, text = "DecoupleR/"
+        )
+      ),
+      itable(
+        if (!is.null(status_col)) tbl[order(tbl[[status_col]], tbl$resource), , drop = FALSE] else tbl,
+        page_length = 10L, max_rows = st$table_rows,
+        filename = "decoupleR_network_status"
+      )
+    )
+  }
+}
+
+# Interactive regulon view for one TF: volcano + leading edge + two tables.
 .xp_leaf_tf_regulon <- function(res, st, resource_data, tf) {
   function() {
     co <- .xp_cutoffs(res, st)
@@ -1094,8 +1155,11 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
     )
   }
 
-  # -- functional (ORA / GSEA / SPIA / TF) + decoupleR subtree
+  # -- functional (ORA / GSEA / SPIA / TF); the decoupleR resources have their
+  #    own subtree below (plot + table per resource), so kind "decouple" rows
+  #    are skipped here to avoid duplicate tabs and mismatched merges.
   inv <- res$functional$inventory
+  inv <- inv[inv$kind != "decouple", , drop = FALSE]
   func <- NULL
   if (nrow(inv)) {
     by_source <- lapply(split(inv, inv$source), function(si) {
@@ -1146,13 +1210,29 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
     }
   }
 
+  dec_root <- NULL
   if (!is.null(res$decouple)) {
     dec_nodes <- lapply(names(res$decouple), function(rel) {
       entry <- res$decouple[[rel]]
       .xp_node(toupper(entry$resource),
                content = .xp_leaf_decouple(res, st, entry))
     })
+    # The network-status table (live / fallback / failed per resource) closes
+    # the subtree; res$decouple no longer contains it (it has no activity
+    # columns and used to break the tab).
+    if (!is.null(res$decouple_status)) {
+      dec_nodes <- c(dec_nodes, list(
+        .xp_node("Network status", content = .xp_leaf_decouple_status(res, st))
+      ))
+    }
     dec_root <- do.call(.xp_node, c(list("decoupleR (TF / pathway activity)"), dec_nodes))
+  } else if (!is.null(res$decouple_status)) {
+    dec_root <- .xp_node(
+      "decoupleR (TF / pathway activity)",
+      .xp_node("Network status", content = .xp_leaf_decouple_status(res, st))
+    )
+  }
+  if (!is.null(dec_root)) {
     if (is.null(func)) {
       func <- dec_root
     } else {
@@ -1259,6 +1339,68 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   trimws(x)
 }
 
+# One-line explanation shown at the top of each tab and subtab that does not
+# already carry its own note. Keyed by (cleaned) tab title.
+.xp_tab_help <- function(title) {
+  if (is.null(title) || length(title) != 1L || is.na(title) || !nzchar(title)) {
+    return(NULL)
+  }
+  switch(
+    title,
+    "Samples & QC" =
+      "Sample-level quality control: one subtab per PCA view plus interactive similarity and distribution diagnostics of the normalised expression matrix.",
+    "Other PCAs (tables only)" =
+      "The remaining PCA views are shown as score tables to keep the report light; the same coordinates are in Plots/ as CSV files.",
+    "Differential expression" =
+      "Gene-level differential expression for the selected comparison: volcano and MA plots, p-value diagnostics, a top-gene heatmap and the full searchable results table.",
+    "Volcano" =
+      "log2 fold change against -log10(adjusted p) for every tested gene; points beyond the dashed lines are significant at the displayed cut-offs and are coloured by direction.",
+    "MA plot" =
+      "Mean normalised expression against log2 fold change; a funnel-shaped cloud centred on zero is expected, trends at low abundance point to shrinkage or filtering artefacts.",
+    "Top genes heatmap" =
+      "Row z-scores of the normalised counts for the most significant genes; samples are grouped by the column labels above the plot.",
+    "Functional analysis" =
+      "Over-representation (ORA), gene-set enrichment (GSEA / FGSEA), SPIA pathway impact, transcription-factor enrichments and decoupleR activity, grouped per source and method.",
+    "Gene level" =
+      "Enrichment run on the gene-level differential expression ranking (ORA / GSEA / FGSEA / SPIA / TF tables).",
+    "ORA" =
+      "Over-representation analysis of the significant gene list against curated gene-set collections.",
+    "GSEA" =
+      "Gene-set enrichment on the full ranked gene list; NES > 0 means the set is enriched among upregulated genes.",
+    "FGSEA" =
+      "Fast preranked GSEA on the full ranked gene list; NES > 0 means the set is enriched among upregulated genes.",
+    "SPIA" =
+      "Signalling-pathway impact analysis combines enrichment with pathway topology; the impact column weighs genes by their position in the pathway graph.",
+    "Transcription factors" =
+      "Transcription-factor enrichment of the significant gene list (Enrichr-style libraries).",
+    "decoupleR (TF / pathway activity)" =
+      "decoupleR infers TF / pathway activity from the signed gene-level statistics with CollecTRI, PROGENy and DoRothEA networks; one subtab per resource plus the network-status table.",
+    "TF regulon plots (volcano + leading edge)" =
+      "Per-TF detail for the significant decoupleR sources: a volcano restricted to the TF's regulon targets and the leading-edge barcode plot, one subtab per TF.",
+    "Isoforms" =
+      "Transcript-level analysis: isoform switching, DTE, DTU, DEXSeq, the most variable transcripts and the static plots produced by the isoform pipeline.",
+    "Switch overview" =
+      "Isoform switches from ISOswitch: each point is a transcript placed by its isoform-fraction change (dIF) and switch q-value; significant switches sit in the upper corners.",
+    "Figures" =
+      "Static figures written by the pipeline (PDF previews rendered with pdftools when available), grouped by output folder; every file is listed in its subtab.",
+    "(root)" =
+      "Figures written directly at the root of the output directory.",
+    "Run info" =
+      "Reproducibility material: the parameters of the run, the logs and the complete file inventory of the output directory.",
+    "Parameters" =
+      "The configuration snapshot of this run (also in log/expressom_run.json and DGE_params_*.json).",
+    "Logs" =
+      "Session information, warnings and the logs of the isoform, external-predictor, OmniPath and targets stages.",
+    NULL
+  )
+}
+
+.xp_help_note_html <- function(title) {
+  txt <- .xp_tab_help(title)
+  if (is.null(txt)) return(NULL)
+  htmltools::tags$p(class = "xp-note", txt)
+}
+
 .xp_safe_leaf <- function(fn) {
   force(fn)
   function() {
@@ -1283,11 +1425,13 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
     nd      <- nodes[[i]]
     title   <- .xp_clean_title(nd$title)
     pane_id <- next_id()
+    help    <- .xp_help_note_html(title)
     body <- if (is.function(nd$content)) {
-      .xp_safe_leaf(nd$content)()
+      body_leaf <- .xp_safe_leaf(nd$content)()
+      if (is.null(help)) body_leaf else htmltools::tagList(help, body_leaf)
     } else {
       nested <- .xp_render_tabset(nd$children, classes, counter)
-      tg$div(nested$nav, nested$content)
+      tg$div(help, nested$nav, nested$content)
     }
     navs[[i]] <- tg$li(
       role = "presentation",
@@ -1350,16 +1494,26 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
 .xp_emit_tabs <- function(nodes, level = 2L) {
   counter <- 0L
   leaf_fns <- list()
+  # Raw-HTML note under a heading; escape the text so tab titles / help
+  # strings can never inject markup.
+  note_md <- function(title) {
+    txt <- .xp_tab_help(title)
+    if (is.null(txt)) return(NULL)
+    esc <- htmltools::htmlEscape(txt)
+    paste0('<p class="xp-note">', esc, "</p>\n")
+  }
   emit <- function(nodes, level) {
     out <- character(0)
     for (nd in nodes) {
       title <- .xp_clean_title(nd$title)
+      note <- note_md(title)
       if (.xp_is_leaf(nd)) {
         counter <<- counter + 1L
         id <- paste0("leaf_", counter)
         leaf_fns[[id]] <<- .xp_safe_leaf(nd$content)
         child <- paste0(
           paste0(strrep("#", level), " ", title, "\n\n"),
+          if (!is.null(note)) paste0(note, "\n") else "",
           "```{r, echo=FALSE, results='markup'}\n",
           "leaf_fns[['", id, "']]()\n",
           "```\n"
@@ -1371,6 +1525,7 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
         out <- c(
           out,
           paste0("\n\n", strrep("#", level), " ", title, " {.tabset .tabset-pills}\n\n"),
+          if (!is.null(note)) paste0(note, "\n") else "",
           emit(nd$children, level + 1L)
         )
       }

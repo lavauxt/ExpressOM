@@ -16,6 +16,6 @@ iplot_tf_regulon_volcano(regulon_df, tf, padj_cutoff = 0.05, lfc_cutoff = 1)
 }
 \description{
 Points are colored by whether the gene behaves as predicted by the network
-(mor direction), exactly as the static PDF: "Activé (attendu)",
-"Réprimé (attendu)", "Autre variation", "Non significatif".
+(mor direction), exactly as the static PDF: "Activated (expected)",
+"Repressed (expected)", "Other change", "Not significant".
 }

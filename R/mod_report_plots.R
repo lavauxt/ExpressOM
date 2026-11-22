@@ -592,17 +592,26 @@ iplot_dtu <- function(dtu, top_n = 30L, padj_cutoff = 0.05) {
 }
 
 #' Interactive p-value histogram
+#'
+#' Bins are computed in R and drawn as a bar chart: passing the raw p-values
+#' to plotly's histogram would embed every observation in the HTML (a 30k-gene
+#' run costs several MB per plot).
 #' @export
-iplot_pvalue_hist <- function(p, title = "p-value distribution") {
+iplot_pvalue_hist <- function(p, title = "p-value distribution", nbins = 100L) {
   .rep_require("plotly")
   p <- .rep_num(p)
   p <- p[is.finite(p)]
   if (length(p) == 0L) {
     return(.rep_empty_plot("No p-values"))
   }
+  nbins <- max(10L, min(as.integer(nbins %||% 100L), 200L))
+  brks <- seq(0, 1, length.out = nbins + 1L)
+  h <- graphics::hist(p, breaks = brks, plot = FALSE)
+  mids <- h$mids
   plotly::plot_ly(
-    x = p, type = "histogram", xbins = list(start = 0, end = 1, size = 0.05),
-    marker = list(color = "#56B4E9", line = list(color = "white", width = 1))
+    x = mids, y = h$counts, type = "bar", width = 0.9 / nbins,
+    marker = list(color = "#56B4E9", line = list(color = "white", width = 0.5)),
+    hovertemplate = "p in %{x:.2f}<br>count = %{y}<extra></extra>"
   ) |>
     plotly::layout(
       title = list(text = title, x = 0.02),
@@ -1085,8 +1094,13 @@ iplot_decouple_activity <- function(
   if (is.null(activity_df) || !nrow(activity_df)) {
     return(.rep_empty_plot("No decoupleR activity results"))
   }
-  pcol <- .rep_first_col(activity_df, c("p_value", "padj", "pval", "p.value"))
+  if (!"score" %in% colnames(activity_df) ||
+      !any(is.finite(.rep_num(activity_df$score)))) {
+    return(.rep_empty_plot("No numeric activity 'score' column in this table"))
+  }
   d <- activity_df
+  d$score <- .rep_num(d$score)
+  pcol <- .rep_first_col(d, c("p_value", "padj", "pval", "p.value"))
   if (!is.na(pcol)) {
     d$.p <- .rep_num(d[[pcol]])
     d <- d[!is.na(d$.p) & d$.p < padj_cutoff, , drop = FALSE]
@@ -1530,7 +1544,7 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
 
 #' Interactive p-value Q-Q plot
 #' @keywords internal
-.rep_iplot_pvalue_qq <- function(pvalues) {
+.rep_iplot_pvalue_qq <- function(pvalues, max_points = 4000L) {
   .rep_require("plotly")
   p <- .rep_num(pvalues)
   p <- sort(p[is.finite(p) & p >= 0 & p <= 1])
@@ -1538,8 +1552,17 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
   n <- length(p)
   expected <- -log10((seq_len(n) - 0.5) / n)
   observed <- -log10(pmax(p, .Machine$double.xmin))
+  # Subsample the bulk but keep every small p (the informative tail): the
+  # full 30k-point scatter embedded several MB of JSON for no visual gain.
+  if (n > max_points) {
+    idx <- unique(round(seq(1, n, length.out = max_points)))
+    # always keep the 100 smallest p-values
+    idx <- sort(unique(c(seq_len(min(100L, n)), idx[idx > 100L])))
+  } else {
+    idx <- seq_len(n)
+  }
   lim <- max(c(expected, observed), na.rm = TRUE)
-  plotly::plot_ly(x = expected, y = observed, type = "scattergl", mode = "markers",
+  plotly::plot_ly(x = expected[idx], y = observed[idx], type = "scattergl", mode = "markers",
                   marker = list(size = 5, color = "#0072B2", opacity = 0.55),
                   hovertemplate = "Expected = %{x:.2f}<br>Observed = %{y:.2f}<extra></extra>") |>
     plotly::add_lines(x = c(0, lim), y = c(0, lim), name = "Null expectation",
@@ -1735,8 +1758,16 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
   miss_step <- 1 / (nrow(ranked) - nh)
   es <- cumsum(ifelse(hit, hit_step, -miss_step))
   title_term <- if (!is.na(term_col)) as.character(d[[term_col]][[1L]]) else "Selected gene set"
+  # Downsample the running curve (the rank axis is uniform, so the shape is
+  # preserved) and keep every leading-edge marker: a full 30k-point curve
+  # embedded ~3.5 MB of JSON per gene set.
+  n_genes <- length(es)
+  idx <- if (n_genes > 2000L) {
+    peak <- which.max(abs(es))
+    round(seq(1, n_genes, length.out = 2000L)) |> union(peak)
+  } else seq_len(n_genes)
   plotly::plot_ly(
-    x = seq_along(es), y = es, type = "scatter", mode = "lines",
+    x = idx, y = es[idx], type = "scatter", mode = "lines",
     line = list(color = "#2b5c8f", width = 2.5),
     hovertemplate = "rank = %{x}<br>running ES = %{y:.3f}<extra></extra>"
   ) |>
@@ -1827,7 +1858,8 @@ itable <- function(
     caption <- paste0(
       caption %||% "",
       " (showing the first ", format(max_rows, big.mark = ","), " of ",
-      format(nrow(df), big.mark = ","), " rows; see the exported file for all rows)"
+      format(nrow(df), big.mark = ","), " rows; the Copy / CSV / Excel buttons ",
+      "export these rows and the complete table stays in the run folder)"
     )
     df <- df[seq_len(max_rows), , drop = FALSE]
   }
@@ -1854,7 +1886,10 @@ itable <- function(
       pageLength = page_length,
       lengthMenu = list(c(10, 25, 50, 100, 250, 500), c(10, 25, 50, 100, 250, 500)),
       searchDelay = 250,
-      stateSave = TRUE,
+      # stateSave persisted per-table state in localStorage: 130 tables
+      # caused quota churn and a regenerated report silently restored stale
+      # filters from the previous version.
+      stateSave = FALSE,
       orderCellsTop = TRUE,
       autoWidth = FALSE,
       scrollX = TRUE,

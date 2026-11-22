@@ -5,6 +5,8 @@
 \title{Status of every pipeline stage}
 \usage{
 expressom_stage_status(params = NULL, dir, running = NULL)
+
+expressom_stage_status(params = NULL, dir, running = NULL)
 }
 \arguments{
 \item{params}{Current parameter list (to compute staleness); `NULL` uses the
@@ -20,8 +22,17 @@ process as errored (used by the app).}
 A data.frame with `stage`, `label`, `progress`, `seconds`,
   `finished` and `state` ("never run", "current", "stale", "running",
   "errored"). Only the stages that exist for these parameters are listed.
+
+A data.frame with `stage`, `label`, `progress`, `seconds`,
+  `finished` and `state` ("never run", "current", "stale", "running",
+  "errored"). Only the stages that exist for these parameters are listed.
 }
 \description{
+For each stage: whether it ran, how long it took, and whether the current
+parameters differ from the ones it last ran with. Staleness is propagated
+downstream: a stage is stale when its own parameters changed or any stage it
+reads from is stale.
+
 For each stage: whether it ran, how long it took, and whether the current
 parameters differ from the ones it last ran with. Staleness is propagated
 downstream: a stage is stale when its own parameters changed or any stage it

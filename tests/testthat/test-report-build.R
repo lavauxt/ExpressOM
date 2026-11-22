@@ -8,7 +8,8 @@ test_that("build_expressom_report writes one self-contained interactive HTML fil
   path <- suppressMessages(build_expressom_report(out))
   expect_true(file.exists(path))
   expect_identical(basename(path), "ExpressOM_report_treated_vs_control.html")
-  expect_identical(basename(dirname(path)), "Report")
+  # the report sits at the root of the results folder, next to log/, Plots/ ...
+  expect_identical(normalizePath(dirname(path)), normalizePath(out))
 
   html <- paste(readLines(path, warn = FALSE), collapse = "\n")
   # one file: scripts / styles are inlined, nothing is fetched from a CDN

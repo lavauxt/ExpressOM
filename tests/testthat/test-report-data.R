@@ -20,7 +20,8 @@ test_that("load_expressom_results returns the typed result contract", {
   expect_named(
     res,
     c("out_dir", "comparison", "comparisons", "config", "dge", "pca",
-      "functional", "isoform", "figures", "logs", "files", "notes"),
+      "functional", "decouple", "decouple_status", "decouple_regulons",
+      "isoform", "figures", "logs", "files", "notes"),
     ignore.order = TRUE
   )
   expect_identical(res$comparison, "treated_vs_control")
@@ -75,6 +76,38 @@ test_that("the loader discovers every enrichment table and labels its source", {
   expect_true("FGSEA" %in% inv$method)
   expect_setequal(inv$collection[inv$method == "FGSEA"], c("C2_CP_REACTOME", "H"))
   expect_true(all(inv$source[grepl("DTE_Enrichment", inv$path)] == "DTE"))
+  # decoupleR tables are NOT enrichment-inventory rows: they are rendered by
+  # the dedicated decoupleR subtree and the network-status file (which has no
+  # activity columns) used to break the merged-collection table.
+  expect_false(any(grepl("DecoupleR", inv$path)))
+})
+
+test_that("decoupleR tables, status and regulons are loaded separately", {
+  out <- withr::local_tempdir()
+  make_run_dir(out)
+  res <- load_expressom_results(out)
+
+  expect_setequal(names(res$decouple), c(
+    "DecoupleR/collectri/DecoupleR_collectri_treated_vs_control.csv",
+    "DecoupleR/progeny/DecoupleR_progeny_treated_vs_control.csv",
+    "DecoupleR/dorothea/DecoupleR_dorothea_treated_vs_control.csv"
+  ))
+  expect_true(all(vapply(res$decouple, function(e)
+    identical(e$resource, basename(dirname(e$path))), logical(1))))
+  expect_false(any(vapply(res$decouple, function(e)
+    grepl("network_status", e$path), logical(1))))
+
+  st <- res$decouple_status
+  expect_s3_class(st, "data.frame")
+  expect_setequal(st$resource, c("collectri", "progeny", "dorothea"))
+  expect_true(all(c("resource", "status", "n_edges") %in% colnames(st)))
+
+  rr <- res$decouple_regulons$by_resource$collectri
+  expect_setequal(names(rr$regulons), c("ALPHA", "BETA"))
+  expect_setequal(names(rr$leading_edges), c("ALPHA", "BETA"))
+  expect_true(all(c("target", "mor", "Regulation") %in% colnames(rr$regulons$ALPHA)))
+  expect_true(all(c("rank", "target", "stat") %in% colnames(rr$leading_edges$ALPHA)))
+  expect_s3_class(res$decouple_regulons$summary, "data.frame")
 })
 
 test_that("enrichment tables are standardised to term / padj / size / score", {

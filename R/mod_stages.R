@@ -478,7 +478,7 @@
       method      = p$decouple_method,
       min_size    = p$decouple_min_size,
       padj_cutoff = p$padj_cutoff,
-      # NEW: forwarded so the regulon volcano / leading edge categories
+      # forwarded so the regulon volcano / leading edge categories
       # use the same |log2FC| floor as the rest of the pipeline.
       lfc_cutoff  = p$deg_lfc_cutoff,
       log_dir     = .expressom_log_dir(p$out_dir, create = TRUE)

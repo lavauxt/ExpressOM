@@ -10,7 +10,7 @@
 # <out_dir>/DecoupleR/<resource>/DecoupleR_<resource>_<comp>.csv and
 # rendered as interactive plotly barplots in the unified report.
 #
-# NEW: For every source with p_value < padj_cutoff in a resource, a targeted
+# For every significant source (p < padj_cutoff, top N by |score|) a targeted
 # volcano plot and a leading-edge (barcode) plot are also generated:
 #   * regulon_<TF>.csv         -- matched targets + mor + padj + LFC + category
 #   * leading_edge_<TF>.csv    -- rank + target + stat (sorted by rank)
@@ -27,10 +27,11 @@
 #
 # decoupleR fetches all three networks through OmnipathR. OmnipathR's own
 # design:
-#   * CollecTRI  -> falls back to a copy bundled with decoupleR when the API
-#                   is unreachable (may be older, but always returns data);
+#   * CollecTRI  -> served from OmnipathR's local cache when the API is
+#                   unreachable, otherwise from the copy bundled with
+#                   decoupleR (may be older, but always returns data);
 #   * DoRothEA   -> same fallback behaviour;
-#   * PROGENy    -> has NO offline fallback; if OmniPath is down, get_progeny()
+#   * PROGENy    -> no bundled fallback; if OmniPath is down, get_progeny()
 #                   returns NULL and decoupleR's wrapper silently produces an
 #                   empty network. This is why PROGENy used to disappear from
 #                   the outputs with only vague warnings in the console.
@@ -287,17 +288,28 @@
 
 #' Probe whether the OmniPath API is currently reachable
 #'
-#' Returns `list(available, n_resources, reason)`. `available = NA` when
-#' OmnipathR itself is not installed. This is a **network** probe: a working
-#' cache alone does not make it return `TRUE`, which is exactly the intent --
-#' the caller wants to know whether live data will be fetched.
+#' Returns `list(available, n_resources, reason)`. `available = NA` when the
+#' check itself could not run (OmnipathR missing, no HTTP machinery); only a
+#' genuine network failure makes it `FALSE`. This is a **network** probe: a
+#' working cache alone does not make it return `TRUE` -- the caller wants to
+#' know whether live data will be fetched. The check is a tiny plain-HTTP GET
+#' on the OmniPath metadata endpoint (`/queries`, < 100 bytes, the same JSON
+#' OmnipathR downloads itself), deliberately NOT an OmnipathR function call:
+#' a missing/renamed export in some OmnipathR version must never be reported
+#' as "OmniPath not reachable" (that exact false positive used to relabel
+#' cache-served networks as "static fallback").
 #'
+#' @param timeout Seconds for the HTTP request.
+#' @param api_url Endpoint to probe; the default is the OmniPath metadata
+#'   JSON, overridable with the option `ExpressOM.omnipath_probe_url` (used
+#'   by the tests to point at a local / unreachable URL).
 #' @param out_dir,log_dir,comp_name Forwarded to
 #'   `.configure_decouple_omnipathr()` so OmnipathR's own log file lands in
 #'   `<out_dir>/log/omnipathr/` (or `<log_dir>/omnipathr/`).
 #' @keywords internal
 .decouple_omnipath_probe <- function(
   timeout   = 15,
+  api_url   = NULL,
   out_dir   = NULL,
   log_dir   = NULL,
   comp_name = NULL
@@ -308,22 +320,70 @@
     return(list(available = NA, n_resources = NA_integer_,
                 reason = "OmnipathR not installed"))
   }
+  api_url <- api_url %||%
+    getOption("ExpressOM.omnipath_probe_url") %||%
+    "https://omnipathdb.org/queries"
   old_to <- getOption("timeout")
   on.exit(options(timeout = old_to), add = TRUE)
   options(timeout = max(as.numeric(old_to %||% 60), timeout, na.rm = TRUE))
+  tmp <- tempfile()
+  on.exit(unlink(tmp), add = TRUE)
 
-  tryCatch(
+  status <- tryCatch(
     {
-      # Live HTTP call (do not pass cache = TRUE); this is the API index,
-      # not a resource payload.
-      res <- OmnipathR::omnipath_resources()
-      list(available = TRUE, n_resources = length(res), reason = NULL)
+      # 0 = success, non-zero = HTTP / connection failure. download.file
+      # signals "cannot open URL" via a warning: suppress it here, the
+      # status code and the reason below tell the story.
+      suppressWarnings(
+        utils::download.file(api_url, tmp, quiet = TRUE, mode = "wb", cacheOK = TRUE)
+      )
     },
     error = function(e) {
-      list(available = FALSE, n_resources = NA_integer_,
-           reason = conditionMessage(e))
+      attr(e, "probe_reason") <- conditionMessage(e)
+      e
     }
   )
+  if (inherits(status, "error")) {
+    # The HTTP machinery itself is broken (no download method configured) --
+    # an environment problem, not a proven network outage: keep it NA so the
+    # fetches still run and the status table records what actually served
+    # the data.
+    if (grepl("download.file|method", conditionMessage(status), ignore.case = TRUE)) {
+      return(list(available = NA, n_resources = NA_integer_,
+                  reason = conditionMessage(status)))
+    }
+    return(list(available = FALSE, n_resources = NA_integer_,
+                reason = sprintf(
+                  "OmniPath API request failed (%s): %s", api_url,
+                  conditionMessage(status)
+                )))
+  }
+  if (isTRUE(status == 0) || identical(status, 0L)) {
+    list(available = TRUE, n_resources = NA_integer_, reason = NULL)
+  } else {
+    list(available = FALSE, n_resources = NA_integer_,
+         reason = sprintf("OmniPath API request failed (%s, HTTP status %s)",
+                          api_url, status))
+  }
+}
+
+#' Truthful status label for one decoupleR network fetch
+#'
+#' The label is derived from the *probe verdict* only for the two reliable
+#' cases: API reachable + fetch OK -> "network (live)"; API unreachable +
+#' fetch OK -> the network necessarily came from OmnipathR's local cache or
+#' from the static tables bundled with decoupleR. When the probe could not
+#' run (`available = NA`) the fetch outcome is still unknown, so the label
+#' states exactly that instead of guessing.
+#' @keywords internal
+.decouple_net_status_label <- function(available) {
+  if (isTRUE(available)) {
+    "network (live)"
+  } else if (isFALSE(available)) {
+    "offline (cache / bundled fallback)"
+  } else {
+    "network (OmniPath)"
+  }
 }
 
 #' Retry an expression N times with exponential back-off
@@ -352,11 +412,12 @@
 
 #' Fetch a decoupleR network for one of the supported resources.
 #'
-#' Collectri and dorothea silently fall back to decoupleR's bundled static
-#' tables when OmniPath is unreachable (may be older). PROGENy has **no**
-#' offline fallback: if the fetch fails, this function raises an error so the
-#' caller can record a "failed" status and warn the user instead of quietly
-#' dropping the resource.
+#' Collectri and dorothea are served from OmnipathR's local cache when the
+#' API is unreachable, and from decoupleR's bundled static tables when there
+#' is no cache either (may be older). PROGENy has **no** offline source: if
+#' the fetch fails, this function raises an error so the caller can record a
+#' "failed" status and warn the user instead of quietly dropping the
+#' resource.
 #'
 #' @param resource "collectri", "progeny", or "dorothea".
 #' @param organism Ensembl organism string (used to pick human vs. mouse).
@@ -525,20 +586,24 @@ run_decouple_analysis <- function(
     log_dir   = log_dir,
     comp_name = comp_name
   )
-  network_available <- isTRUE(probe$available)
-  if (isFALSE(probe$available)) {
+  network_available <- probe$available
+  if (isFALSE(network_available)) {
     message(
-      "   -> [decoupleR] OmniPath is NOT reachable: ", probe$reason, "\n",
-      "      - collectri, dorothea: will use decoupleR's bundled static tables ",
-      "(may be older)\n",
-      "      - progeny:              will be skipped (no offline fallback exists)\n",
+      "   -> [decoupleR] OmniPath API not reachable: ", probe$reason, "\n",
+      "      - collectri, dorothea: will use OmnipathR's local cache when ",
+      "available, otherwise decoupleR's bundled static tables (may be older)\n",
+      "      - progeny: has no offline source and will be recorded as ",
+      "failed if the fetch errors\n",
       "      After fixing network/proxy, call rerun_decouple_only(out_dir) to ",
       "redo only this stage."
     )
-  } else if (isTRUE(probe$available)) {
+  } else if (isTRUE(network_available)) {
+    message("   -> [decoupleR] OmniPath API reachable.")
+  } else {
     message(
-      "   -> [decoupleR] OmniPath reachable (",
-      probe$n_resources, " resources)."
+      "   -> [decoupleR] reachability check could not run (",
+      probe$reason, "); fetches proceed anyway and the network-status ",
+      "table records what actually served the data."
     )
   }
 
@@ -552,7 +617,7 @@ run_decouple_analysis <- function(
     }
   }
 
-  # ---- FIX: LRT fallback --------------------------------------------------
+  # Under LRT the omnibus 'stat' is unsigned; use the signed contrast stat.
   if (identical(stat_col, "stat") &&
       "test_type" %in% colnames(res_tbl) &&
       any(toupper(as.character(res_tbl$test_type)) == "LRT", na.rm = TRUE) &&
@@ -647,14 +712,11 @@ run_decouple_analysis <- function(
     act_df$resource   <- resource
     act_df$comparison <- comp_name
 
-    # Source used for the network: live vs static fallback
-    net_source_label <- if (
-      isFALSE(network_available) && resource %in% c("collectri", "dorothea")
-    ) {
-      "static fallback (OmniPath unreachable)"
-    } else {
-      "network (live)"
-    }
+    # Source used for the network: live vs offline copy (cache / bundled).
+    # The label follows the probe verdict, which is now a plain HTTP check --
+    # a cache-served fetch on an offline machine gets "offline (cache /
+    # bundled fallback)", not "static fallback".
+    net_source_label <- .decouple_net_status_label(network_available)
     network_status_rows[[resource]] <- data.frame(
       resource = resource, status = net_source_label,
       n_edges = nrow(net), stringsAsFactors = FALSE
@@ -676,7 +738,7 @@ run_decouple_analysis <- function(
     )
     message("      ", resource, ": ", nrow(act_df), " source(s) tested.")
 
-    # ---- NEW: regulon volcano + leading edge for the significant sources
+    # ---- regulon volcano + leading edge for the significant sources
     tryCatch(
       .run_decouple_tf_regulon_plots(
         activity_df = act_df,

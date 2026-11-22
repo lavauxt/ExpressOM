@@ -1,0 +1,187 @@
+/* xq.css -- ExpressOM Quarto dashboard styles.
+ * Colours come from the host page (Bootstrap vars) or currentColor, so the
+ * dashboard follows a light or dark Quarto theme without a second stylesheet. */
+:root {
+  --xq-bg: var(--bs-body-bg, #ffffff);
+  --xq-fg: var(--bs-body-color, #212529);
+  --xq-line: color-mix(in srgb, currentColor 16%, transparent);
+  --xq-soft: color-mix(in srgb, currentColor 5%, transparent);
+  --xq-mute: color-mix(in srgb, currentColor 62%, transparent);
+  --xq-accent: #2b6cb0;
+  --xq-up: #c94a4a;
+  --xq-down: #2b5c8f;
+  --plot-background: var(--xq-bg);
+}
+.xq-view, .xq-stack { min-width: 0; }
+.xq-stack > * + * { margin-top: 14px; }
+.xq-view > * + * { margin-top: 14px; }
+.xq-h4 { font-size: 0.95rem; font-weight: 650; margin: 18px 0 6px; }
+.xq-intro { color: var(--xq-mute); font-size: 0.88rem; margin: 0 0 6px; }
+.xq-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 430px), 1fr)); gap: 16px; align-items: start; }
+.xq-empty { color: var(--xq-mute); font-style: italic; padding: 14px 4px; }
+.xq-err { color: #b3261e; background: color-mix(in srgb, #b3261e 8%, transparent); border-radius: 6px; padding: 8px 10px; font-size: 0.85rem; }
+.xq-skel { color: var(--xq-mute); font-size: 0.85rem; padding: 18px 4px; animation: xqpulse 1.4s ease-in-out infinite; }
+@keyframes xqpulse { 50% { opacity: 0.45; } }
+.xq-lazy { min-width: 0; }
+.xq-chart { width: 100%; min-width: 0; }
+.xq-chart svg, .xq-chart figure { max-width: 100%; }
+.xq-chart figure { margin: 0; }
+
+/* ---- "How to read this" callout (static from R, or XQ.note) ---------------- */
+details.xq-help {
+  border: 1px solid var(--xq-line); border-left: 4px solid var(--xq-accent);
+  background: var(--xq-soft); border-radius: 6px; margin: 0 0 14px; font-size: 0.86rem; line-height: 1.45;
+}
+details.xq-help > summary {
+  cursor: pointer; list-style: none; padding: 7px 12px; font-weight: 650; display: flex; align-items: center; gap: 8px; user-select: none;
+}
+details.xq-help > summary::-webkit-details-marker { display: none; }
+details.xq-help > summary::after { content: "▾"; margin-left: auto; color: var(--xq-mute); transition: transform .15s; }
+details.xq-help:not([open]) > summary::after { transform: rotate(-90deg); }
+.xq-help-ic {
+  display: inline-flex; width: 18px; height: 18px; border-radius: 50%; background: var(--xq-accent); color: #fff;
+  font: italic 700 12px/18px Georgia, serif; align-items: center; justify-content: center; flex: none;
+}
+.xq-help-body { padding: 0 14px 10px 14px; }
+.xq-help-body p { margin: 0 0 6px; }
+.xq-help-body ul { margin: 0 0 4px; padding-left: 1.15rem; }
+.xq-help-body li { margin: 2px 0; }
+.xq-help-body .xq-h { font-weight: 650; }
+.xq-help-body .xq-warn { color: #9a5b00; }
+body.xq-nohelp details.xq-help > .xq-help-body { display: none; }
+body.xq-nohelp details.xq-help { border-left-width: 2px; background: transparent; }
+body.xq-nohelp details.xq-help > summary { font-weight: 500; color: var(--xq-mute); padding: 4px 10px; }
+.xq-hint-toggle {
+  position: fixed; right: 14px; bottom: 14px; z-index: 50; border: 1px solid var(--xq-line); border-radius: 999px;
+  background: var(--xq-bg); color: var(--xq-fg); padding: 5px 12px; font-size: 0.78rem; cursor: pointer; box-shadow: 0 1px 6px rgba(0,0,0,.18);
+}
+.xq-hint-toggle:hover { border-color: var(--xq-accent); }
+
+/* ---- summary tiles -------------------------------------------------------------- */
+.xq-stats, .xq-tiles { display: flex; flex-wrap: wrap; gap: 10px; }
+.xq-tiles:empty { display: none; }
+.xq-stat { border: 1px solid var(--xq-line); border-radius: 8px; padding: 8px 14px; min-width: 120px; background: var(--xq-soft); }
+.xq-stat-v { font-size: 1.45rem; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.xq-stat-l { font-size: 0.78rem; color: var(--xq-mute); text-transform: uppercase; letter-spacing: .04em; }
+.xq-stat-s { font-size: 0.74rem; color: var(--xq-mute); margin-top: 2px; }
+.xq-stat.xq-up .xq-stat-v { color: var(--xq-up); }
+.xq-stat.xq-down .xq-stat-v { color: var(--xq-down); }
+
+/* ---- controls (Observable Inputs) ---------------------------------------------- */
+.xq-controls { display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: flex-end; padding: 8px 12px; border: 1px solid var(--xq-line); border-radius: 8px; background: var(--xq-soft); }
+.xq-controls:empty { display: none; }
+.xq-controls > form { margin: 0; font-size: 13px; }
+.xq-controls form label { color: inherit; }
+.xq-btn {
+  border: 1px solid var(--xq-line); background: var(--xq-bg); color: var(--xq-fg); border-radius: 5px; padding: 2px 9px; font-size: 0.78rem; cursor: pointer;
+}
+.xq-btn:hover:not(:disabled) { border-color: var(--xq-accent); }
+.xq-btn:disabled { opacity: .4; cursor: default; }
+.xq-btn-p { background: var(--xq-accent); border-color: var(--xq-accent); color: #fff; }
+.xq-chip { border: 1px solid var(--xq-line); background: var(--xq-bg); color: var(--xq-fg); border-radius: 999px; padding: 1px 9px; font: 0.74rem ui-monospace, Menlo, Consolas, monospace; cursor: pointer; margin: 2px 4px 2px 0; }
+.xq-chip:hover { border-color: var(--xq-accent); }
+
+/* ---- figure frame -------------------------------------------------------------- */
+.xq-fig { position: relative; margin: 0; min-width: 0; }
+.xq-fig-t { font-weight: 650; font-size: 0.88rem; margin: 0 70px 4px 2px; }
+.xq-fig-c { font-size: 0.8rem; color: var(--xq-mute); margin-top: 4px; }
+.xq-fig-tools { position: absolute; top: 0; right: 0; display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
+.xq-fig:hover .xq-fig-tools, .xq-fig-tools:focus-within { opacity: 1; }
+.xq-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.8rem; margin-top: 4px; }
+.xq-lg2 { display: inline-flex; align-items: center; gap: 5px; }
+.xq-lg2 i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+/* ---- WebGL scatter --------------------------------------------------------------- */
+.xq-sc { position: relative; width: 100%; user-select: none; }
+.xq-sc-plot { position: absolute; }
+.xq-sc-plot canvas { width: 100%; height: 100%; display: block; }
+.xq-sc-ax { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; font: 11px system-ui, sans-serif; color: inherit; }
+.xq-sc-ax .xq-ax-x line, .xq-sc-ax .xq-ax-y line { stroke: currentColor; stroke-opacity: .09; }
+.xq-sc-ax .xq-ax-x path, .xq-sc-ax .xq-ax-y path { display: none; }
+.xq-sc-ax text { fill: currentColor; }
+.xq-sc-ax .xq-ax-box { fill: none; stroke: currentColor; stroke-opacity: .35; }
+.xq-sc-ax .xq-ax-t { font-size: 12px; font-weight: 500; }
+.xq-thr { stroke: currentColor; stroke-opacity: .55; stroke-width: 1; }
+.xq-ring { fill: none; stroke: #111; stroke-width: 2; }
+.xq-lab { font-size: 10.5px; fill: currentColor; paint-order: stroke; stroke: var(--xq-bg); stroke-width: 3px; }
+.xq-sc-legend { position: absolute; left: 66px; top: 20px; display: flex; flex-direction: column; gap: 2px; z-index: 2; }
+.xq-lg { display: inline-flex; align-items: center; gap: 6px; border: 0; background: color-mix(in srgb, var(--xq-bg) 82%, transparent); color: inherit; font-size: 11.5px; padding: 1px 7px; border-radius: 4px; cursor: pointer; text-align: left; }
+.xq-lg.xq-off { opacity: .4; text-decoration: line-through; }
+.xq-lg-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.xq-sc-tools { position: absolute; right: 18px; top: 18px; z-index: 3; display: flex; gap: 4px; align-items: center; opacity: .0; transition: opacity .15s; }
+.xq-sc:hover .xq-sc-tools { opacity: 1; }
+.xq-sc-sel { font-size: 11px; color: var(--xq-mute); margin-right: 4px; }
+.xq-sc-tip { position: absolute; display: none; z-index: 5; pointer-events: none; background: var(--xq-bg); color: var(--xq-fg); border: 1px solid var(--xq-line); border-radius: 6px; padding: 5px 9px; font-size: 12px; line-height: 1.4; box-shadow: 0 2px 10px rgba(0,0,0,.22); max-width: 320px; }
+.xq-sc-msg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--xq-mute); text-align: center; padding: 20px; font-size: .9rem; }
+.xq-tools.xq-on, .xq-btn.xq-on { background: var(--xq-accent); color: #fff; border-color: var(--xq-accent); }
+
+/* ---- data table -------------------------------------------------------------------- */
+.xq-dt { min-width: 0; }
+.xq-dt-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.xq-dt-search { flex: 1 1 200px; min-width: 140px; border: 1px solid var(--xq-line); border-radius: 5px; padding: 3px 8px; font-size: 0.82rem; background: var(--xq-bg); color: var(--xq-fg); }
+.xq-dt-info { font-size: 0.78rem; color: var(--xq-mute); margin-left: auto; }
+.xq-dt-size, .xq-fb-eng { border: 1px solid var(--xq-line); border-radius: 5px; font-size: 0.78rem; padding: 2px 4px; background: var(--xq-bg); color: var(--xq-fg); }
+.xq-dt-wrap { overflow: auto; max-height: 560px; border: 1px solid var(--xq-line); border-radius: 6px; }
+.xq-dt-table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+.xq-dt-table th { position: sticky; top: 0; background: var(--xq-bg); text-align: left; padding: 5px 9px; border-bottom: 2px solid var(--xq-line); white-space: nowrap; cursor: pointer; z-index: 1; }
+.xq-dt-table th.xq-num, .xq-dt-table td.xq-num { text-align: right; font-variant-numeric: tabular-nums; }
+.xq-dt-table th.xq-sorted::after { content: " " attr(data-dir); color: var(--xq-accent); }
+.xq-dt-table td { padding: 3px 9px; border-bottom: 1px solid var(--xq-line); max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xq-dt-table tbody tr:nth-child(even) { background: var(--xq-soft); }
+.xq-dt-table tbody tr.xq-click { cursor: pointer; }
+.xq-dt-table tbody tr:hover { background: color-mix(in srgb, var(--xq-accent) 11%, transparent); }
+.xq-na { color: var(--xq-mute); font-style: italic; }
+.xq-dt-pager { display: flex; gap: 4px; align-items: center; justify-content: flex-end; margin-top: 6px; }
+.xq-dt-pg { font-size: 0.78rem; color: var(--xq-mute); padding: 0 8px; }
+
+/* ---- filter box / SQL ----------------------------------------------------------------- */
+.xq-fb { margin: 0 0 8px; }
+.xq-fb-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.xq-fb-in { flex: 1 1 360px; min-width: 200px; border: 1px solid var(--xq-line); border-radius: 5px; padding: 4px 9px; font: 0.8rem ui-monospace, Menlo, Consolas, monospace; background: var(--xq-bg); color: var(--xq-fg); }
+.xq-fb-ex { font-size: 0.76rem; color: var(--xq-mute); margin-top: 4px; }
+.xq-fb-status { font-size: 0.76rem; color: var(--xq-mute); margin-top: 4px; }
+.xq-fb-status.xq-err { color: #b3261e; background: none; padding: 0; }
+.xq-sqlbox { border: 1px dashed var(--xq-line); border-radius: 6px; padding: 6px 10px; margin-top: 10px; }
+.xq-sqlbox > summary { cursor: pointer; font-size: 0.82rem; color: var(--xq-mute); }
+.xq-sql-ta { width: 100%; font: 0.8rem ui-monospace, Menlo, Consolas, monospace; border: 1px solid var(--xq-line); border-radius: 5px; padding: 6px 9px; background: var(--xq-bg); color: var(--xq-fg); margin-top: 8px; }
+.xq-sql-bar { display: flex; gap: 10px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+.xq-sql-hint { font-size: 0.74rem; color: var(--xq-mute); }
+
+/* ---- static content written by R -------------------------------------------------------- */
+.xq-avail { list-style: none; padding: 0; margin: 0; font-size: 0.88rem; }
+.xq-avail li { padding: 3px 0; }
+.xq-avail .xq-tick { display: inline-block; width: 1.4em; font-weight: 700; color: #2e7d32; }
+.xq-avail li.xq-missing { color: var(--xq-mute); }
+.xq-avail li.xq-missing .xq-tick { color: var(--xq-mute); }
+.xq-avail .xq-detail { color: var(--xq-mute); margin-left: .6em; font-size: 0.8rem; }
+.xq-kv { display: grid; grid-template-columns: minmax(150px, 30%) 1fr; margin: 0; font-size: 0.84rem; }
+.xq-kv dt { padding: 5px 10px 5px 0; color: var(--xq-mute); font-weight: 600; border-top: 1px solid var(--xq-line); }
+.xq-kv dd { margin: 0; padding: 5px 0; overflow-wrap: anywhere; border-top: 1px solid var(--xq-line); }
+.xq-kv dt:first-of-type, .xq-kv dt:first-of-type + dd { border-top: 0; }
+pre.xq-pre { font-size: 0.76rem; max-height: 340px; overflow: auto; background: var(--xq-soft); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; }
+.xq-links { font-size: 0.85rem; columns: 2 280px; }
+.xq-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+.xq-gallery figure { margin: 0; border: 1px solid var(--xq-line); border-radius: 6px; overflow: hidden; background: #fff; }
+.xq-gallery img { width: 100%; height: auto; display: block; cursor: zoom-in; }
+.xq-gallery figcaption { font-size: 0.74rem; padding: 4px 8px; color: #444; background: #f4f4f4; overflow-wrap: anywhere; }
+.xq-lightbox { position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,.82); display: flex; align-items: center; justify-content: center; cursor: zoom-out; }
+.xq-lightbox img { max-width: 94vw; max-height: 94vh; background: #fff; border-radius: 4px; }
+
+/* ---- Quarto dashboard fit ------------------------------------------------------------------ */
+.dashboard-card .card-body, .card-body { overflow: visible; }
+.bslib-card, .card { overflow: visible !important; }
+.bslib-value-box .value-box-value { font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) { .xq-controls { gap: 4px 12px; } .xq-sc-legend { left: 56px; } }
+@media print { .xq-hint-toggle, .xq-fig-tools, .xq-sc-tools { display: none !important; } details.xq-help { break-inside: avoid; } }
+
+/* Quarto marks every static HTML child of a dashboard card with bslib's
+   .html-fill-item / .html-fill-container (flex column, grow to fill). That is
+   right for a single chart but wrong for our notes, tiles and galleries, so
+   they are put back to their natural size and layout. */
+.card .html-fill-item[class*="xq-"], .card details.xq-help.html-fill-item { flex: 0 0 auto; }
+.card .html-fill-container[class*="xq-"] { display: block; }
+.card .xq-stats.html-fill-container { display: flex; flex-direction: row; flex-wrap: wrap; }
+.card .xq-gallery.html-fill-container { display: grid; }
+.card .xq-kv.html-fill-container { display: grid; }
+.card .xq-stat.html-fill-item, .card .xq-stat-v.html-fill-item, .card .xq-stat-l.html-fill-item, .card .xq-stat-s.html-fill-item { flex: 0 0 auto; }
+.card .xq-help-body.html-fill-container { display: block; }

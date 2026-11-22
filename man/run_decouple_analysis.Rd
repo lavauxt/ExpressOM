@@ -14,7 +14,8 @@ run_decouple_analysis(
   min_size = 5,
   padj_cutoff = 0.05,
   stat_col = "stat",
-  lfc_cutoff = 1
+  lfc_cutoff = 1,
+  log_dir = NULL
 )
 }
 \arguments{
@@ -40,11 +41,17 @@ run_decouple_analysis(
 is used.}
 
 \item{lfc_cutoff}{Absolute log2 fold-change floor used to categorize regulon
-targets (activé/réprimé/autre) in the targeted volcano and the summary
+targets (activated/repressed/other) in the targeted volcano and the summary
 table. Default 1.}
+
+\item{log_dir}{Optional base log directory; forwarded to
+`.configure_decouple_omnipathr()` / `.decouple_get_net()` so OmnipathR's
+own log file lands under `<log_dir>/omnipathr/` instead of the default
+`<out_dir>/log/omnipathr/`.}
 }
 \value{
-list(results = named list per resource, files = manifest)
+list(results = named list per resource, files = manifest,
+  network_status = data.frame of per-resource fetch status)
 }
 \description{
 Run decoupleR TF/pathway activity inference

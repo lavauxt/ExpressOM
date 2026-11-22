@@ -5,13 +5,19 @@
 \title{Default directory of the pipeline for an output directory}
 \usage{
 expressom_targets_dir(out_dir)
+
+expressom_targets_dir(out_dir)
 }
 \arguments{
 \item{out_dir}{Output directory of the run.}
 }
 \value{
 `<out_dir>/.expressom_targets`.
+
+`<out_dir>/.expressom_targets`.
 }
 \description{
+Default directory of the pipeline for an output directory
+
 Default directory of the pipeline for an output directory
 }

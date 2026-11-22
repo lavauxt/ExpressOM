@@ -9,13 +9,13 @@ expressom_report_settings(
   max_points = 1500L,
   heatmap_genes = 20L,
   top_terms = 15L,
-  table_rows = 2000L,
+  table_rows = 5000L,
   static_figures = TRUE,
   max_static_figures = 24L,
   static_dpi = 60,
   static_max_px = 1000L,
   max_isoform_plots = 24L,
-  plotly_enrichment_max = 12L,
+  plotly_enrichment_max = 32L,
   merge_enrichment_threshold = 3L,
   plotly_pca_max = 4L,
   highlight_genes = NULL,
@@ -23,8 +23,18 @@ expressom_report_settings(
   lfc_cutoff = NULL,
   theme = c("auto", "light", "dark"),
   self_contained = TRUE,
-  slim_tables = TRUE
+  slim_tables = TRUE,
+  duckdb_url = NULL
 )
+}
+\arguments{
+\item{table_rows}{Rows embedded per interactive table. Tables longer than
+this are truncated (a note in the caption says so and the complete file
+stays available in the run folder). Keeping this finite is the main
+lever for a small, fast-opening HTML.}
+
+\item{slim_tables}{Drop helper columns (statistics, IDs, descriptions)
+from the displayed tables; the CSVs in the run folder keep every column.}
 }
 \description{
 Settings of the interactive report

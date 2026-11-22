@@ -9,11 +9,11 @@ log_dir explicitly.}
 }
 \description{
 Priority:
-  1. `options(expressom.wsl_log_dir)` -- set by `.expressom_prepare()` to
-     `<out_dir>/Log/WSL`, so every WSL command a pipeline run issues lands
-     under the run's `Log/` folder next to SessionInfo.txt, Warnings.txt,
-     the DGE/isoform logs, etc.
-  2. `<getwd()>/expressom_wsl_logs` -- fallback when the installer
+  1. `options(expressom.wsl_log_dir)` -- set by `expressom()` /
+     `run_expressom_targets()` to `<out_dir>/log/WSL`, so every WSL command
+     a pipeline run issues lands under the run's `log/` folder next to
+     SessionInfo.txt, Warnings.txt, the DGE/isoform logs, etc.
+  2. `<getwd()>/log/WSL` -- fallback when the installer
      functions are called outside any pipeline run (e.g. a one-off
      `install_wsl_isoform_tools()`).
 }

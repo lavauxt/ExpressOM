@@ -5,6 +5,8 @@
 \title{The ExpressOM `targets` pipeline}
 \usage{
 expressom_pipeline(params_file, overrides = list())
+
+expressom_pipeline(params_file, overrides = list())
 }
 \arguments{
 \item{params_file}{Path to the `params.rds` written by
@@ -15,13 +17,29 @@ functions (for tests).}
 }
 \value{
 A list of `targets` target objects.
+
+A list of `targets` target objects.
 }
 \description{
 Returns the list of targets for the parameters stored in `params_file`.
 It is what the generated `_targets.R` calls; you normally do not call it
 yourself -- use [run_expressom_targets()] or [run_expressom_app()].
+
+Returns the list of targets for the parameters stored in `params_file`.
+It is what the generated `_targets.R` calls; you normally do not call it
+yourself -- use [run_expressom_targets()] or [run_expressom_app()].
 }
 \details{
+The stages form a DAG: `setup` -> `import` -> `eda` / `dge` -> `dge_plots`,
+`functional`, `fgsea`, `decouple`; `isoform` is independent of `dge`;
+`report` and `rdata` close the graph. Each stage target depends on a small
+context target (`ctx_<stage>`) holding only the parameters it uses, so a
+parameter that concerns one stage leaves the cached results of the others
+untouched. When `run_predictors = TRUE`, the `isoform` target additionally
+depends on `fp_predictors` (the external predictor environment fingerprint),
+so it re-runs when a predictor tool or database is installed or removed even
+though no parameter or input file changed.
+
 The stages form a DAG: `setup` -> `import` -> `eda` / `dge` -> `dge_plots`,
 `functional`, `fgsea`, `decouple`; `isoform` is independent of `dge`;
 `report` and `rdata` close the graph. Each stage target depends on a small

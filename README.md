@@ -190,13 +190,11 @@ results/
 ```
 ## Interactive HTML Report
 
-Every run of `expressom()` (alias `run_bulk_pipeline()`) ends with **one self-contained, dynamic HTML file** that gathers all the results of the run in tabs:
+Every run of `expressom()` (alias `run_bulk_pipeline()`) ends with **one self-contained, dynamic HTML file** that gathers all the results of the run in tabs, written at the root of the output directory so the relative links to `log/`, `Plots/` and `DE_raw_results/` resolve directly:
 
 ```txt
 results/ExpressOM_report_<level>_vs_<base>.html
 ```
-
-(The file sits at the root of `out_dir`, next to `log/`, `Plots/` and `DE_raw_results/`, so the links it contains resolve as-is.)
 
 Open it in any browser, no R needed: figures are interactive `plotly` widgets (zoom, hover, toggle groups, export to PNG) and tables are searchable/sortable `DT` tables with CSV/Excel buttons. A **light / dark switch** in the header re-themes the page, the plotly figures and the tables; see [Dark mode](#dark-mode). The report is **discovery based**: it reads whatever is on disk in `out_dir`, and a tab simply does not appear when the stage behind it was not run (no isoform analysis → no *Isoforms* tab, no FGSEA → no FGSEA sub-tab...).
 
@@ -206,9 +204,23 @@ Open it in any browser, no R needed: figures are interactive `plotly` widgets (z
 | **Samples & QC** | One sub-tab per PCA (global, batch-corrected, comparison-only, transcript-level), plus sample-similarity diagnostics: interactive PC1/PC2 and PC1/PC3 plots, scree plot, sample-scores table, PCA-score correlation and distance heatmaps, MDS and hierarchical clustering where the saved scores allow it |
 | **Differential expression** | *Volcano* (your volcano colours, cut-offs and highlighted genes), *MA plot*, *Top genes heatmap*, *Diagnostics* (ranked effects and distribution checks when their input data are available), full *Results table*, *DEG lists* per cut-off |
 | **Functional analysis** | By source (gene level, DTE, DTU), method (ORA, GSEA, SPIA, transcription factors) and gene-set collection (including every FGSEA `.gmt`): original top-term plot + full table, with optional interactive enrichment bubbles and gene-set overlap/network views when the source result tables contain the required fields |
+| **decoupleR** | One sub-tab per resource (CollecTRI / PROGENy / DoRothEA) with the activity barplot and the full tested-source table, plus a *Network status* sub-tab saying which network was fetched live from OmniPath, which came from an offline copy (OmnipathR cache or the bundled static tables) and which failed |
 | **Isoforms** | DTE, DTU, DEXSeq, variable transcripts, switch plots and the methods used |
 | **Figures** | The PDF/PNG figures found under `out_dir`, one sub-tab per output folder: PDFs are converted to PNG and embedded (click to enlarge; needs `pdftools`; up to `max_static_figures` per folder), plus a table listing every file |
 | **Run info** | Parameters of the run, logs (`log/`; legacy `log/` folders remain readable) and the list of files produced |
+
+Every tab and sub-tab opens with a short italic note explaining what the tab shows and how to read it (axes, colours, cut-off lines, what a healthy picture looks like), so the report can be shared with collaborators who did not run the analysis. Detailed "how to read this" notes sit inside the tabs that need them (decoupleR activity, TF regulon volcano and leading edge, DTE / DTU, sample diagnostics).
+
+### Keeping the report fast and small
+
+A self-contained HTML must carry every widget in the file, so the builder works hard to keep it light (a 30k-gene run typically lands around 10 MB instead of 60+):
+
+* **Tables are capped and slimmed.** `table_rows` (default `5000`) caps the rows embedded per DT table -- the caption says so and the complete file stays in the run folder; `slim_tables = TRUE` (default) drops helper columns (`lfcSE`, `stat`, Entrez IDs, descriptions...) from the *display*, the CSVs in the run folder always keep every column.
+* **Diagnostic plots are pre-aggregated.** p-value histograms are binned in R, the Q-Q plot keeps the significant tail exactly and thins the null bulk, GSEA running-score curves are downsampled, and the expression boxplot / RLE / density use a deterministic 800-gene span of the expression range.
+* **Widgets initialise lazily.** everything inside a hidden tab is moved into an inert `<template>` at load and rendered when the tab is first opened (see `window.__xpLazyTabs.deferred` for how many widgets were deferred on your page).
+* **decoupleR tables are loaded per comparison** and in parallel; the network-status CSV is shown as its own sub-tab instead of being merged into the enrichment tables (it has no activity columns, which previously broke the *Merged table* tab).
+
+`audit_expressom_report("ExpressOM_report_x_vs_y.html")` prints the size breakdown (widgets, biggest DT tables and plotly payloads) if you want to see where the megabytes are.
 
 ```R
 # on by default; the report is rebuilt at the end of every run
@@ -230,18 +242,9 @@ res <- load_expressom_results("./results")
 res
 ```
 
-`report_settings` accepts the arguments of `expressom_report_settings()` (`title`, `max_points`, `heatmap_genes`, `top_terms`, `table_rows`, `slim_tables`, `plotly_bundle`, `static_figures`, `max_static_figures`, `static_dpi`, `highlight_genes`, `padj_cutoff`, `lfc_cutoff`, `theme`). If one tab fails to render, the rest of the report is still built and the failed tab shows the error message.
+`report_settings` accepts the arguments of `expressom_report_settings()` (`title`, `max_points`, `heatmap_genes`, `top_terms`, `table_rows`, `static_figures`, `max_static_figures`, `static_dpi`, `highlight_genes`, `padj_cutoff`, `lfc_cutoff`, `theme`, `slim_tables`). If one tab fails to render, the rest of the report is still built and the failed tab shows the error message.
 
-#### Report size and open speed
-
-The defaults are tuned so that even a genome-scale run (tens of thousands of genes, hundreds of thousands of transcripts) produces a report that opens in a browser in well under a second:
-
-* interactive tables embed at most `table_rows` rows (default 5,000, in adjusted-p order, so the most interesting rows stay; the caption of each table says so) and hide the bulky per-row gene-list columns (`slim_tables = TRUE`); every table keeps its CSV / Excel buttons, and the complete files are always in the run folder;
-* QC box plots (expression, RLE) send the five-number summary per sample instead of every gene, the p-value histogram sends 20 bins instead of every p-value, and the Q-Q plot is thinned to 2,000 evenly spaced order statistics;
-* the report plots embed the smaller `cartesian` build of plotly.js (~1.3 MB instead of ~3.6 MB) when it can be fetched once from `cdn.plot.ly`; offline (or if the download fails) the full bundle that ships with the plotly package is used silently, so building a report never requires internet access. `plotly_bundle = "full"` opts out, `"cartesian"` forces the small build;
-* widgets in hidden tabs are not initialised until their tab is first opened (lazy tabs), which keeps the first paint fast.
-
-Set `table_rows = Inf` / `slim_tables = FALSE` in `report_settings` to embed everything again, at the cost of a much larger and slower file; on a 45,000-gene run with 150,000 transcripts the old behaviour can make `pandoc` run out of memory while assembling the single file.
+All the report's custom JavaScript and CSS live **in R code**, not in loose asset files: the lazy-tab renderer and the theme switch are R string constants (`R/mod_report_templates.R`), the base stylesheet is `R/mod_report_tabs.R`, and the Quarto engine's Observable JavaScript is vendored in `inst/xq/` and inlined into the HTML by `R/mod_report_quarto.R` -- so a report never references an external script the browser would have to fetch.
 
 #### Dark mode
 
@@ -263,6 +266,26 @@ options(ExpressOM.omnipath_lock_stale_after = 600) # seconds; default 10 minutes
 ```
 
 The option is deliberately opt-in: lock-file age alone cannot prove that its owner is no longer active.
+
+### decoupleR TF / pathway activity
+
+With `run_decouple = TRUE` (the default) the pipeline runs [decoupleR](https://github.com/saezlab/decoupleR) on the signed gene-level statistics of each comparison with three networks -- **CollecTRI** (TF regulons with sign), **PROGENy** (pathway footprints) and **DoRothEA** (TF regulons, confidence A/B/C). Every resource writes:
+
+```txt
+results/
+└── DecoupleR/
+    ├── collectri/DecoupleR_collectri_<comp>.csv     # one row per TF: score + p_value
+    ├── progeny/DecoupleR_progeny_<comp>.csv         # one row per pathway
+    ├── dorothea/DecoupleR_dorothea_<comp>.csv
+    ├── decoupleR_network_status_<comp>.csv          # live / offline (cache) / failed per resource
+    ├── tf_regulon_summary.csv                       # per-TF target counts
+    └── collectri/plots/                             # regulon_<TF>.csv, leading_edge_<TF>.csv,
+        ...                                          # tf_volcano_<TF>.pdf, tf_leading_edge_<TF>.pdf
+```
+
+* **Which statistic is used.** the DESeq2 Wald `stat`; under an LRT the unsigned omnibus statistic is replaced by the signed `contrast_stat` column automatically.
+* **OmniPath failures are explicit.** The stage probes the OmniPath API with a tiny plain-HTTP request (`/queries`, version-independent -- a missing OmnipathR export can never be misread as "network down"). When the API is unreachable, CollecTRI / DoRothEA are served from OmnipathR's local cache or from the tables bundled with decoupleR, and the status CSV records `offline (cache / bundled fallback)`; when it is reachable the label is `network (live)`. PROGENy has no offline source and is reported as `failed (network)` instead of silently disappearing.
+* **In the report**, the *Functional analysis → decoupleR* branch shows one activity sub-tab per resource (barplot of the significant sources, hover for score and p-value, full table below) plus a *Network status* sub-tab, and the *TF regulon plots* branch adds, for every significant TF, an interactive regulon volcano (targets coloured by expected direction from the network's `mor` sign) with its leading-edge barcode plot and both tables.
 
 ---
 
@@ -375,7 +398,7 @@ The `run_bulk_pipeline` function generates a heavily organized output structure 
 * **`ORA/` & `GSEA/`**: Extensive targets and plots for GO mapping, Reactome, Disease Ontology, and KEGG generic pathways (Dotplots, Ridgeplots, Pathway Graphs).
 * **`SPIA/`**: Signaling Pathway Impact Analysis graphs and Evidence CSVs.
 * **`Transcription_Factors/`**: Output mapping active transcription factor perturbations based on dynamically mapped Enrichr libraries.
-* **`ExpressOM_report_<level>_vs_<base>.html`**: the unified interactive report, written at the root of `out_dir` (see [Interactive HTML Report](#interactive-html-report)). Static figures in it are converted from PDF to PNG and embedded; install `pdftools` if you want them inline (the underlying `.pdf` files are always written to `Plots/`).
+* **`ExpressOM_report_<level>_vs_<base>.html`** (at the root of `out_dir`): the unified interactive report (see [Interactive HTML Report](#interactive-html-report)). Static figures in it are converted from PDF to PNG and embedded; install `pdftools` if you want them inline (the underlying `.pdf` files are always written to `Plots/`).
 * **`.expressom_targets/`**: only when you use the `targets` pipeline or the Shiny app: the pipeline store, the stored parameters and the last run log (see [Incremental Runs with `targets`](#incremental-runs-with-targets)). Safe to delete; the next run simply starts from scratch.
 * **`Save_rdata/`**: The complete populated R environment serialized as an `.RData` file.
 * **`log/`**: A single, unified log tree for the whole run — always check here first if something looks like it didn't run. New runs write to lower-case `log/`; existing `log/` folders remain readable for backward compatibility:
@@ -820,9 +843,9 @@ testthat::test_package("ExpressOM")
 
 | File | Covers |
 |---|---|
-| `test-report-data.R` | `load_expressom_results()` on a synthetic run directory (discovery, missing stages, JSON snapshot, named colour vectors) |
-| `test-report-plots.R` | plotly builders (volcano, MA, PCA, heatmap, enrichment) and their edge cases |
-| `test-report-tabs.R` | the tab tree shared by the HTML report and the app (`expressom_report_tabs()`), error isolation per tab |
+| `test-report-data.R` | `load_expressom_results()` on a synthetic run directory (discovery, missing stages, JSON snapshot, named colour vectors, decoupleR tables / status / regulons) |
+| `test-report-plots.R` | plotly builders (volcano, MA, PCA, heatmap, enrichment, decoupleR activity, p-value histogram, Q-Q) and their edge cases and payload caps |
+| `test-report-tabs.R` | the tab tree shared by the HTML report and the app (`expressom_report_tabs()`), error isolation per tab, merged-collection tables with mismatched columns, the decoupleR subtree + network-status tab, per-tab help notes |
 | `test-report-build.R` | end-to-end `build_expressom_report()`: self-contained HTML, tab titles, graceful degradation (skipped without `pandoc`/report packages) |
 | `test-stages.R` | refactored stage functions; checks by code walking that each stage only reads the parameters of its group |
 | `test-targets-params.R` | `expressom_params()`, defaults, path normalisation, run snapshots, parameter hashing per stage |
@@ -837,49 +860,80 @@ Tests that need optional packages (`plotly`, `DT`, `shiny`, `targets`, `callr`, 
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE).
 
-## Interactive report (v0.2.3)
-
-The unified HTML report keeps the hierarchical tab/subtab navigation and now
-provides full-row interactive result tables by default. DT tables include a
-global search, per-column filters, paging, sortable columns, persistent table
-state, and Copy / CSV / Excel export buttons. Set `table_rows` explicitly in
-`expressom_report_settings()` only when a smaller report is preferred.
-
-The Samples & QC section includes Pearson and Spearman sample-correlation
-heatmaps, sample-distance heatmaps, a hierarchical sample dendrogram, MDS,
-expression distribution boxplots/density curves, RLE and mean-variance
-diagnostics. Sample-level similarity uses the QC expression matrix derived
-from the full normalised-count table (up to the configured QC-gene limit),
-not just the top differentially expressed genes.
-
-The Isoforms > DTE and Isoforms > DTU sections include interactive transcript
-volcano/MA and ranked significance views for DTE, and likelihood-ratio versus
-adjusted-p, LR-distribution, raw/adjusted-p and feature-ranking views for DTU.
-DTU does not provide a log2 fold-change in its likelihood-ratio result table,
-so the report intentionally does not display a fabricated DTU volcano plot.
-
-For portable reports, all tables remain client-side searchable and exportable.
-The report also provides a searchable output-file index; links are clickable
-when the underlying result file is present beside the report, while missing
-external result files are identified rather than represented by dead links.
 
 
-### Interactive report: sample similarity, DTE/DTU and complete tables (0.2.3)
+## The Quarto dashboard engine
 
-The report includes Pearson and Spearman sample-expression correlation heatmaps,
-sample-distance and hierarchical-clustering views, MDS, expression distribution,
-RLE and mean-variance diagnostics. These are computed from the configured
-normalised expression/QC matrix (not from PCA scores).
+`build_expressom_report()` can render the results as a **Quarto dashboard**
+instead of the htmltools / pandoc report. The page opens in a fraction of a
+second, draws large point clouds on the GPU, filters tables with SQL and
+carries a short **"How to read this"** note on every tab.
 
-The DTE tab includes transcript-level volcano and MA plots, abundance-versus-
-adjusted-significance, ranked transcripts and raw/adjusted p-value distributions.
-The DTU tab includes ranked features, likelihood-ratio-versus-adjusted-significance,
-LR and p-value distributions, LR-versus-degrees-of-freedom, and a descriptive
-summary of tested features per gene. The DTU result schema does not provide a
-transcript-usage log2 fold-change, so no DTU volcano plot is fabricated.
+```r
+build_expressom_report(out_dir, engine = "quarto")
+# -> <out_dir>/ExpressOM_report_<comparison>_quarto.html  (one self-contained file)
+```
 
-`expressom_report_settings(table_rows = Inf, slim_tables = FALSE)` is now the
-default: report tables retain all available rows and columns. Each DataTable
-provides global search, per-column filters, sorting, paging, state persistence,
-and Copy/CSV/Excel export. Large reports can opt into row/column pruning through
-`table_rows` and `slim_tables` when file size is a concern.
+Requires the `quarto` CLI (>= 1.4, on the PATH or in `QUARTO_PATH`) and
+`jsonlite` + `htmltools`. Nothing else: the JavaScript libraries are vendored
+inside the package (`inst/xq/`), so the report needs **no network** to open or
+to use, except for free-form SQL (see below).
+
+### What is in it
+
+| Requirement | How it is done |
+|---|---|
+| **WebGL rendering** | `regl-scatterplot` draws the volcano, MA, Q-Q, mean-variance, DTE / DTU / switch scatters with *every* point (tested with 20 000 genes), with pan / zoom / lasso, cut-off lines, labels and a clickable legend. Summaries (bars, heat maps, box plots, dendrogram, network) use Observable Plot (SVG, PNG/SVG export). |
+| **Light binary storage** | Tables are encoded once in R as compressed *columnar* binaries (float32, int32, dictionary-coded strings, and p-values stored as float32 `-log10(p)` so they never underflow) and decoded lazily into typed arrays; a table that is never opened costs only its bytes. |
+| **Fast filtering** | A SQL `WHERE` box on every table (`padj < 0.01 AND abs(log2FoldChange) > 1 AND gene LIKE 'HOX%'`) runs on typed arrays in a few ms. **DuckDB-Wasm** is loaded on first use for the free SQL console (`SELECT ... GROUP BY ...`) and automatically takes over for tables above 400 000 rows; the JS engine is the offline fallback with the same syntax. |
+| **Ready-to-use interface** | Quarto Dashboard pages and tabs + Observable Inputs (view switch, cut-off sliders, gene / term / TF pickers). Tabs build only when first opened. |
+| **All figures and tables** | PCA (all PCs, scree, scores), sample correlation / distance / MDS / dendrogram, expression boxplots / density / RLE / mean-variance, volcano / MA, p-value diagnostics, top-gene heat map, results table + DEG lists, ORA / GSEA / FGSEA / SPIA / TF enrichment (ranked bars, bubble, gene-overlap heat map, enrichment network, running score), decoupleR activity and per-TF regulon explorer (target volcano + leading edge), DTE / DTU / DEXSeq / switch views, static figure galleries (click to enlarge), parameters, logs and file inventory. |
+
+### "How to read this" on every tab
+
+Every card starts with a collapsible note written for the person looking at the
+plot: what the axes and colours mean, what a healthy or worrying picture looks
+like (e.g. a flat p-value histogram with a left spike, replicates forming dark
+blocks in the correlation map), and how to use the controls. The wording is
+filled in with the run's contrast, test and cut-offs (*"a positive log2 fold
+change means higher expression in **treated** than in **control**"*). The
+**Hide hints** button (bottom right) collapses all notes at once and is
+remembered by the browser. The notes live in `R/mod_report_quarto_help.R`
+(`.xq_help_html()`), one entry per kind of tab.
+
+### Settings
+
+```r
+expressom_report_settings(
+  title = "My project",
+  table_rows = 5000L,        # cap on rows embedded per table (caption says so when hit)
+  max_static_figures = 24,   # PNG / PDF previews per folder
+  duckdb_url = NULL          # URL of a local DuckDB-Wasm ES module for fully offline SQL
+)
+```
+
+DuckDB-Wasm is fetched from jsDelivr the first time a user runs
+a free SQL query. Set `duckdb_url` to a copy you host next to the report to
+make that offline too; if the fetch fails the console says so and every
+`WHERE` filter keeps working with the built-in engine.
+
+### Measured on synthetic runs (headless Chromium, software WebGL)
+
+| Run | File | `DOMContentLoaded` | First volcano drawn | `WHERE` over all rows | Errors on 29 tabs |
+|---|---|---|---|---|---|
+| 600 genes | 4.4 MB | ~0.25 s | ~0.35 s | ~3 ms | 0 |
+| 20 000 genes | 5.1 MB | ~0.27 s | ~0.55 s | ~6 ms | 0 |
+
+The previous Quarto engine needed the network to fetch Observable Plot,
+Inputs and DuckDB from a CDN before anything rendered (95 of its cells fail
+offline) and drew SVG points.
+
+### Layout of the runtime
+
+`R/mod_report_quarto_data.R` (binary encoder), `R/mod_report_quarto_collect.R`
+(what each tab shows, QC and enrichment pre-computation),
+`R/mod_report_quarto_help.R` (the notes), `R/mod_report_quarto.R` (pages,
+render, `file://` patch) and `inst/xq/` (`xq-core.js` data layer and filter
+engine, `xq-widgets.js` tables and controls, `xq-scatter.js` WebGL scatter,
+`xq-charts.js` / `xq-views.js` the views, `xq.css`, and `xq-vendor.min.js`,
+rebuilt from `vendor-entry.js` with `esbuild --bundle --minify --format=iife`).

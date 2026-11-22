@@ -69,74 +69,41 @@
 # ---- lazy tab widgets (report open-speed) --------------------------------------
 #
 # htmlwidgets initialises EVERY plotly / DT widget of the report at
-# DOMContentLoaded -- including those inside hidden Bootstrap tab panes. That
-# (a) makes a big single-file report slow to open (all tables and plots are
-# built up front) and (b) initialises widgets inside display:none containers,
-# where plotly reads a zero width and DataTables' scrollX computes collapsed
-# column widths -- plots then stay tiny / misaligned until a manual window
-# resize.
-#
-# The script below (emitted as the LAST element of <body>, so that it runs
-# during parsing, i.e. before htmlwidgets scans the document):
+# DOMContentLoaded -- including those inside hidden tab panes, where plotly
+# reads a zero width and DataTables' scrollX collapses. The script below
+# (emitted as the LAST element of <body>, so it runs before htmlwidgets scans
+# the document):
 #   1. moves every widget of a hidden tab into an inert <template> element
-#      (htmlwidgets' document scan does not look inside templates, so those
-#      widgets are simply not initialised yet);
-#   2. when a tab becomes visible ('shown.bs.tab'), moves the widgets back
-#      and calls HTMLWidgets.staticRender() -- idempotent: rendered widgets
-#      carry the 'html-widget-static-bound' class and are skipped;
-#   3. calls Plotly.Plots.resize() / DataTables columns.adjust() on the newly
-#      shown pane, fixing widgets that were rendered while hidden.
+#      (htmlwidgets' document scan does not look inside templates);
+#   2. when a tab becomes visible ('shown.bs.tab'), moves the widgets back and
+#      calls HTMLWidgets.staticRender() (idempotent);
+#   3. calls Plotly.Plots.resize() / DataTables columns.adjust() on the
+#      newly shown pane.
 # It handles both report engines (static .tab-pane markup of the htmltools
-# engine and the panes that tabsets.js builds at DOM ready for the pandoc
-# engine). Byte-identical to the delivered expressom_lazy_tabs.js, which was
-# validated in a headless browser against the real htmlwidgets.js, jQuery
-# 3.7.1 and Bootstrap 3.4.1 tab behaviour (30 assertions, all passing).
+# engine and the panes tabsets.js builds at DOM ready for the pandoc engine).
 
 .xp_lazy_js_text <- function() {
   js <- paste(c(
     "/* ExpressOM report - lazy tab widgets + correct sizing on tab activation.",
     " *",
-    " * WHAT IT DOES",
-    " *   htmlwidgets initialises EVERY plotly / DT widget of the report at",
-    " *   DOMContentLoaded, including the ones inside hidden Bootstrap tab panes.",
-    " *   That (a) makes a big single-file report slow to open (all tables and",
-    " *   plots are built up front) and (b) initialises widgets inside",
-    " *   display:none containers, where plotly reads a zero width and DataTables'",
-    " *   scrollX computes collapsed column widths - plots then stay tiny /",
-    " *   misaligned until a manual window resize.",
+    " * htmlwidgets initialises every widget at DOMContentLoaded, including the",
+    " * ones inside hidden tab panes (slow open; zero-width plotly / collapsed",
+    " * DataTables columns). Emitted as the LAST element of <body> so it runs",
+    " * during parsing, before htmlwidgets scans the document:",
+    " *   1. widgets of hidden tabs are moved into an inert <template>",
+    " *      (htmlwidgets' scan skips template contents);",
+    " *   2. on tab 'shown', the widgets are moved back and staticRender() is",
+    " *      called (idempotent: bound widgets carry 'html-widget-static-bound');",
+    " *   3. Plotly.Plots.resize() / DataTables columns.adjust() fix widgets",
+    " *      that were rendered while hidden.",
     " *",
-    " *   This script, emitted as the LAST element of <body> (it must run during",
-    " *   parsing, i.e. before DOMContentLoaded):",
-    " *     1. moves every widget of a hidden tab into an inert <template>",
-    " *        (htmlwidgets' document scan does not look inside templates, so",
-    " *        those widgets are simply not initialised yet);",
-    " *     2. when a tab becomes visible ('shown.bs.tab'), moves the widgets",
-    " *        back and calls HTMLWidgets.staticRender() - verified idempotent:",
-    " *        already-rendered widgets carry the 'html-widget-static-bound'",
-    " *        class and are skipped;",
-    " *     3. calls Plotly.Plots.resize() / DataTables columns.adjust() on the",
-    " *        newly shown pane, fixing widgets that were rendered while hidden.",
-    " *",
-    " *   It handles both report engines:",
-    " *     - htmltools engine (self_contained = FALSE): Bootstrap tab panes",
-    " *       already exist in the static markup;",
-    " *     - rmarkdown/pandoc engine (the default): panes are built later, at",
-    " *       DOM ready, by tabsets.js - so the same rule is applied to the",
-    " *       pandoc section structure (in a div.section.tabset, every section",
-    " *       child except the first becomes a hidden pane).",
-    " *",
-    " * SAFETY",
-    " *   - If HTMLWidgets.staticRender is not available (very old htmlwidgets),",
-    " *     nothing is deferred; only the tab-shown resizing stays active.",
-    " *   - If the tabsets were not built by DOM ready, the deferral is undone so",
-    " *     no content can stay hidden.",
-    " *   - window.print() restores everything first (beforeprint) so the printed",
-    " *     report shows all tabs.",
-    " *   - Kill switch: define window.XP_LAZY_TABS_OFF = true before this script.",
-    " *",
-    " * Retrofit / A-B test: paste this file inside a script element right before",
-    " * the end of the body of an existing ExpressOM_report_*.html copy and compare",
-    " * the load time - no need to re-run the pipeline.",
+    " * Handles both engines: htmltools (static .tab-pane markup) and",
+    " * rmarkdown/pandoc (tabsets.js builds panes at DOM ready from",
+    " * div.section children - the 'first section is active' rule is applied",
+    " * here as well). Safety: without HTMLWidgets.staticRender nothing is",
+    " * deferred; if tabsets were not built by DOM ready the deferral is",
+    " * undone; beforeprint restores everything. Kill switch:",
+    " * window.XP_LAZY_TABS_OFF = true.",
     " *",
     " * NOTE: never write a literal closing script tag anywhere in this text, not",
     " * even in a comment: the HTML parser ends the script at the first one, the",

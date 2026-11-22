@@ -7,8 +7,8 @@
 itable(
   df,
   caption = NULL,
-  page_length = 10L,
-  max_rows = 800L,
+  page_length = 25L,
+  max_rows = Inf,
   digits = 3L,
   filename = "expressom_table",
   round_payload = TRUE,

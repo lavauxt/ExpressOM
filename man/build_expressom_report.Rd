@@ -10,6 +10,7 @@ build_expressom_report(
   comparison = NULL,
   settings = expressom_report_settings(),
   results = NULL,
+  engine = c("auto", "htmltools", "pandoc", "quarto"),
   quiet = TRUE
 )
 }
@@ -25,6 +26,12 @@ build_expressom_report(
 \item{settings}{List from [expressom_report_settings()].}
 
 \item{results}{Optional pre-loaded [load_expressom_results()] object.}
+
+\item{engine}{Report engine: `"htmltools"` (default; fast, dependency-free,
+needs plotly + DT), `"pandoc"` (the legacy rmarkdown self-contained
+single file) or `"quarto"` (Quarto dashboard with Observable JS
+explorers, DuckDB-Wasm filtering and float32 binary payloads; needs the
+quarto CLI, see `vignette` and `engine = "quarto"` in README).}
 
 \item{quiet}{Suppress console output.}
 }
@@ -42,8 +49,8 @@ one interactive HTML file with plotly figures and DT tables in tabs.
 By default the report is rendered with `rmarkdown` + pandoc as a single
 self-contained `.html` file written **at the root of `<out_dir>`** (i.e.
 `<out_dir>/ExpressOM_report_<comparison>.html`), so it sits right next to
-`Log/`, `Plots/`, `DE_raw_results/` and every other result folder, and the
-relative links it contains (`Log/…`, `Plots/…`, `DE_raw_results/…`) resolve
+`log/`, `Plots/`, `DE_raw_results/` and every other result folder, and the
+relative links it contains (`log/…`, `Plots/…`, `DE_raw_results/…`) resolve
 without any further setup when the file is opened from its own directory.
 
 Pass `settings = expressom_report_settings(self_contained = FALSE)` for the

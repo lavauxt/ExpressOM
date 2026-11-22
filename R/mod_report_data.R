@@ -62,6 +62,30 @@
 
 .rep_num <- function(x) suppressWarnings(as.numeric(as.character(x)))
 
+#' Row-bind data frames with different columns (fill with NA)
+#'
+#' Base `rbind()` fails when the tables come from different sources (e.g.
+#' merging ORA / GSEA collections or decoupleR resources); this helper unions
+#' the columns and fills the gaps with NA. Factors are converted to character
+#' so a shared factor level set is never required.
+#' @keywords internal
+.rep_rbind_fill <- function(...) {
+  dfs <- list(...)  # flatten NULL/empty inputs
+  dfs <- dfs[vapply(dfs, function(d) !is.null(d) && is.data.frame(d) && nrow(d) > 0L, logical(1))]
+  if (!length(dfs)) return(NULL)
+  cols <- unique(unlist(lapply(dfs, colnames), use.names = FALSE))
+  dfs <- lapply(dfs, function(d) {
+    miss <- setdiff(cols, colnames(d))
+    for (m in miss) d[[m]] <- rep(NA, nrow(d))
+    d <- d[cols, drop = FALSE]
+    d[] <- lapply(d, function(v) if (is.factor(v)) as.character(v) else v)
+    d
+  })
+  out <- do.call(rbind, dfs)
+  rownames(out) <- NULL
+  out
+}
+
 .rep_named_chr <- function(x) {
   if (is.null(x)) return(NULL)
   x <- unlist(x)
@@ -122,10 +146,12 @@ list_expressom_comparisons <- function(out_dir) {
   } else {
     character(0)
   }
-  log_files <- unlist(lapply(.expressom_log_dirs(out_dir), function(d) {
+  # as.character(): unlist(list()) is NULL, and basename(NULL) errors for a
+  # directory without any log/ folder (empty or EDA-only run).
+  log_files <- as.character(unlist(lapply(.expressom_log_dirs(out_dir), function(d) {
     list.files(file.path(d, "DGE"), pattern = "^DGE_params_.*\\.json$",
                full.names = TRUE)
-  }), use.names = FALSE)
+  }), use.names = FALSE))
 
   strip_ext <- function(basename) sub("\\.(txt|tsv)$", "", basename)
   nm <- c(
@@ -162,17 +188,14 @@ list_expressom_comparisons <- function(out_dir) {
     file <- parts[[length(parts)]]
     if (grepl("_significant\\.csv$", file, ignore.case = TRUE)) return(NULL)
 
-    # ---- FIX: exclude the per-TF regulon artefacts -------------------------
-    # The files written by .run_decouple_tf_regulon_plots() under
-    # <resource>/plots/ (regulon_<TF>.csv, leading_edge_<TF>.csv) and the
-    # top-level per-TF summary (tf_regulon_summary.csv) are NOT enrichment
-    # tables. They are loaded separately by .rep_load_decouple_regulons()
-    # and rendered under "TF regulon plots". Leaving them in the inventory
-    # produced ghost entries under "Functional analysis -> COLLECTRI" (one
-    # per significant TF) that showed as "no recognised term / adjusted
-    # p-value columns".
+    # Per-TF regulon artefacts and the network-status table are NOT enrichment
+    # tables: the regulons are loaded by .rep_load_decouple_regulons() and the
+    # status table by .rep_load_decouple_status(). Leaving them in the
+    # inventory produced ghost entries under "Functional analysis" and broke
+    # the merged-table tab (different columns than the activity tables).
     if (grepl("[/\\\\]plots[/\\\\]", r)) return(NULL)
     if (identical(file, "tf_regulon_summary.csv")) return(NULL)
+    if (grepl("^decoupleR_network_status_", file)) return(NULL)
 
     src <- if (any(grepl("^DTE_Enrichment$", parts))) "DTE"
            else if (any(grepl("^DTU_Enrichment$", parts))) "DTU"
@@ -202,9 +225,10 @@ list_expressom_comparisons <- function(out_dir) {
     } else if (root == "SPIA") {
       kind <- "spia"; method <- "SPIA"; collection <- .rep_strip_comp(file)
     } else if (root == "DecoupleR") {
-      kind <- "decouple"; method <- "decoupleR"
-      collection <- if (length(sub_parts)) sub_parts[[1L]]
-                    else .rep_strip_comp(file)
+      # decoupleR tables are loaded by .rep_load_decouple() and rendered in
+      # their own report subtree; keeping them here duplicated the tabs and
+      # the network-status file (no activity columns) broke the merged table.
+      return(NULL)
     } else {
       kind <- "tf"; method <- "Transcription factors"
       collection <- .rep_strip_comp(file)
@@ -416,7 +440,8 @@ load_expressom_results <- function(
   }
 
   # ---- decoupleR ----------------------------------------------------------------
-  decouple <- .rep_load_decouple(out_dir, max_table_rows)
+  decouple <- .rep_load_decouple(out_dir, comparison, max_table_rows)
+  decouple_status <- .rep_load_decouple_status(out_dir, comparison, max_table_rows)
   decouple_regulons <- .rep_load_decouple_regulons(out_dir, max_table_rows)
 
   # ---- isoforms -----------------------------------------------------------------
@@ -433,6 +458,7 @@ load_expressom_results <- function(
       config = config, dge = dge, pca = pca,
       functional = functional,
       decouple = decouple,
+      decouple_status = decouple_status,
       decouple_regulons = decouple_regulons,
       isoform = isoform,
       figures = figures, logs = logs, files = files, notes = notes
@@ -442,7 +468,7 @@ load_expressom_results <- function(
 }
 
 .rep_load_expression <- function(de_dir, comparison, results, max_genes,
-                                max_qc_genes = 1500L, max_distribution_genes = 5000L) {
+                                max_qc_genes = 1500L, max_distribution_genes = 800L) {
   path <- .rep_find_table(de_dir, paste0("DESeq_Normalized_Counts_", comparison))
   if (is.null(path) || max_genes < 2L) return(NULL)
   nc <- .rep_read_table(path)
@@ -472,7 +498,8 @@ load_expressom_results <- function(
   qc_mat <- full_mat[qc_idx, , drop = FALSE]
 
   # A deterministic, expression-range-spanning subset keeps the HTML compact
-  # while preserving broad per-sample distribution diagnostics.
+  # (boxplot / RLE / density embed one value per gene and sample) while
+  # preserving broad per-sample distribution diagnostics.
   n_dist <- min(nrow(full_mat), max(2L, as.integer(max_distribution_genes)))
   if (nrow(full_mat) > n_dist) {
     ord_mean <- order(rowMeans(full_mat, na.rm = TRUE), decreasing = TRUE)
@@ -548,25 +575,72 @@ load_expressom_results <- function(
   if (length(cand)) cand[[1L]] else NA_character_
 }
 
-.rep_load_decouple <- function(out_dir, max_rows = Inf) {
+.rep_load_decouple <- function(out_dir, comparison = NULL, max_rows = Inf) {
   dec_dir <- file.path(out_dir, "DecoupleR")
   if (!dir.exists(dec_dir)) return(NULL)
   files <- list.files(dec_dir, pattern = "\\.csv$", recursive = TRUE, full.names = TRUE)
   # Per-TF regulon / leading-edge CSVs live under <resource>/plots/ and are
-  # loaded by .rep_load_decouple_regulons(); keep them out of the activity
-  # table index.
+  # loaded by .rep_load_decouple_regulons(); the network-status table is
+  # loaded by .rep_load_decouple_status(). Keep both out of the activity
+  # index: the status table has no score / p_value column and would break
+  # the activity plots and tables.
   files <- files[!grepl("[/\\\\]plots[/\\\\]", files)]
   files <- files[!grepl("^tf_regulon_summary\\.csv$", basename(files))]
+  files <- files[!grepl("^decoupleR_network_status_", basename(files))]
   if (!length(files)) return(NULL)
-  out <- list()
-  for (f in files) {
+
+  # The activity CSVs of every comparison share DecoupleR/<resource>/; keep
+  # only the selected comparison (unrecognised file names stay included).
+  if (!is.null(comparison) && !is.na(comparison) && nzchar(comparison)) {
+    comp_of <- function(bn) {
+      if (grepl("^DecoupleR_[^_]+_.+\\.csv$", bn)) sub("\\.csv$", "", sub("^DecoupleR_[^_]+_", "", bn)) else NA_character_
+    }
+    own <- vapply(basename(files), comp_of, character(1))
+    files <- files[is.na(own) | own == comparison]
+  }
+  if (!length(files)) return(NULL)
+
+  read_one <- function(f) {
     tb <- .rep_read_table(f, max_rows = max_rows)
-    if (is.null(tb) || !nrow(tb)) next
-    resource <- basename(dirname(f))
-    rel <- .rep_rel(f, out_dir)
-    out[[rel]] <- list(resource = resource, table = tb, path = rel)
+    if (is.null(tb) || !nrow(tb)) return(NULL)
+    list(resource = basename(dirname(f)), table = tb, path = .rep_rel(f, out_dir))
+  }
+  # Parallel reads keep the decoupleR tabs of the Shiny app responsive on
+  # runs with many resources / large activity tables.
+  entries <- if (.Platform$OS.type != "windows" && length(files) > 1L &&
+                 parallel::detectCores() > 1L) {
+    if (requireNamespace("data.table", quietly = TRUE)) data.table::setDTthreads(1L)
+    parallel::mclapply(files, read_one,
+                       mc.cores = min(parallel::detectCores() - 1L, 4L))
+  } else {
+    lapply(files, read_one)
+  }
+  out <- list()
+  for (i in seq_along(files)) {
+    if (!is.null(entries[[i]])) out[[.rep_rel(files[[i]], out_dir)]] <- entries[[i]]
   }
   if (!length(out)) NULL else out
+}
+
+#' Load the decoupleR network-status table
+#'
+#' Reads `DecoupleR/decoupleR_network_status_<comparison>.csv` (which resource
+#' was fetched live, which came from an offline copy, which failed) without
+#' mixing it into the activity-table index.
+#' @keywords internal
+.rep_load_decouple_status <- function(out_dir, comparison = NULL, max_rows = Inf) {
+  dec_dir <- file.path(out_dir, "DecoupleR")
+  if (!dir.exists(dec_dir)) return(NULL)
+  files <- list.files(dec_dir, pattern = "^decoupleR_network_status_.*\\.csv$",
+                      full.names = TRUE)
+  if (!length(files)) return(NULL)
+  if (!is.null(comparison) && !is.na(comparison) && nzchar(comparison)) {
+    mine <- files[grepl(paste0("_", gsub("([.])", "\\\\\\1", comparison), "\\.csv$"),
+                        basename(files))]
+    if (length(mine)) files <- mine
+  }
+  best <- files[which.max(file.mtime(files))]
+  .rep_read_table(best, max_rows = max_rows)
 }
 
 #' Load the per-TF regulon plots data written by run_decouple_analysis()
@@ -592,8 +666,12 @@ load_expressom_results <- function(
   resource_dirs <- list.dirs(dec_dir, recursive = FALSE)
   resource_dirs <- resource_dirs[file.exists(file.path(resource_dirs, "plots"))]
 
-  by_resource <- list()
-  for (rd in resource_dirs) {
+  # A big regulon (e.g. a TF with thousands of targets in CollecTRI) can make
+  # the per-TF tables heavy; the interactive tabs stay readable with this cap
+  # (the full CSVs remain in DecoupleR/<resource>/plots/).
+  per_table_rows <- min(max_rows, 5000)
+
+  load_resource <- function(rd) {
     resource  <- basename(rd)
     plots_dir <- file.path(rd, "plots")
     reg_files <- list.files(plots_dir, pattern = "^regulon_.*\\.csv$", full.names = TRUE)
@@ -603,21 +681,31 @@ load_expressom_results <- function(
     leading_edges <- list()
     for (f in reg_files) {
       tf <- sub("^regulon_", "", sub("\\.csv$", "", basename(f)))
-      tb <- .rep_read_table(f, max_rows = max_rows)
+      tb <- .rep_read_table(f, max_rows = per_table_rows)
       if (!is.null(tb) && nrow(tb)) regulons[[tf]] <- tb
     }
     for (f in le_files) {
       tf <- sub("^leading_edge_", "", sub("\\.csv$", "", basename(f)))
-      tb <- .rep_read_table(f, max_rows = max_rows)
+      tb <- .rep_read_table(f, max_rows = per_table_rows)
       if (!is.null(tb) && nrow(tb)) leading_edges[[tf]] <- tb
     }
     if (length(regulons) || length(leading_edges)) {
-      by_resource[[resource]] <- list(
-        resource      = resource,
-        regulons      = regulons,
-        leading_edges = leading_edges
-      )
-    }
+      list(resource = resource, regulons = regulons, leading_edges = leading_edges)
+    } else NULL
+  }
+
+  by_resource_list <- if (length(resource_dirs) > 1L &&
+                          .Platform$OS.type != "windows" &&
+                          parallel::detectCores() > 1L) {
+    if (requireNamespace("data.table", quietly = TRUE)) data.table::setDTthreads(1L)
+    parallel::mclapply(resource_dirs, load_resource,
+                       mc.cores = min(parallel::detectCores() - 1L, 4L))
+  } else {
+    lapply(resource_dirs, load_resource)
+  }
+  by_resource <- list()
+  for (e in by_resource_list) {
+    if (!is.null(e)) by_resource[[e$resource]] <- e
   }
 
   if (is.null(summary) && !length(by_resource)) return(NULL)

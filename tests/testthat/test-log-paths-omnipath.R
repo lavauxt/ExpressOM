@@ -84,3 +84,52 @@ test_that("OmniPathR uses current option prefixes and writes its log inside log/
   expect_equal(getOption("omnipathr.retry_downloads_in_seconds"), 2L)
   expect_null(getOption("omnipath.max_retries"))
 })
+
+# ---- OmniPath reachability probe ---------------------------------------------
+
+test_that("the OmniPath probe is a plain HTTP check and reports the real verdict", {
+  skip_on_cran()
+  skip_if_not_installed("OmnipathR")
+  skip_on_os("windows")  # file:// download method differs on Windows
+  out <- withr::local_tempdir()
+
+  live_file <- file.path(withr::local_tempdir(), "queries.json")
+  writeLines('{"query_type":"annotations;complexes;enzsub;interactions;intercell"}',
+             live_file)
+  ok <- .decouple_omnipath_probe(
+    api_url = paste0("file://", live_file),
+    out_dir = out, comp_name = "case_vs_ctrl"
+  )
+  expect_true(ok$available)
+  expect_null(ok$reason)
+
+  fail <- .decouple_omnipath_probe(
+    api_url = "http://127.0.0.1:9/queries",  # port 9: connection refused
+    timeout = 2,
+    out_dir = out, comp_name = "case_vs_ctrl"
+  )
+  expect_false(fail$available)
+  expect_match(fail$reason, "request failed")
+  # regression guard: a code-level failure must never be reported as offline
+  expect_false(grepl("not an exported object", fail$reason))
+})
+
+test_that("a broken HTTP configuration keeps the probe at NA instead of lying", {
+  skip_on_cran()
+  skip_if_not_installed("OmnipathR")
+  out <- withr::local_tempdir()
+  withr::local_options(list(download.file.method = "no-such-download-method"))
+  probe <- .decouple_omnipath_probe(
+    api_url = "https://omnipathdb.org/queries",
+    out_dir = out, comp_name = "case_vs_ctrl"
+  )
+  expect_true(is.na(probe$available))
+  expect_match(probe$reason, "method")
+})
+
+test_that("the network-status label follows the probe verdict only", {
+  expect_identical(.decouple_net_status_label(TRUE), "network (live)")
+  expect_identical(.decouple_net_status_label(FALSE),
+                   "offline (cache / bundled fallback)")
+  expect_identical(.decouple_net_status_label(NA), "network (OmniPath)")
+})

@@ -5,6 +5,8 @@
 \title{Build a parameter list for the pipeline}
 \usage{
 expressom_params(..., defaults = expressom_default_params())
+
+expressom_params(..., defaults = expressom_default_params())
 }
 \arguments{
 \item{...}{Arguments of [expressom()] to override (e.g. `level = "treated"`).}
@@ -16,13 +18,22 @@ from the parameters of a previous run.}
 \value{
 A named list accepted by [run_expressom_targets()] and
   [run_expressom_app()].
+
+A named list accepted by [run_expressom_targets()] and
+  [run_expressom_app()].
 }
 \description{
 Starts from [expressom_default_params()] and overrides the arguments you
 give. Unknown names are rejected, so a typo cannot silently be ignored.
 File and directory arguments are made absolute.
+
+Starts from [expressom_default_params()] and overrides the arguments you
+give. Unknown names are rejected, so a typo cannot silently be ignored.
+File and directory arguments are made absolute.
 }
 \examples{
+p <- expressom_params(out_dir = "results", level = "treated", base = "control")
+p$padj_cutoff
 p <- expressom_params(out_dir = "results", level = "treated", base = "control")
 p$padj_cutoff
 }

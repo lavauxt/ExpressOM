@@ -684,17 +684,20 @@
   build <- function(nodes) {
     lapply(nodes, function(nd) {
       title <- .xp_clean_title(nd$title)
+      help <- .xp_help_note_html(title)
       if (.xp_is_leaf(nd)) {
         n <<- n + 1L
         lid <- paste0(prefix, "_", n)
         leaves[[lid]] <<- nd$content
         shiny::tabPanel(
           title,
+          help,
           htmltools::tags$div(class = "xp-leaf", shiny::uiOutput(ns(lid)))
         )
       } else {
         shiny::tabPanel(
           title,
+          help,
           do.call(shiny::tabsetPanel, c(list(type = "pills"), build(nd$children)))
         )
       }

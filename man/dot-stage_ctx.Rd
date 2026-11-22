@@ -5,8 +5,12 @@
 \title{Restrict a stage context to the parameters its stage uses}
 \usage{
 .stage_ctx(ctx, stage)
+
+.stage_ctx(ctx, stage)
 }
 \description{
+Restrict a stage context to the parameters its stage uses
+
 Restrict a stage context to the parameters its stage uses
 }
 \keyword{internal}

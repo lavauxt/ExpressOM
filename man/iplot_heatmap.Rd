@@ -9,7 +9,8 @@ iplot_heatmap(
   groups = NULL,
   colors = .de_direction_colors(),
   max_genes = 50L,
-  title = NULL
+  title = NULL,
+  cluster_columns = TRUE
 )
 }
 \description{

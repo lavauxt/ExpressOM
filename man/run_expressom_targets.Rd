@@ -13,6 +13,16 @@ run_expressom_targets(
   script_lines = NULL,
   ...
 )
+
+run_expressom_targets(
+  params = NULL,
+  dir = NULL,
+  stages = NULL,
+  callr = TRUE,
+  reporter = "summary",
+  script_lines = NULL,
+  ...
+)
 }
 \arguments{
 \item{params}{Parameter list from [expressom_params()]. `NULL` re-uses the
@@ -40,13 +50,52 @@ The stage status table ([expressom_stage_status()]), invisibly. A
   stage that stops the pipeline (import, DESeq2 ...) raises an error; the
   report and the `.RData` are leaves that do not block each other, so if one
   of them fails the run completes with a warning naming it.
+
+The stage status table ([expressom_stage_status()]), invisibly. A
+  stage that stops the pipeline (import, DESeq2 ...) raises an error; the
+  report and the `.RData` are leaves that do not block each other, so if one
+  of them fails the run completes with a warning naming it.
 }
 \description{
 Writes the pipeline for `params` and runs `targets::tar_make()`. Stages whose
 inputs did not change are skipped; the interactive report is rebuilt when
 (and only when) one of the stages it reads from re-ran.
+
+Writes the pipeline for `params` and runs `targets::tar_make()`. Stages whose
+inputs did not change are skipped; the interactive report is rebuilt when
+(and only when) one of the stages it reads from re-ran.
+}
+\details{
+**Re-run only one stage.**
+
+`stages = "dge"` builds the DESeq2 stage and its ancestors, nothing more.
+To force a stage that is already up to date, invalidate it first:
+
+```r
+pipe <- expressom_targets_dir(out_dir)
+expressom_targets_invalidate(pipe, "decouple")
+run_expressom_targets(stages = c("decouple", "report"), dir = pipe)
+```
+
+The convenience wrapper `rerun_decouple_only(out_dir)` does exactly that
+for the decoupleR stage (the one most likely to need a manual re-run:
+OmniPath unreachable at first attempt and CollecTRI/DoRothEA served from
+an offline copy, PROGENy failed, …). Passing `stages = "report"`
+alone also works -- `targets` walks the ancestor graph, so `decouple` is
+rebuilt if it was invalidated, and everything else is skipped when
+nothing changed.
 }
 \examples{
+\dontrun{
+p <- expressom_params(
+  data_dir = "data", out_dir = "results", sample_table = "samples.csv",
+  level = "treated", base = "control", model = "~ condition"
+)
+run_expressom_targets(p)                      # first run: everything
+p$padj_cutoff <- 0.01
+run_expressom_targets(p)                      # only the stages using padj_cutoff
+run_expressom_targets(p, stages = "dge")      # up to the DESeq2 stage only
+}
 \dontrun{
 p <- expressom_params(
   data_dir = "data", out_dir = "results", sample_table = "samples.csv",

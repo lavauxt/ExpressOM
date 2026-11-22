@@ -1407,13 +1407,11 @@ run_isoform_switch <- function(
     dir.create(save_dir, recursive = TRUE)
   }
 
-  # NEW: initialise log_dir BEFORE building the checkpoint signature. The
-  # signature itself needs to call .predictor_environment_fingerprint(), which
-  # issues WSL probes and writes to its log_dir -- without this the probes
-  # would fall back to <cwd>/expressom_wsl_logs/ and the WSL command log
-  # would never reach <out_dir>/log/WSL/. Default keeps backward compatibility when
-  # the caller does not specify a log_dir: fall back to log/WSL (the pipeline
-  # convention) rather than log/ (older default).
+  # log_dir must exist BEFORE the checkpoint signature is built: the
+  # signature calls .predictor_environment_fingerprint(), which issues WSL
+  # probes and writes to its log_dir. Default keeps backward compatibility
+  # when the caller does not specify a log_dir: fall back to log/WSL (the
+  # pipeline convention) rather than log/ (older default).
   if (is.null(log_dir)) {
     log_dir <- file.path(.expressom_log_dir(out_dir, create = TRUE), "WSL")
   }

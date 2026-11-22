@@ -174,3 +174,121 @@ test_that(".xp_node drops empty nodes and keeps leaves", {
   expect_length(n$children, 1L)
   expect_false(.xp_is_leaf(n))
 })
+
+# ---- decoupleR subtree --------------------------------------------------------
+
+test_that("the decoupleR subtree has one tab per resource plus network status", {
+  skip_if_no_report_stack()
+  out <- withr::local_tempdir()
+  make_run_dir(out)
+  tree <- expressom_report_tabs(load_expressom_results(out))
+  func <- tree[[which(tree_titles(tree) == "Functional analysis")]]
+  titles <- vapply(func$children, `[[`, character(1), "title")
+  expect_true("decoupleR (TF / pathway activity)" %in% titles)
+  dec <- func$children[[which(titles == "decoupleR (TF / pathway activity)")]]
+  dec_titles <- vapply(dec$children, `[[`, character(1), "title")
+  expect_setequal(dec_titles, c("COLLECTRI", "PROGENY", "DOROTHEA", "Network status"))
+  # the network-status table is not listed as a resource tab of its own
+  expect_false("DECOUPLER" %in% dec_titles)
+})
+
+test_that("every decoupleR leaf builds (including the network-status table)", {
+  skip_if_no_report_stack()
+  out <- withr::local_tempdir()
+  make_run_dir(out)
+  res <- load_expressom_results(out)
+  st <- expressom_report_settings()
+  html <- paste(htmltools::renderTags(.xp_leaf_decouple_status(res, st)())$html, collapse = "")
+  expect_match(html, "offline (cache / bundled fallback)", fixed = TRUE)
+  expect_match(html, "decoupleR_network_status", fixed = TRUE)
+  for (entry in res$decouple) {
+    built <- .xp_leaf_decouple(res, st, entry)()
+    expect_false(inherits(built, "error"))
+    html <- paste(htmltools::renderTags(built)$html, collapse = "")
+    expect_match(html, "How to read this plot", fixed = TRUE)
+  }
+})
+
+test_that("a decoupleR table without score / p-value columns builds gracefully", {
+  skip_if_no_report_stack()
+  out <- withr::local_tempdir()
+  make_run_dir(out, decouple = FALSE)
+  res <- load_expressom_results(out)
+  st <- expressom_report_settings()
+  entry <- list(
+    resource = "DecoupleR",
+    path = "DecoupleR/decoupleR_network_status_x_vs_y.csv",
+    table = data.frame(resource = "collectri", status = "network (live)",
+                       n_edges = 10L, stringsAsFactors = FALSE)
+  )
+  html <- paste(htmltools::renderTags(.xp_leaf_decouple(res, st, entry)())$html, collapse = "")
+  expect_false(grepl("could not be built", html))
+  expect_match(html, "source(s) tested", fixed = TRUE)
+})
+
+# ---- merged enrichment tables -------------------------------------------------
+
+test_that(".rep_rbind_fill unions columns of mismatched tables", {
+  a <- data.frame(term = "x", padj = 0.1, extra_a = 1)
+  b <- data.frame(term = "y", padj = 0.2, extra_b = "z", stringsAsFactors = FALSE)
+  out <- .rep_rbind_fill(a, b, NULL, data.frame())
+  expect_equal(nrow(out), 2L)
+  expect_setequal(colnames(out), c("term", "padj", "extra_a", "extra_b"))
+  expect_true(is.na(out$extra_a[[2L]]))
+  expect_true(is.na(out$extra_b[[1L]]))
+  expect_null(.rep_rbind_fill())
+  # factors never require a shared level set
+  f <- .rep_rbind_fill(
+    data.frame(t = "a", g = factor("A")),
+    data.frame(t = "b", g = factor("B"))
+  )
+  expect_identical(f$g, c("A", "B"))
+})
+
+test_that("the merged-collection leaf handles tables with different columns", {
+  skip_if_no_report_stack()
+  out <- withr::local_tempdir()
+  make_run_dir(out)
+  res <- load_expressom_results(out)
+  st <- expressom_report_settings()
+  inv <- res$functional$inventory
+  ora <- inv[inv$source == "DGE" & grepl("ORA$", inv$method), , drop = FALSE]
+  expect_equal(nrow(ora), 2L)
+  # give the two ORA collections different columns to mimic mixed sources
+  first <- res$functional$tables[[ora$path[[1L]]]]
+  first$only_in_first <- seq_len(nrow(first))
+  res$functional$tables[[ora$path[[1L]]]] <- first
+  leaf <- .xp_leaf_enrichment_merged(res, st, ora$path, ora$collection, kind = "ora")
+  html <- paste(htmltools::renderTags(leaf())$html, collapse = "")
+  expect_false(grepl("could not be built", html))
+  expect_match(html, "rows across 2 collections", fixed = TRUE)
+})
+
+# ---- per-tab help -------------------------------------------------------------
+
+test_that("every known tab title has a one-line help and unknown titles get none", {
+  known <- c("Samples & QC", "Differential expression", "Functional analysis",
+             "Isoforms", "Figures", "Run info", "Volcano", "MA plot",
+             "Top genes heatmap", "Parameters", "Logs", "decoupleR (TF / pathway activity)")
+  for (t in known) expect_type(.xp_tab_help(t), "character")
+  expect_null(.xp_tab_help("No such tab"))
+  expect_null(.xp_tab_help(NA_character_))
+  # helper columns / identities are dropped when slim_tables is on
+  s <- expressom_report_settings()
+  expect_identical(s$table_rows, 5000L)
+  expect_true(s$slim_tables)
+})
+
+test_that("the htmltools renderer prepends the tab help", {
+  skip_if_not_installed("htmltools")
+  tree <- list(
+    .xp_node("Differential expression",
+             .xp_node("Volcano", content = function() htmltools::p("plot"))),
+    .xp_node("No such tab", content = function() htmltools::p("quiet"))
+  )
+  out <- .xp_render_tabset(tree)
+  html <- paste(htmltools::renderTags(htmltools::tagList(out$nav, out$content))$html, collapse = "")
+  expect_match(html, "Gene-level differential expression", fixed = TRUE)
+  expect_match(html, "points beyond the dashed lines", fixed = TRUE)
+  expect_false(grepl("xp-note\">quiet", html))
+})

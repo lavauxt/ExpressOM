@@ -5,14 +5,22 @@
 \title{Default parameters of the pipeline}
 \usage{
 expressom_default_params()
+
+expressom_default_params()
 }
 \value{
+A named list.
+
 A named list.
 }
 \description{
 The default value of every argument of [expressom()], as a named list.
+
+The default value of every argument of [expressom()], as a named list.
 }
 \examples{
+p <- expressom_default_params()
+p$padj_cutoff
 p <- expressom_default_params()
 p$padj_cutoff
 }

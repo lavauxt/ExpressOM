@@ -58,7 +58,7 @@ debug_wsl(use_wsl = FALSE, out_dir = "./results")
 ```
 
 This prints a checklist and writes a machine-readable summary to
-`results/Log/wsl_debug.json`:
+`results/log/Isoform/wsl_debug.json`:
 
 ```
 Checking external predictor tools in the native execution environment...
@@ -171,4 +171,15 @@ Internally, `run_isoform_switch()`:
 | `debug_wsl()` reports `wsl_available = FALSE` on Linux/macOS | No `bash` on `PATH`. This should not normally happen; check your shell configuration. |
 | A specific tool shows `✗` even though it is installed | It may only exist inside a conda environment with a different name than `isoform_tools`, or your shell's login profile does not source `conda.sh` automatically. Pass the correct `conda_env` name, or activate the environment before launching R. |
 | `Pfam-A.hmm not found` | Run `install_isoform_databases()` (with `use_wsl = TRUE` on Windows or `FALSE` on Linux/macOS). |
-| Predictor step silently skipped | Every predictor step is optional and fails soft: if a tool or database is missing, that section is skipped with a `message()` rather than stopping the whole pipeline. Check the console output and `results/isoform/Log/wsl_commands.log` for details. |
+| Predictor step silently skipped | Every predictor step is optional and fails soft: if a tool or database is missing, that section is skipped with a `message()` rather than stopping the whole pipeline. Check the console output and `results/isoform/log/Isoform/wsl_commands.log` for details. |
+
+## 6. Where the annotations appear in the report
+
+When `make_report = TRUE`, the predictor annotations (coding potential, signal
+peptides, Pfam domains) are carried into the switch plots written under
+`IsoformSwitch/DTU_DTE_report/plots/` and shown in the **Isoforms** tab of the
+unified HTML report. Every tab and sub-tab of that report opens with a short
+explanation of what it shows, so collaborators can read the results without
+knowing the pipeline; the static plots are collected in the *Isoforms →
+Plots* sub-tab, and the run's predictor logs are listed under *Run info →
+Logs*.

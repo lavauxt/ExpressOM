@@ -1648,14 +1648,8 @@ validate_environment <- function(
     }
   }
 
-  # ---- FIX: decoupleR presence check --------------------------------------
-  # The unified pipeline ships with `run_decouple = TRUE` by default, so
-  # when the functional module runs and decoupleR is missing, the user
-  # currently only learns about it via a generic "decoupleR activity
-  # inference failed. Skipping." warning emitted deep inside
-  # .stage_decouple(). This check surfaces the missing package *before*
-  # the pipeline starts, with an explicit install command, and reminds
-  # the user they can also set `run_decouple = FALSE` if they prefer.
+  # Surface a missing decoupleR package before the pipeline starts instead
+  # of a generic warning deep inside .stage_decouple().
   if (isTRUE(run_decouple) && !requireNamespace("decoupleR", quietly = TRUE)) {
     warning(
       "decoupleR activity inference is enabled (run_decouple = TRUE) but ",

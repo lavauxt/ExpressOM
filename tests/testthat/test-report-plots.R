@@ -165,3 +165,65 @@ test_that("enrichment networks and GSEA running scores are interactive when gene
   )
   expect_s3_class(.rep_iplot_gsea_running(tbl, dge), "plotly")
 })
+
+# ---- decoupleR ----------------------------------------------------------------
+
+test_that("iplot_decouple_activity renders activity tables and rejects tables without scores", {
+  skip_if_not_installed("plotly")
+  act <- data.frame(
+    statistic = "score_ulm_of_x_vs_y",
+    source = paste0("TF", 1:10),
+    condition = "x_vs_y",
+    score = c(seq(-3, 3, length.out = 10)),
+    p_value = seq(0.001, 0.2, length.out = 10),
+    stringsAsFactors = FALSE
+  )
+  p <- iplot_decouple_activity(act)
+  expect_s3_class(p, "plotly")
+  # only sources below the cut-off are drawn, sorted by |score|
+  built <- plotly::plotly_build(p)$x$data
+  n_drawn <- length(built[[1L]]$x)
+  expect_equal(n_drawn, sum(act$p_value < 0.05))
+  # text-like scores are coerced instead of crashing on abs()
+  act_chr <- act
+  act_chr$score <- as.character(act_chr$score)
+  expect_s3_class(iplot_decouple_activity(act_chr), "plotly")
+  # a network-status table has no score column: empty plot, not an error
+  status <- data.frame(resource = "collectri", status = "network (live)",
+                       n_edges = 10L, stringsAsFactors = FALSE)
+  expect_s3_class(iplot_decouple_activity(status), "plotly")
+})
+
+test_that("the p-value histogram pre-bins values and the QQ plot subsamples", {
+  skip_if_not_installed("plotly")
+  withr::local_seed(3)
+  pvals <- runif(20000)
+  h <- iplot_pvalue_hist(pvals)
+  built <- plotly::plotly_build(h)$x$data
+  expect_equal(length(built[[1L]]$x), 100L)  # 100 bins, not 20000 raw values
+  expect_equal(sum(built[[1L]]$y), 20000L)
+  expect_s3_class(iplot_pvalue_hist(numeric(0)), "plotly")
+  qq <- .rep_iplot_pvalue_qq(pvals)
+  q <- plotly::plotly_build(qq)$x$data
+  expect_lte(length(q[[1L]]$x), 4100L)
+  # the significant tail (smallest p-values = largest -log10(p)) is kept exactly
+  expect_gte(max(q[[1L]]$x), -log10(100 / 20000))
+})
+
+test_that("the GSEA running score curve is downsampled for large gene sets", {
+  skip_if_not_installed("plotly")
+  n <- 30000L
+  stat <- seq(n, 1)
+  genes <- paste0("g", seq_len(n))
+  dge <- data.frame(gene = genes, stat = stat, stringsAsFactors = FALSE)
+  tbl <- data.frame(
+    Description = "Big set",
+    p.adjust = 0.01,
+    core_enrichment = paste(paste0("g", seq_len(2000L) * 10L), collapse = "/"),
+    stringsAsFactors = FALSE
+  )
+  p <- plotly::plotly_build(.rep_iplot_gsea_running(tbl, dge))
+  curve <- p$x$data[[1L]]
+  expect_lte(length(curve$x), 2010L)  # <= 2000 points + the peak rank
+  expect_s3_class(.rep_iplot_gsea_running(tbl, dge), "plotly")
+})

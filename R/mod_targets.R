@@ -217,7 +217,7 @@ expressom_params_from_run <- function(out_dir) {
       common, "level", "base", "padj_cutoff",
       "run_decouple", "decouple_resources", "decouple_method",
       "decouple_min_size",
-      # NEW: |log2FC| floor used by the per-TF regulon volcano and the
+      # |log2FC| floor used by the per-TF regulon volcano and the
       # "Activé / Réprimé / Autre" categorisation in tf_regulon_summary.csv.
       # Adding it here means changing deg_lfc_cutoff invalidates the
       # decouple stage and regenerates those plots with the new floor.
@@ -656,8 +656,8 @@ write_expressom_targets <- function(params, dir = NULL, script_lines = NULL) {
 #'
 #' The convenience wrapper `rerun_decouple_only(out_dir)` does exactly that
 #' for the decoupleR stage (the one most likely to need a manual re-run:
-#' OmniPath unreachable at first attempt, static fallback used for
-#' CollecTRI/DoRothEA, PROGENy skipped, …). Passing `stages = "report"`
+#' OmniPath unreachable at first attempt and CollecTRI/DoRothEA served from
+#' an offline copy, PROGENy failed, …). Passing `stages = "report"`
 #' alone also works -- `targets` walks the ancestor graph, so `decouple` is
 #' rebuilt if it was invalidated, and everything else is skipped when
 #' nothing changed.
@@ -1151,7 +1151,7 @@ expressom_params_from_run <- function(out_dir) {
       common, "level", "base", "padj_cutoff",
       "run_decouple", "decouple_resources", "decouple_method",
       "decouple_min_size",
-      # NEW: |log2FC| floor used by the per-TF regulon volcano and the
+      # |log2FC| floor used by the per-TF regulon volcano and the
       # "Activé / Réprimé / Autre" categorisation in tf_regulon_summary.csv.
       # Adding it here means changing deg_lfc_cutoff invalidates the
       # decouple stage and regenerates those plots with the new floor.

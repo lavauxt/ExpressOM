@@ -5,6 +5,8 @@
 \title{Write the `targets` pipeline for a set of parameters}
 \usage{
 write_expressom_targets(params, dir = NULL, script_lines = NULL)
+
+write_expressom_targets(params, dir = NULL, script_lines = NULL)
 }
 \arguments{
 \item{params}{Parameter list from [expressom_params()].}
@@ -17,8 +19,15 @@ write_expressom_targets(params, dir = NULL, script_lines = NULL)
 }
 \value{
 A list with `dir`, `script`, `store` and `params_file` (invisibly).
+
+A list with `dir`, `script`, `store` and `params_file` (invisibly).
 }
 \description{
+Stores the parameters (`params.rds`) and generates the one-line
+`_targets.R`. Re-writing identical parameters leaves the store untouched, so
+nothing is invalidated; changed parameters invalidate exactly the stages
+that use them.
+
 Stores the parameters (`params.rds`) and generates the one-line
 `_targets.R`. Re-writing identical parameters leaves the store untouched, so
 nothing is invalidated; changed parameters invalidate exactly the stages

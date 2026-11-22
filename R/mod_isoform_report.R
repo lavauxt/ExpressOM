@@ -118,9 +118,8 @@ generate_dte_dtu_report <- function(dte_results,
     )
   }
 
-  # NEW: export the raw isoformFeatures table so the unified report can build
-  # an interactive dIF vs -log10(q) scatter without reloading the (large)
-  # SwitchList object.
+  # Export the raw isoformFeatures table so the unified report can build an
+  # interactive dIF vs -log10(q) scatter without reloading the SwitchList.
   has_switch <- !is.null(switch_list) &&
     !is.null(switch_list$isoformFeatures) &&
     nrow(switch_list$isoformFeatures) > 0

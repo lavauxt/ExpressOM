@@ -65,7 +65,7 @@
 #' @param level,base Contrast levels.
 #' @param test "Wald" or "LRT".
 #' @param n_genes Number of genes in the DE table.
-#' @param functional,isoform,figures Which optional stages to include.
+#' @param functional,isoform,figures,decouple Which optional stages to include.
 #' @param snapshot Write `log/expressom_run.json` (the run snapshot).
 #' @return `dir`.
 make_run_dir <- function(
@@ -77,6 +77,7 @@ make_run_dir <- function(
   functional = TRUE,
   isoform = TRUE,
   figures = TRUE,
+  decouple = TRUE,
   snapshot = TRUE,
   seed = 11L
 ) {
@@ -217,6 +218,74 @@ make_run_dir <- function(
     .fx_png(file.path(iso, "plots", "DTE_volcano.png"), "DTE")
     .fx_write(.fx_ora(20, "DTE GO"), dir, "IsoformSwitch", "DTE_Enrichment", "ORA", "GO", paste0("GO_BP_", cmp, ".csv"))
     .fx_write(.fx_ora(15, "DTU GO"), dir, "IsoformSwitch", "DTU_Enrichment", "ORA", "GO", paste0("GO_BP_", cmp, ".csv"))
+  }
+
+  # ---- decoupleR (layout written by run_decouple_analysis / .run_decouple_tf_regulon_plots)
+  if (decouple) {
+    n_src <- 30L
+    for (res_name in c("collectri", "progeny", "dorothea")) {
+      act <- data.frame(
+        statistic = paste0("score_ulm_of_", cmp),
+        source = paste0(toupper(substr(res_name, 1L, 3L)), "_SRC", seq_len(n_src)),
+        condition = cmp,
+        score = round(stats::rnorm(n_src, 0, 2), 4),
+        p_value = round(stats::runif(n_src)^2, 8),
+        stringsAsFactors = FALSE
+      )
+      .fx_write(act, dir, "DecoupleR", res_name,
+                paste0("DecoupleR_", res_name, "_", cmp, ".csv"))
+    }
+    .fx_write(
+      data.frame(
+        resource = c("collectri", "progeny", "dorothea"),
+        status = c("network (live)", "offline (cache / bundled fallback)", "failed (network)"),
+        n_edges = c(5478L, 1274L, 0L),
+        stringsAsFactors = FALSE
+      ),
+      dir, "DecoupleR", paste0("decoupleR_network_status_", cmp, ".csv")
+    )
+    # per-TF regulon artefacts (regulon + leading edge + summary)
+    plots <- file.path(dir, "DecoupleR", "collectri", "plots")
+    for (tf in c("ALPHA", "BETA")) {
+      reg <- data.frame(
+        target = paste0("GENE", seq_len(20L)),
+        mor = rep(c(1, -1), length.out = 20L),
+        log2FoldChange = round(stats::rnorm(20L, 0, 1.5), 4),
+        padj = round(stats::runif(20L), 6),
+        stat = round(stats::rnorm(20L, 0, 3), 4),
+        Regulation = rep(
+          c("Not significant", "Activated (expected)", "Repressed (expected)"),
+          length.out = 20L
+        ),
+        stringsAsFactors = FALSE
+      )
+      .fx_write(reg, plots, paste0("regulon_", tf, ".csv"))
+      .fx_write(
+        data.frame(
+          rank = seq_len(20L),
+          target = reg$target,
+          stat = reg$stat,
+          stringsAsFactors = FALSE
+        ),
+        plots, paste0("leading_edge_", tf, ".csv")
+      )
+    }
+    .fx_write(
+      data.frame(
+        resource = "collectri",
+        source = c("ALPHA", "BETA"),
+        score = c(3.2, -2.1),
+        p_value = c(1e-4, 2e-3),
+        n_targets_total = c(500L, 500L),
+        n_targets_matched = c(20L, 20L),
+        n_activated = c(7L, 0L),
+        n_repressed = c(0L, 6L),
+        n_other_var = c(2L, 1L),
+        n_ns = c(11L, 13L),
+        stringsAsFactors = FALSE
+      ),
+      dir, "DecoupleR", "tf_regulon_summary.csv"
+    )
   }
 
   # ---- static figures

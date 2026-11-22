@@ -5,15 +5,23 @@
 \title{Recover the parameters of a previous run}
 \usage{
 expressom_params_from_run(out_dir)
+
+expressom_params_from_run(out_dir)
 }
 \arguments{
 \item{out_dir}{Output directory of a previous run.}
 }
 \value{
 A parameter list (see [expressom_params()]).
+
+A parameter list (see [expressom_params()]).
 }
 \description{
-Reads the parameter snapshot (`Log/expressom_run.json`) that [expressom()]
+Reads the parameter snapshot (`log/expressom_run.json`) that [expressom()]
+and the pipeline write next to the results, so a run can be reproduced or
+tweaked ("same as before, but another cut-off").
+
+Reads the parameter snapshot (`log/expressom_run.json`) that [expressom()]
 and the pipeline write next to the results, so a run can be reproduced or
 tweaked ("same as before, but another cut-off").
 }

@@ -7,8 +7,14 @@
 .predictor_environment_fingerprint(
   wsl_distro = "Ubuntu",
   use_wsl = (.Platform$OS.type == "windows"),
-  conda_env = "isoform_tools"
+  conda_env = "isoform_tools",
+  log_dir = NULL
 )
+}
+\arguments{
+\item{log_dir}{Directory for the WSL command log; `NULL` falls back to
+`getOption("expressom.wsl_log_dir")` or `<cwd>/expressom_wsl_logs`. The
+pipeline always passes `<out_dir>/log/WSL`.}
 }
 \description{
 Fingerprint of the external predictor environment
