@@ -7,10 +7,19 @@
 .rep_iplot_pvalue_qq(pvalues, max_points = 4000L)
 }
 \description{
+How to read it (the subtitle repeats this): every point is one gene; the x
+value is the -log10(p) that gene's rank would give without any signal, the
+y value is what was actually observed. Points on the dashed diagonal mean
+"as expected by chance"; a cloud above it means more small p-values than
+chance produces, i.e. real signal.
+}
+\details{
 p-values that underflowed to exactly 0 (common in DESeq2 for very strong
 hits) have no finite -log10; flooring them at .Machine$double.xmin (~308)
 once stretched the y axis to 64x the expected range, crushing all real
-points into the corner. They are clipped at a display cap tied to the
-expected range and shown as an annotated count instead.
+points into the bottom-left corner. They are clipped at a display cap tied
+to the expected range and shown as an annotated count instead. Axes get
+their own ranges (a shared one wasted the x axis), and the points are SVG,
+not WebGL, so the plot also renders where WebGL is unavailable.
 }
 \keyword{internal}

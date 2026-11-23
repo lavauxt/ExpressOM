@@ -9,5 +9,9 @@ iplot_pvalue_hist(p, title = "p-value distribution", nbins = 100L)
 \description{
 Bins are computed in R and drawn as a bar chart: passing the raw p-values
 to plotly's histogram would embed every observation in the HTML (a 30k-gene
-run costs several MB per plot).
+run costs several MB per plot). A dashed line marks the height every bar
+would have without any signal (n / bins), and the title states how many
+genes pass p < 0.05, so the plot reads without explanation: a flat bulk
+along the line plus a raised first bar is the healthy pattern when real
+signal exists.
 }

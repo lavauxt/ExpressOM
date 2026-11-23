@@ -595,28 +595,65 @@ iplot_dtu <- function(dtu, top_n = 30L, padj_cutoff = 0.05) {
 #'
 #' Bins are computed in R and drawn as a bar chart: passing the raw p-values
 #' to plotly's histogram would embed every observation in the HTML (a 30k-gene
-#' run costs several MB per plot).
+#' run costs several MB per plot). A dashed line marks the height every bar
+#' would have without any signal (n / bins), and the title states how many
+#' genes pass p < 0.05, so the plot reads without explanation: a flat bulk
+#' along the line plus a raised first bar is the healthy pattern when real
+#' signal exists.
 #' @export
 iplot_pvalue_hist <- function(p, title = "p-value distribution", nbins = 100L) {
   .rep_require("plotly")
   p <- .rep_num(p)
-  p <- p[is.finite(p)]
+  # DE p-values must lie in [0, 1]. Exclude missing, infinite and malformed
+  # values rather than allowing hist() to silently extend the binning range.
+  p <- p[is.finite(p) & p >= 0 & p <= 1]
   if (length(p) == 0L) {
-    return(.rep_empty_plot("No p-values"))
+    return(.rep_empty_plot("No valid p-values in [0, 1]"))
   }
   nbins <- max(10L, min(as.integer(nbins %||% 100L), 200L))
   brks <- seq(0, 1, length.out = nbins + 1L)
-  h <- graphics::hist(p, breaks = brks, plot = FALSE)
+  h <- graphics::hist(p, breaks = brks, include.lowest = TRUE, right = FALSE,
+                      plot = FALSE)
   mids <- h$mids
+  n <- length(p)
+  n_small <- sum(p < 0.05)
+  ref <- n / nbins
+  subtitle <- paste0(
+    .xp_fmt(n_small), " of ", .xp_fmt(n), " genes (",
+    round(100 * n_small / n), "%) with p < 0.05",
+    " \u2014 dashed line: no-signal expectation"
+  )
+  y_max <- max(c(h$counts, ref), na.rm = TRUE)
   plotly::plot_ly(
-    x = mids, y = h$counts, type = "bar", width = 0.9 / nbins,
+    # Do not pass `width` to plot_ly(): it is the HTML widget pixel width,
+    # not the bar width. Passing 0.9 / nbins here made the whole widget about
+    # 0.009 px wide, which explains the collapsed chart in the report.
+    x = mids, y = h$counts, type = "bar",
     marker = list(color = "#56B4E9", line = list(color = "white", width = 0.5)),
-    hovertemplate = "p in %{x:.2f}<br>count = %{y}<extra></extra>"
+    hovertemplate = "p-value bin centred at %{x:.2f}<br>genes = %{y}<extra></extra>",
+    name = "genes"
   ) |>
+    # A layout shape is more reliable than a second scatter trace here: it
+    # cannot change the bar trace's axis scaling or trigger an unwanted legend.
     plotly::layout(
-      title = list(text = title, x = 0.02),
-      xaxis = list(title = "p-value", range = c(0, 1)),
-      yaxis = list(title = "count")
+      title = list(text = paste0(title, "<br><sup>", subtitle, "</sup>"), x = 0.02),
+      xaxis = list(title = "Raw p-value", range = c(0, 1), fixedrange = FALSE),
+      yaxis = list(title = "Number of genes", range = c(0, y_max * 1.12)),
+      showlegend = FALSE,
+      bargap = 0.1,
+      autosize = TRUE,
+      shapes = list(list(
+        type = "line", xref = "paper", x0 = 0, x1 = 1,
+        yref = "y", y0 = ref, y1 = ref,
+        line = list(color = "#d55e00", dash = "dash", width = 1.5)
+      )),
+      annotations = list(list(
+        xref = "paper", x = 0.99, xanchor = "right",
+        yref = "y", y = ref, yshift = 8,
+        text = paste0("Uniform expectation: ", .xp_fmt(round(ref)), " genes/bin"),
+        showarrow = FALSE, font = list(size = 10, color = "#a34b00")
+      )),
+      margin = list(b = 45, l = 65, t = 70, r = 15)
     ) |>
     .rep_plotly_config("pvalue_hist")
 }
@@ -1587,11 +1624,19 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
 
 #' Interactive p-value Q-Q plot
 #'
+#' How to read it (the subtitle repeats this): every point is one gene; the x
+#' value is the -log10(p) that gene's rank would give without any signal, the
+#' y value is what was actually observed. Points on the dashed diagonal mean
+#' "as expected by chance"; a cloud above it means more small p-values than
+#' chance produces, i.e. real signal.
+#'
 #' p-values that underflowed to exactly 0 (common in DESeq2 for very strong
 #' hits) have no finite -log10; flooring them at .Machine$double.xmin (~308)
 #' once stretched the y axis to 64x the expected range, crushing all real
-#' points into the corner. They are clipped at a display cap tied to the
-#' expected range and shown as an annotated count instead.
+#' points into the bottom-left corner. They are clipped at a display cap tied
+#' to the expected range and shown as an annotated count instead. Axes get
+#' their own ranges (a shared one wasted the x axis), and the points are SVG,
+#' not WebGL, so the plot also renders where WebGL is unavailable.
 #' @keywords internal
 .rep_iplot_pvalue_qq <- function(pvalues, max_points = 4000L) {
   .rep_require("plotly")
@@ -1615,19 +1660,31 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
   } else {
     idx <- seq_len(n)
   }
-  lim <- max(c(expected, observed), na.rm = TRUE) * 1.05
-  plotly::plot_ly(x = expected[idx], y = observed[idx], type = "scattergl", mode = "markers",
-                  marker = list(size = 5, color = "#0072B2", opacity = 0.55),
+  x_lim <- max(expected, na.rm = TRUE) * 1.05
+  y_lim <- cap * 1.05
+  plotly::plot_ly(x = expected[idx], y = observed[idx], type = "scatter", mode = "markers",
+                  marker = list(size = 4.5, color = "#0072B2", opacity = 0.55),
                   hovertemplate = "Expected = %{x:.2f}<br>Observed = %{y:.2f}<extra></extra>") |>
-    plotly::add_lines(x = c(0, lim), y = c(0, lim), name = "Null expectation",
-                      line = list(color = "#d55e00", dash = "dash"), hoverinfo = "skip") |>
+    plotly::add_lines(x = c(0, x_lim), y = c(0, x_lim), name = "Null expectation",
+                      line = list(color = "#d55e00", dash = "dash", width = 1.5),
+                      hoverinfo = "skip") |>
     plotly::layout(
-      title = list(text = "P-value Q-Q plot", x = 0.02),
-      xaxis = list(title = "Expected -log10(p)", range = c(0, lim)),
-      yaxis = list(title = "Observed -log10(p)", range = c(0, lim)),
+      title = list(
+        text = paste0("P-value Q-Q plot",
+                      "<br><sup>points above the dashed line = more small p-values than expected by chance</sup>"),
+        x = 0.02
+      ),
+      xaxis = list(title = "Expected -log10(p)", range = c(0, x_lim)),
+      yaxis = list(title = "Observed -log10(p)", range = c(0, y_lim)),
+      showlegend = FALSE,
+      margin = list(b = 40, l = 60, t = 60, r = 10),
       annotations = if (n_clipped > 0L) list(list(
-        x = cap, y = cap, xanchor = "right", yanchor = "top",
-        text = paste0(n_clipped, " p-value(s) underflowed to 0 (shown at the cap)"),
+        # xref/yref "paper": plotly silently drops annotations placed outside
+        # the axis range, and the cap sits far beyond the x-axis end
+        xref = "paper", yref = "paper", x = 0.98, y = 0.97,
+        xanchor = "right", yanchor = "top",
+        text = paste0(.xp_fmt(n_clipped), " p-value(s) below 1e-", floor(cap),
+                      " \u2014 shown at the cap (top edge)"),
         showarrow = FALSE, font = list(size = 11, color = "#8a5a00")
       )) else list()
     ) |>

@@ -225,6 +225,26 @@ test_that("the p-value histogram pre-bins values and the QQ plot subsamples", {
   expect_gte(max(q[[1L]]$x), -log10(100 / 20000))
 })
 
+test_that("the p-value histogram uses one stable bar trace and a layout reference line", {
+  skip_if_not_installed("plotly")
+  withr::local_seed(5)
+  pvals <- c(runif(15000), runif(2000) / 50, NA_real_, -0.2, 1.2)
+  x <- plotly::plotly_build(iplot_pvalue_hist(pvals))$x
+  expect_equal(length(x$data), 1L)             # reference is a shape, not a second trace
+  # `plot_ly(width=...)` controls the widget's CSS width in pixels; it must
+  # remain unset so the widget can fill the report column responsively.
+  expect_null(x$layout$width)
+  expect_equal(length(x$data[[1L]]$x), 100L)
+  expect_equal(sum(x$data[[1L]]$y), 17000L)    # invalid values are excluded
+  ref <- x$layout$shapes[[1L]]
+  expect_equal(ref$x0, 0)
+  expect_equal(ref$x1, 1)
+  expect_equal(ref$y0, 170)
+  expect_match(ref$line$dash, "dash")
+  expect_match(x$layout$title$text, "with p < 0.05", fixed = TRUE)
+  expect_gte(x$layout$yaxis$range[[2L]], max(x$data[[1L]]$y))
+})
+
 test_that("the QQ plot clips p-values that underflowed to 0 instead of stretching the axes", {
   skip_if_not_installed("plotly")
   withr::local_seed(4)
@@ -234,11 +254,18 @@ test_that("the QQ plot clips p-values that underflowed to 0 instead of stretchin
   # sat at -log10(2.2e-308) = 307.65 vs an expected max of ~4.8, crushing
   # every other point into the bottom-left corner
   expect_lte(max(q$data[[1L]]$y), max(20, 1.5 * max(-log10((seq_along(pvals) - 0.5) / length(pvals)))))
-  # the cap is annotated
+  # the cap is annotated; plotly drops annotations outside the axis range,
+  # so it must use paper coordinates
   ann <- q$layout$annotations
-  expect_true(length(ann) >= 1L && grepl("underflowed", ann[[1L]]$text, fixed = TRUE))
-  # and both axes stay bounded by the same limit
-  expect_lte(q$layout$yaxis$range[[2L]], max(q$data[[1L]]$y) * 1.05 + 1e-6)
+  expect_true(length(ann) >= 1L && grepl("shown at the cap", ann[[1L]]$text, fixed = TRUE))
+  expect_identical(ann[[1L]]$xref, "paper")
+  # each axis keeps its own range (a shared one wasted the x axis)
+  expect_lte(q$layout$yaxis$range[[2L]], 21 + 1e-6)
+  expect_lte(q$layout$xaxis$range[[2L]], -log10(0.5 / 10000) * 1.05 + 1e-6)
+  # points render as SVG, not WebGL, so the plot works without a GL context
+  expect_identical(q$data[[1L]]$type, "scatter")
+  # the subtitle explains how to read the plot
+  expect_match(q$layout$title$text, "more small p-values than expected", fixed = TRUE)
 })
 
 test_that("the GSEA running score curve is downsampled for large gene sets", {

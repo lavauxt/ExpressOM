@@ -487,15 +487,14 @@ expressom_report_settings <- function(
     tbl <- res$dge$results
     htmltools::tagList(
       .xp_note(
-        "P-value diagnostics are descriptive: a uniform-like bulk of null p-values " ,
-        "and a left-tail excess of small p-values are generally expected when signal " ,
-        "is present. Interpret these plots together with the design, filtering, " ,
-        "dispersion modelling and sample-level QC."
+        "The histogram shows the distribution of raw DE p-values across tested genes. ",
+        "A roughly level distribution is expected when most genes have no change; an excess ",
+        "of very small p-values (bars near 0) can indicate differential-expression signal. ",
+        "The dashed orange line is the expected count per bin if p-values were uniformly ",
+        "distributed. This is a descriptive check, not proof of true positives: also consider ",
+        "adjusted p-values, effect sizes, the experimental design and sample-level QC."
       ),
-      .xp_two_col(
-        iplot_pvalue_hist(tbl$pvalue, "Raw p-value distribution"),
-        .rep_iplot_pvalue_qq(tbl$pvalue)
-      ),
+      iplot_pvalue_hist(tbl$pvalue, "Raw p-value distribution"),
       htmltools::tags$h4("Largest absolute effects"),
       .rep_iplot_ranked_effects(tbl, top_n = 25L)
     )
