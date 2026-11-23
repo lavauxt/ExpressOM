@@ -216,9 +216,10 @@ Every tab and sub-tab opens with a short italic note explaining what the tab sho
 A self-contained HTML must carry every widget in the file, so the builder works hard to keep it light (a 30k-gene run typically lands around 10 MB instead of 60+):
 
 * **Tables are capped and slimmed.** `table_rows` (default `5000`) caps the rows embedded per DT table -- the caption says so and the complete file stays in the run folder; `slim_tables = TRUE` (default) drops helper columns (`lfcSE`, `stat`, Entrez IDs, descriptions...) from the *display*, the CSVs in the run folder always keep every column.
-* **Diagnostic plots are pre-aggregated.** p-value histograms are binned in R, the Q-Q plot keeps the significant tail exactly and thins the null bulk, GSEA running-score curves are downsampled, and the expression boxplot / RLE / density use a deterministic 800-gene span of the expression range.
-* **Widgets initialise lazily.** everything inside a hidden tab is moved into an inert `<template>` at load and rendered when the tab is first opened (see `window.__xpLazyTabs.deferred` for how many widgets were deferred on your page).
-* **decoupleR tables are loaded per comparison** and in parallel; the network-status CSV is shown as its own sub-tab instead of being merged into the enrichment tables (it has no activity columns, which previously broke the *Merged table* tab).
+* **Diagnostic plots are pre-aggregated.** p-value histograms are binned in R, the Q-Q plot keeps the significant tail exactly and thins the null bulk (p-values that underflowed to 0 are clipped at a display cap and annotated, so one 10^-300 hit cannot crush the axes), GSEA running-score curves are downsampled, and the expression boxplot / RLE / density use a deterministic 800-gene span of the expression range. Boxplots and RLE send only the five box statistics per sample, not every gene value.
+* **Widgets initialise lazily.** everything inside a hidden tab is moved into an inert `<template>` at load and rendered when the tab is first opened -- scoped to that tab's widgets, so opening one tab does not rescan the whole document (see `window.__xpLazyTabs.deferred` for how many widgets were deferred on your page).
+* **One tab per enrichment collection.** every FGSEA / ORA / GSEA collection keeps its own sub-tab with its own table and plot; there is no merged cross-collection table (it duplicated every collection's rows in one huge DT and rendered the same data under every tab because of a lazy-promise bug).
+* **decoupleR tables are loaded per comparison** and in parallel; the network-status CSV is shown as its own sub-tab instead of being merged into the enrichment tables (it has no activity columns, which previously broke the cross-collection merge).
 
 `audit_expressom_report("ExpressOM_report_x_vs_y.html")` prints the size breakdown (widgets, biggest DT tables and plotly payloads) if you want to see where the megabytes are.
 
@@ -845,7 +846,7 @@ testthat::test_package("ExpressOM")
 |---|---|
 | `test-report-data.R` | `load_expressom_results()` on a synthetic run directory (discovery, missing stages, JSON snapshot, named colour vectors, decoupleR tables / status / regulons) |
 | `test-report-plots.R` | plotly builders (volcano, MA, PCA, heatmap, enrichment, decoupleR activity, p-value histogram, Q-Q) and their edge cases and payload caps |
-| `test-report-tabs.R` | the tab tree shared by the HTML report and the app (`expressom_report_tabs()`), error isolation per tab, merged-collection tables with mismatched columns, the decoupleR subtree + network-status tab, per-tab help notes |
+| `test-report-tabs.R` | the tab tree shared by the HTML report and the app (`expressom_report_tabs()`), error isolation per tab, per-collection enrichment tabs (each renders its own source table), the decoupleR subtree + network-status tab, per-tab help notes |
 | `test-report-build.R` | end-to-end `build_expressom_report()`: self-contained HTML, tab titles, graceful degradation (skipped without `pandoc`/report packages) |
 | `test-stages.R` | refactored stage functions; checks by code walking that each stage only reads the parameters of its group |
 | `test-targets-params.R` | `expressom_params()`, defaults, path normalisation, run snapshots, parameter hashing per stage |

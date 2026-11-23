@@ -136,6 +136,21 @@ test_that("extended RNA-seq QC and diagnostic charts are interactive widgets", {
   expect_s3_class(.rep_iplot_ranked_effects(res$dge$results), "plotly")
 })
 
+test_that("the boxplot and RLE charts embed box statistics, not raw values", {
+  skip_if_not_installed("plotly")
+  res <- fixture_results()
+  mat <- res$dge$expression$distribution_matrix
+  # pre-computed boxes: one trace, 5 stats per sample, no gene-level values
+  b <- plotly::plotly_build(.rep_iplot_expression_boxplot(mat))$x$data
+  expect_equal(length(b), 1L)
+  expect_equal(length(b[[1L]]$q1), ncol(mat))
+  expect_null(b[[1L]]$y)
+  r <- plotly::plotly_build(.rep_iplot_rle(mat))$x$data
+  expect_equal(length(r), 1L)
+  expect_equal(length(r[[1L]]$median), ncol(mat))
+  expect_null(r[[1L]]$y)
+})
+
 test_that("enrichment bubble and gene-overlap plots handle suitable tables", {
   skip_if_not_installed("plotly")
   res <- fixture_results()
@@ -208,6 +223,22 @@ test_that("the p-value histogram pre-bins values and the QQ plot subsamples", {
   expect_lte(length(q[[1L]]$x), 4100L)
   # the significant tail (smallest p-values = largest -log10(p)) is kept exactly
   expect_gte(max(q[[1L]]$x), -log10(100 / 20000))
+})
+
+test_that("the QQ plot clips p-values that underflowed to 0 instead of stretching the axes", {
+  skip_if_not_installed("plotly")
+  withr::local_seed(4)
+  pvals <- c(runif(9997), 0, 0, 0)   # 3 genes with p == 0 (DESeq2 underflow)
+  q <- plotly::plotly_build(.rep_iplot_pvalue_qq(pvals))$x
+  # no trace value may exceed the display cap: previously these three points
+  # sat at -log10(2.2e-308) = 307.65 vs an expected max of ~4.8, crushing
+  # every other point into the bottom-left corner
+  expect_lte(max(q$data[[1L]]$y), max(20, 1.5 * max(-log10((seq_along(pvals) - 0.5) / length(pvals)))))
+  # the cap is annotated
+  ann <- q$layout$annotations
+  expect_true(length(ann) >= 1L && grepl("underflowed", ann[[1L]]$text, fixed = TRUE))
+  # and both axes stay bounded by the same limit
+  expect_lte(q$layout$yaxis$range[[2L]], max(q$data[[1L]]$y) * 1.05 + 1e-6)
 })
 
 test_that("the GSEA running score curve is downsampled for large gene sets", {

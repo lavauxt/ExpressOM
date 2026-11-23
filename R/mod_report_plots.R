@@ -1411,21 +1411,46 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
   .rep_require("plotly")
   mat <- .rep_matrix_for_qc(mat)
   if (is.null(mat)) return(.rep_empty_plot("Expression matrix not available"))
-  long <- data.frame(
-    sample = rep(colnames(mat), each = nrow(mat)),
-    expression = as.vector(log2(mat + 1)),
-    stringsAsFactors = FALSE
+  # Box statistics are computed in R and drawn as a single trace with
+  # pre-computed q1/median/q3/whiskers: passing every gene x sample value to
+  # plotly's box trace embeds them all in the HTML (an 800-gene x 24-sample
+  # run cost ~10 MB for one plot) for a shape five numbers already describe.
+  q <- function(v) {
+    v <- v[is.finite(v)]
+    if (length(v) < 2L) return(c(NA_real_, NA_real_, NA_real_, NA_real_, NA_real_))
+    stats::quantile(v, probs = c(0.25, 0.5, 0.75), names = FALSE, na.rm = TRUE) |>
+      (\(h) {
+        iqr <- h[[3L]] - h[[1L]]
+        lo <- max(h[[1L]] - 1.5 * iqr, min(v))
+        hi <- min(h[[3L]] + 1.5 * iqr, max(v))
+        c(h[[1L]], h[[2L]], h[[3L]], lo, hi)
+      })()
+  }
+  cols <- colnames(mat)
+  stats <- vapply(cols, function(s) q(log2(mat[, s] + 1)), numeric(5L))
+  if (all(is.na(stats))) return(.rep_empty_plot("No finite expression values"))
+  df <- data.frame(
+    sample = cols,
+    q1 = stats[1L, ], med = stats[2L, ], q3 = stats[3L, ],
+    lo = stats[4L, ], hi = stats[5L, ],
+    stringsAsFactors = FALSE, check.names = FALSE
   )
-  long <- long[is.finite(long$expression), , drop = FALSE]
+  hover <- paste0(
+    "<b>", df$sample, "</b><br>",
+    "median = ", sprintf("%.2f", df$med), "<br>",
+    "IQR = ", sprintf("%.2f", df$q1), " \u2013 ", sprintf("%.2f", df$q3)
+  )
   plotly::plot_ly(
-    long, x = ~sample, y = ~expression, type = "box", color = ~sample,
-    boxpoints = FALSE, jitter = 0.25, pointpos = 0,
-    hovertemplate = "%{x}<br>log2(normalised count + 1) = %{y:.2f}<extra></extra>"
+    df, x = ~sample,
+    lowerfence = ~lo, upperfence = ~hi,
+    q1 = ~q1, median = ~med, q3 = ~q3,
+    type = "box", name = "",
+    hovertext = hover, hoverinfo = "text"
   ) |>
     plotly::layout(
       title = list(text = "Expression distribution by sample", x = 0.02),
       showlegend = FALSE,
-      xaxis = list(title = "Sample", tickangle = -35),
+      xaxis = list(title = "Sample", tickangle = -35, range = c(-0.5, nrow(df) - 0.5)),
       yaxis = list(title = "log2(normalised count + 1)")
     ) |>
     .rep_plotly_config("expression_boxplot")
@@ -1495,20 +1520,38 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
   x <- log2(mat + 1)
   gene_medians <- apply(x, 1L, stats::median, na.rm = TRUE)
   rle <- sweep(x, 1L, gene_medians, FUN = "-")
-  long <- data.frame(
-    sample = rep(colnames(rle), each = nrow(rle)),
-    rle = as.vector(rle), stringsAsFactors = FALSE
+  # same pre-computed box statistics as the expression boxplot: one trace,
+  # five numbers per sample, no raw values in the HTML
+  q <- function(v) {
+    v <- v[is.finite(v)]
+    if (length(v) < 2L) return(c(NA_real_, NA_real_, NA_real_, NA_real_, NA_real_))
+    h <- stats::quantile(v, probs = c(0.25, 0.5, 0.75), names = FALSE, na.rm = TRUE)
+    iqr <- h[[3L]] - h[[1L]]
+    c(h[[1L]], h[[2L]], h[[3L]], max(h[[1L]] - 1.5 * iqr, min(v)),
+      min(h[[3L]] + 1.5 * iqr, max(v)))
+  }
+  cols <- colnames(rle)
+  stats <- vapply(cols, function(s) q(rle[, s]), numeric(5L))
+  if (all(is.na(stats))) return(.rep_empty_plot("No finite RLE values"))
+  df <- data.frame(
+    sample = cols,
+    q1 = stats[1L, ], med = stats[2L, ], q3 = stats[3L, ],
+    lo = stats[4L, ], hi = stats[5L, ],
+    stringsAsFactors = FALSE, check.names = FALSE
   )
-  long <- long[is.finite(long$rle), , drop = FALSE]
   plotly::plot_ly(
-    long, x = ~sample, y = ~rle, type = "box", color = ~sample,
-    boxpoints = FALSE,
-    hovertemplate = "%{x}<br>relative log expression = %{y:.3f}<extra></extra>"
+    df, x = ~sample,
+    lowerfence = ~lo, upperfence = ~hi,
+    q1 = ~q1, median = ~med, q3 = ~q3,
+    type = "box", name = "",
+    hovertext = paste0("<b>", df$sample, "</b><br>median RLE = ",
+                       sprintf("%.3f", df$med)),
+    hoverinfo = "text"
   ) |>
     plotly::layout(
       title = list(text = "Relative log expression by sample", x = 0.02),
       showlegend = FALSE,
-      xaxis = list(title = "Sample", tickangle = -35),
+      xaxis = list(title = "Sample", tickangle = -35, range = c(-0.5, nrow(df) - 0.5)),
       yaxis = list(title = "log2 count + 1 minus gene median"),
       shapes = list(.rep_hline(0, "#777777"))
     ) |>
@@ -1543,6 +1586,12 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
 }
 
 #' Interactive p-value Q-Q plot
+#'
+#' p-values that underflowed to exactly 0 (common in DESeq2 for very strong
+#' hits) have no finite -log10; flooring them at .Machine$double.xmin (~308)
+#' once stretched the y axis to 64x the expected range, crushing all real
+#' points into the corner. They are clipped at a display cap tied to the
+#' expected range and shown as an annotated count instead.
 #' @keywords internal
 .rep_iplot_pvalue_qq <- function(pvalues, max_points = 4000L) {
   .rep_require("plotly")
@@ -1552,6 +1601,11 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
   n <- length(p)
   expected <- -log10((seq_len(n) - 0.5) / n)
   observed <- -log10(pmax(p, .Machine$double.xmin))
+  # display cap: the diagonal must stay readable, so no point may sit further
+  # than ~1.5x the largest expected rank value (or 20, whichever is larger)
+  cap <- max(20, 1.5 * max(expected, na.rm = TRUE))
+  n_clipped <- sum(observed > cap)
+  observed <- pmin(observed, cap)
   # Subsample the bulk but keep every small p (the informative tail): the
   # full 30k-point scatter embedded several MB of JSON for no visual gain.
   if (n > max_points) {
@@ -1561,7 +1615,7 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
   } else {
     idx <- seq_len(n)
   }
-  lim <- max(c(expected, observed), na.rm = TRUE)
+  lim <- max(c(expected, observed), na.rm = TRUE) * 1.05
   plotly::plot_ly(x = expected[idx], y = observed[idx], type = "scattergl", mode = "markers",
                   marker = list(size = 5, color = "#0072B2", opacity = 0.55),
                   hovertemplate = "Expected = %{x:.2f}<br>Observed = %{y:.2f}<extra></extra>") |>
@@ -1569,8 +1623,13 @@ iplot_tf_leading_edge <- function(le_df, dge_results, tf, test_type = "Wald") {
                       line = list(color = "#d55e00", dash = "dash"), hoverinfo = "skip") |>
     plotly::layout(
       title = list(text = "P-value Q-Q plot", x = 0.02),
-      xaxis = list(title = "Expected -log10(p)"),
-      yaxis = list(title = "Observed -log10(p)")
+      xaxis = list(title = "Expected -log10(p)", range = c(0, lim)),
+      yaxis = list(title = "Observed -log10(p)", range = c(0, lim)),
+      annotations = if (n_clipped > 0L) list(list(
+        x = cap, y = cap, xanchor = "right", yanchor = "top",
+        text = paste0(n_clipped, " p-value(s) underflowed to 0 (shown at the cap)"),
+        showarrow = FALSE, font = list(size = 11, color = "#8a5a00")
+      )) else list()
     ) |>
     .rep_plotly_config("pvalue_qq")
 }

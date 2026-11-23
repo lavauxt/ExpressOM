@@ -245,7 +245,7 @@ test_that(".rep_rbind_fill unions columns of mismatched tables", {
   expect_identical(f$g, c("A", "B"))
 })
 
-test_that("the merged-collection leaf handles tables with different columns", {
+test_that("per-collection leaves render each collection's own table", {
   skip_if_no_report_stack()
   out <- withr::local_tempdir()
   make_run_dir(out)
@@ -254,14 +254,41 @@ test_that("the merged-collection leaf handles tables with different columns", {
   inv <- res$functional$inventory
   ora <- inv[inv$source == "DGE" & grepl("ORA$", inv$method), , drop = FALSE]
   expect_equal(nrow(ora), 2L)
-  # give the two ORA collections different columns to mimic mixed sources
-  first <- res$functional$tables[[ora$path[[1L]]]]
-  first$only_in_first <- seq_len(nrow(first))
-  res$functional$tables[[ora$path[[1L]]]] <- first
-  leaf <- .xp_leaf_enrichment_merged(res, st, ora$path, ora$collection, kind = "ora")
-  html <- paste(htmltools::renderTags(leaf())$html, collapse = "")
-  expect_false(grepl("could not be built", html))
-  expect_match(html, "rows across 2 collections", fixed = TRUE)
+  # The leaf must force its `path` promise at build time: a for() loop over
+  # collections shares one k binding, and an unforced promise made every tab
+  # render the last collection's data (all msigdbr tabs showed msigdbr_C8).
+  leaves <- list()
+  for (k in seq_len(nrow(ora))) {
+    leaves[[k]] <- .xp_leaf_enrichment(res, st, ora$path[[k]], ora$kind[[k]])
+  }
+  rendered <- vapply(leaves, function(l) {
+    paste(htmltools::renderTags(l())$html, collapse = "")
+  }, character(1))
+  expect_false(any(grepl("could not be built", rendered)))
+  # each leaf links its own source file, not the last one
+  for (k in seq_len(nrow(ora))) {
+    expect_match(rendered[[k]], ora$path[[k]], fixed = TRUE)
+  }
+  expect_false(identical(rendered[[1L]], rendered[[2L]]))
+})
+
+test_that("no merged-table tab is produced for a many-collection method", {
+  skip_if_no_report_stack()
+  out <- withr::local_tempdir()
+  make_run_dir(out)
+  res <- load_expressom_results(out)
+  st <- expressom_report_settings()
+  tabs <- expressom_report_tabs(res, st)
+  html <- paste(vapply(tabs, function(nd) {
+    paste(htmltools::renderTags(.xp_render_tabset(list(nd))$content)$html,
+          collapse = "")
+  }, character(1)), collapse = "")
+  expect_false(grepl("Merged table", html, fixed = TRUE))
+  # the per-collection tabs still list their own tables
+  expect_match(html, "row(s) in the table", fixed = TRUE)
+  # the setting is accepted for backward compatibility but stored nowhere
+  s2 <- expressom_report_settings(merge_enrichment_threshold = 5L)
+  expect_null(s2$merge_enrichment_threshold)
 })
 
 # ---- per-tab help -------------------------------------------------------------

@@ -33,6 +33,10 @@ this are truncated (a note in the caption says so and the complete file
 stays available in the run folder). Keeping this finite is the main
 lever for a small, fast-opening HTML.}
 
+\item{merge_enrichment_threshold}{Unused (kept so older calls that pass it
+stay valid). Enrichment collections always get one tab each; the former
+merged-table tab duplicated their rows in one huge table.}
+
 \item{slim_tables}{Drop helper columns (statistics, IDs, descriptions)
 from the displayed tables; the CSVs in the run folder keep every column.}
 }

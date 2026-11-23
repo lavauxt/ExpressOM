@@ -183,3 +183,12 @@ explanation of what it shows, so collaborators can read the results without
 knowing the pipeline; the static plots are collected in the *Isoforms →
 Plots* sub-tab, and the run's predictor logs are listed under *Run info →
 Logs*.
+
+The report stays fast even with many gene-set collections: each enrichment
+collection (every FGSEA `gmt` entry, GO / Reactome / KEGG ORA and GSEA, SPIA)
+keeps its own sub-tab, widgets in hidden tabs are only rendered when their
+tab is first opened, and diagnostic plots ship pre-aggregated statistics
+instead of raw per-gene values. If a run ever feels slow to open, check
+`audit_expressom_report()` for the per-widget size breakdown and lower
+`table_rows` / `max_points` in `expressom_report_settings()`.
+

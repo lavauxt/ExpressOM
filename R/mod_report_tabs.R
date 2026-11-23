@@ -9,6 +9,9 @@
 #'   lever for a small, fast-opening HTML.
 #' @param slim_tables Drop helper columns (statistics, IDs, descriptions)
 #'   from the displayed tables; the CSVs in the run folder keep every column.
+#' @param merge_enrichment_threshold Unused (kept so older calls that pass it
+#'   stay valid). Enrichment collections always get one tab each; the former
+#'   merged-table tab duplicated their rows in one huge table.
 #' @export
 expressom_report_settings <- function(
   title = "ExpressOM report",
@@ -45,7 +48,6 @@ expressom_report_settings <- function(
     static_max_px = static_max_px,
     max_isoform_plots = max_isoform_plots,
     plotly_enrichment_max = plotly_enrichment_max,
-    merge_enrichment_threshold = merge_enrichment_threshold,
     plotly_pca_max = plotly_pca_max,
     highlight_genes = highlight_genes,
     padj_cutoff = padj_cutoff,
@@ -374,6 +376,7 @@ expressom_report_settings <- function(
 }
 
 .xp_leaf_pca <- function(res, st, entry) {
+  force(entry)   # promise safety: see .xp_leaf_enrichment
   function() {
     tg <- htmltools::tags
     cfg <- res$config
@@ -547,6 +550,10 @@ expressom_report_settings <- function(
 
 .xp_leaf_enrichment <- function(res, st, path, kind, show_plot = TRUE,
                                 show_table = TRUE) {
+  # Force every promise NOW: the returned closure renders long after this
+  # call, and an unforced `path` promise would re-read the caller's loop
+  # variable at render time (every tab then showed the last collection).
+  force(path); force(kind); force(show_plot); force(show_table)
   function() {
     tb <- res$functional$tables[[path]]
     co <- .xp_cutoffs(res, st)
@@ -555,9 +562,8 @@ expressom_report_settings <- function(
 
     if (!isTRUE(show_plot) && !isTRUE(show_table)) {
       return(.xp_note(
-        "The rows of this collection are in the merged table above ",
-        "(filter by 'collection'); the CSV in the run folder keeps every ",
-        "column."
+        "This collection's interactive plots were skipped to keep the ",
+        "report light; the CSV in the run folder keeps every column."
       ))
     }
 
@@ -607,32 +613,10 @@ expressom_report_settings <- function(
   }
 }
 
-.xp_leaf_enrichment_merged <- function(res, st, paths, collections, kind) {
-  function() {
-    # Collections of the same method can carry different columns (e.g. mixed
-    # ORA / GSEA outputs); a plain rbind() fails on those with
-    # "numbers of columns of arguments do not match", so fill-bind instead.
-    merged <- .rep_rbind_fill(lapply(seq_along(paths), function(i) {
-      tb <- res$functional$tables[[paths[[i]]]]
-      if (is.null(tb) || !nrow(tb)) return(NULL)
-      tb$collection <- collections[[i]]
-      tb
-    }))
-    if (is.null(merged) || !nrow(merged)) {
-      return(.xp_note("No rows to show across this method."))
-    }
-    htmltools::tagList(
-      .xp_note(sprintf("%s rows across %d collections. Filter by 'collection'.",
-                       .xp_fmt(nrow(merged)), length(paths))),
-      itable(.xp_prune_table(merged, st), page_length = 15L, max_rows = st$table_rows,
-             filename = paste0("merged_", kind))
-    )
-  }
-}
-
 # ---- decoupleR -----------------------------------------------------------------
 
 .xp_leaf_decouple <- function(res, st, entry) {
+  force(entry)   # promise safety: see .xp_leaf_enrichment
   function() {
     co <- .xp_cutoffs(res, st)
     tbl <- entry$table
@@ -725,6 +709,7 @@ expressom_report_settings <- function(
 
 # Interactive regulon view for one TF: volcano + leading edge + two tables.
 .xp_leaf_tf_regulon <- function(res, st, resource_data, tf) {
+  force(resource_data); force(tf)   # promise safety
   function() {
     co <- .xp_cutoffs(res, st)
     regulon <- resource_data$regulons[[tf]]
@@ -895,6 +880,7 @@ expressom_report_settings <- function(
 }
 
 .xp_leaf_table <- function(df, filename, note = NULL, st) {
+  force(df); force(filename); force(note)   # promise safety
   function() {
     htmltools::tagList(
       if (!is.null(note)) .xp_note(note),
@@ -942,6 +928,7 @@ expressom_report_settings <- function(
 }
 
 .xp_leaf_figures <- function(res, st, group) {
+  force(group)   # promise safety
   function() {
     fig  <- res$figures[res$figures$group == group, , drop = FALSE]
     pdfs <- fig[fig$type == "pdf" & fig$size >= 2000, , drop = FALSE]
@@ -1098,10 +1085,9 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
   stopifnot(inherits(res, "expressom_results"))
   st <- settings
 
-  plotly_budget   <- as.integer(st$plotly_enrichment_max %||% 3L)
-  merge_threshold <- as.integer(st$merge_enrichment_threshold %||% 3L)
-  pca_budget      <- as.integer(st$plotly_pca_max %||% 2L)
-  plotly_used     <- 0L
+  plotly_budget <- as.integer(st$plotly_enrichment_max %||% 3L)
+  pca_budget    <- as.integer(st$plotly_pca_max %||% 2L)
+  plotly_used   <- 0L
 
   take_plotly <- function() {
     if (plotly_used < plotly_budget) {
@@ -1165,28 +1151,20 @@ expressom_report_tabs <- function(res, settings = expressom_report_settings()) {
     by_source <- lapply(split(inv, inv$source), function(si) {
       method_nodes <- lapply(split(si, si$method), function(mi) {
         n_col <- nrow(mi)
-        if (n_col > merge_threshold) {
-          children <- list(
-            .xp_node(sprintf("Merged table (%d collections)", n_col),
-                     content = .xp_leaf_enrichment_merged(
-                       res, st, mi$path, mi$collection, mi$kind[[1]]))
-          )
-          for (k in seq_len(n_col)) {
-            children <- c(children, list(
-              .xp_node(mi$collection[[k]],
-                       content = .xp_leaf_enrichment(
-                         res, st, mi$path[[k]], mi$kind[[k]],
-                         show_plot = take_plotly(),
-                         show_table = FALSE))
-            ))
-          }
-          do.call(.xp_node, c(list(unique(mi$method)), children))
-        } else {
+        {
+          # One tab per collection. Each leaf is built inside lapply(), which
+          # gives every iteration its own environment, and .xp_leaf_enrichment()
+          # immediately forces its `path` promise: a for() loop shares one `k`
+          # binding, and an unforced promise would evaluate it only when the
+          # tab renders -- by then always the LAST collection, so every tab
+          # showed the same data (all msigdbr tabs rendered msigdbr_C8).
+          # The former merged-table tab (one 10k-row DT across collections)
+          # duplicated these rows and was the heaviest widget of the report.
           leaves <- lapply(seq_len(n_col), function(k) {
             .xp_node(mi$collection[[k]],
-                     content = .xp_leaf_enrichment(res, st, mi$path[[k]],
-                                                   mi$kind[[k]],
-                                                   show_plot = take_plotly()))
+                     content = .xp_leaf_enrichment(
+                       res, st, mi$path[[k]], mi$kind[[k]],
+                       show_plot = take_plotly()))
           })
           if (length(leaves) == 1L) {
             leaves[[1L]]$title <- unique(mi$method)

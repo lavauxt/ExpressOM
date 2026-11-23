@@ -7,6 +7,10 @@
 .rep_iplot_pvalue_qq(pvalues, max_points = 4000L)
 }
 \description{
-Interactive p-value Q-Q plot
+p-values that underflowed to exactly 0 (common in DESeq2 for very strong
+hits) have no finite -log10; flooring them at .Machine$double.xmin (~308)
+once stretched the y axis to 64x the expected range, crushing all real
+points into the corner. They are clipped at a display cap tied to the
+expected range and shown as an annotated count instead.
 }
 \keyword{internal}
